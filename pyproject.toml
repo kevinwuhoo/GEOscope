@@ -1,0 +1,27 @@
+[project]
+name = "geo-metadata-index"
+version = "0.1.0"
+description = "Metadata index + search service over NCBI GEO (v1 spike)"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pgvector>=0.5.0",
+    "psycopg[binary]>=3.3.4",
+    "sentence-transformers>=5.6.0",
+]
+
+[project.scripts]
+geo-fetch-summaries = "geo_index.fetch_summaries:main"
+geo-fetch-soft = "geo_index.fetch_soft:main"
+geo-strip-soft = "geo_index.strip_soft_tables:main"
+geo-validate-soft = "geo_index.validate_soft:main"
+geo-build-series-docs = "geo_index.build_series_docs:main"
+geo-embed = "geo_index.build_embeddings:main"
+geo-search = "geo_index.search_test:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/geo_index"]
