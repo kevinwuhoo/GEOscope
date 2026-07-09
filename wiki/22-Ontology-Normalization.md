@@ -48,7 +48,9 @@ flowchart LR
 
 ### Tiers, with tools
 
-1. **Hand rules for the trivial-but-messy fields.** `sex`, `age`, units. A 20-line dictionary collapses `M/male/1/XY → PATO:0000384`. Highest precision, zero dependencies. (MetaSRA does exactly this + a "maximal phrase" rule so *"breast"* isn't wrongly pulled out of *"breast cancer"*.)
+1. **Hand rules for the trivial-but-messy fields.** `sex`, `age`, units. A small dictionary collapses `M/male/XY → PATO:0000384`. Highest precision, zero dependencies. (MetaSRA does exactly this + a "maximal phrase" rule so *"breast"* isn't wrongly pulled out of *"breast cancer"*.) **Two data-driven refinements the spike proved necessary (see [[#Spike results (v1, measured)]]):**
+   - **Value-driven, with an explicit reject path — not key-driven.** The `sex:` key is polluted with strain (`sex: C57BL/6`), age (`sex: 68M`), stage (`sex: adult`), and bare numeric codes (`sex: 0/1/2…`). You must validate each *value* against the sex value-space and send the rest to `unmapped` with a reason; never trust the key alone.
+   - **Do not map bare numbers.** The optimistic `1 → male` rule is unsafe: the observed numeric range runs to 13 (leaked counts / per-study codebooks with no fixed polarity), so a number is `numeric_code → unmapped`, never a guessed sex. Also merge both the `sex` and `gender` keys into this field.
 2. **Exact synonym lookup** against ontology label+synonym sets. Pull terms via **OLS4** (`https://www.ebi.ac.uk/ols4/api/search?q=…&ontology=efo&exact=true`) or load OWL locally with **OAK** (`oaklib`). Deterministic, can't hallucinate an ID.
 3. **Lexical/semantic similarity** for variants/misspellings:
    - **text2term** (`pip install text2term`) — default **TF-IDF** mapper is fast (<1 min for 10k terms) and, in its own UK-Biobank→EFO benchmark, **most accurate (73.3%)** *and* fastest (4s) vs Zooma (65%, 687s) / Levenshtein / BioPortal. ([Database 2024](https://academic.oup.com/database/article/doi/10.1093/database/baae119/7912353))
@@ -73,9 +75,26 @@ Route by **confidence**: tier 1–2 auto-accept; tier 3 accept above a threshold
 
 CL and EFO are **DAGs** (a term has multiple parents). To support "pick T cell → get all subtypes", precompute a **multi-valued transitive-ancestor array** per record (the `is_a`/`subClassOf` closure). This is what makes hierarchical facets a plain `terms` aggregation. Mechanics in [[24-Faceted-Search]].
 
+## Spike results (v1, measured)
+
+**Status: tiers 1–2 built for `sex` + `organism`** in `src/geo_index/normalize.py` (`geo-normalize migrate|run|report|demo`). Run over the 222,961 loaded series, writing `organism_ids[]`/`organism_status` (NCBITaxon) and `sex_ids[]`/`sex_status` (PATO) back to the `series` table.
+
+| Field | mapped | unmapped | unknown (explicit) | absent |
+|---|--:|--:|--:|--:|
+| **organism** (curated ~40-species table) | 199,731 (90%) | 18,951 | — | 4,279 |
+| **sex** (value-driven hand rules) | 41,494 (19%) | 1,611 | 1,304 | 178,552 |
+
+PATO id spread: male 28,929 · female 24,714 · hermaphrodite 380 (C. elegans). Sums exceed `mapped` because mixed/`both` series carry both IDs — the series-aggregation contract ([[24-Faceted-Search]]).
+
+**Three findings that change how we read coverage and plan v2:**
+
+1. **Separate `absent` from `unmapped` or coverage lies.** Sex looks like a 19% win, but 80% of series simply *don't report sex*. Of the ~44k that do, we map **94%**; genuine mapping failures are **1,611 (0.7% of all series)**. Report absent/unmapped as distinct buckets in the eval — a low mapped-rate is mostly missing source data, not a broken mapper. **(v1)** stores this as a per-field `*_status` column so facets can show "known female" vs "not reported".
+2. **Organism tier-1 → tier-2 boundary is real and quantified.** A curated head-of-distribution table hits 90%; the unmapped 8.5% is a long tail of strain/substrain-qualified names (`Escherichia coli str. K-12 substr. MG1655`, `Oryza sativa Japonica Group`), `synthetic construct`, and separator noise (`Homo sapiens;\tMus musculus` — GEOmetadb uses `;\t`, not `, `, for some dual-organism samples). Generalizing the tail = **tier-2 OLS/OAK exact lookup + a strain→species roll-up**. **(v2)**
+3. **Value-driven rejection works and is auditable.** `map_sex_value` returns a reason (`exact`/`mixed`/`fuzzy`/`numeric_code`/`leaked_age`/`leaked_stage`/`leaked_strain`/`unrecognized`), so every non-mapping is explainable rather than silently dropped — the tier-1/2 precondition for routing the residual to tiers 3–4. 1-edit fuzzy already recovers misspellings (`famale`, `Femaie`) at conf 0.75.
+
 ## Spike scope
 
-Prove the cascade on **3 fields**: `sex` (tier-1 rules, trivial win), `organism` (tiers 1–2, near-deterministic), and **one hard one** — `assay` (EFO; directly serves the single-cell story) or `tissue` (UBERON). Measure precision/coverage against a hand-labeled sample. → [[25-Embeddings-and-Cost#Eval]], [[40-Roadmap]]
+Prove the cascade on **3 fields**: `sex` (tier-1 rules, trivial win — **done**), `organism` (tiers 1–2, near-deterministic — **tier-1 done**), and **one hard one**. Data recommends **`tissue` (UBERON)** over `assay` for the third: `tissue` is present as a labeled key at high volume (~847k sample-instances) so it genuinely exercises the exact-synonym → similarity cascade, whereas fine `assay` (10x 3′/5′) is **not** in GEO's coarse `type` enum at all and needs tier-4 extraction — and its payoff was the single-cell demo, which our own eval already found weak on real data (the "single-cell misses 10x" example under-delivers; lead with conceptual retrieval instead). Pick `assay` only if the single-cell facet is a hard product requirement. Measure precision/coverage against a hand-labeled sample, **counting `absent` separately**. → [[25-Embeddings-and-Cost#Eval]], [[40-Roadmap]]
 
 ## Sources
 

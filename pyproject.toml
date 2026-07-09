@@ -18,6 +18,7 @@ geo-validate-soft = "geo_index.validate_soft:main"
 geo-build-series-docs = "geo_index.build_series_docs:main"
 geo-embed = "geo_index.build_embeddings:main"
 geo-search = "geo_index.search_test:main"
+geo-normalize = "geo_index.normalize:main"
 
 [build-system]
 requires = ["hatchling"]
