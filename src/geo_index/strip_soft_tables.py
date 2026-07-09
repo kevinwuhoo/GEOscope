@@ -40,12 +40,22 @@ DEFAULT_RAW_DIR = Path("data/raw/soft")
 DEFAULT_OUT_DIR = Path("data/processed/soft_meta")
 DEFAULT_CONCURRENCY = 8
 
-# SOFT data-table delimiters are standalone lines: !sample_table_begin,
-# !platform_table_begin, !series_matrix_table_begin (and _end). Anchor the
-# whole line so an attribute *value* that happens to end in "_table_begin"
-# can never be mistaken for a delimiter — metadata is never dropped.
-_TABLE_BEGIN = re.compile(r"^![A-Za-z_]+_table_begin$")
-_TABLE_END = re.compile(r"^![A-Za-z_]+_table_end$")
+# Strip only the BULK data tables: per-sample expression (!sample_table_*),
+# per-platform probe annotation (!platform_table_*), and series-matrix
+# (!series_matrix_table_*). These are the multi-MB payloads we don't want.
+#
+# We deliberately KEEP !series_table_* blocks: those are small "reused/
+# reanalyzed data" provenance tables listing sample IDs + titles — that's
+# metadata, not bulk data, and dropping it would lose information. A whitelist
+# (rather than a generic `*_table`) is the metadata-safe failure mode: an
+# unknown table type is kept, never silently lost.
+#
+# Begin markers may carry a "= <caption>" suffix (series-style); anchoring the
+# rest of the line means an attribute *value* ending in "_table_begin" can
+# never be mistaken for a delimiter.
+_STRIP_TYPES = r"(?:sample|platform|series_matrix)"
+_TABLE_BEGIN = re.compile(rf"^!{_STRIP_TYPES}_table_begin(?: = .*)?$")
+_TABLE_END = re.compile(rf"^!{_STRIP_TYPES}_table_end$")
 
 
 def _strip_lines(fin) -> list[str]:
