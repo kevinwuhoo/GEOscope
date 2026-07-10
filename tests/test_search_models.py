@@ -63,4 +63,3 @@ def test_filter_and_facet_models_are_frozen() -> None:
         bucket.count = 3  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         result.scope = "candidate_pool"  # type: ignore[misc]
-

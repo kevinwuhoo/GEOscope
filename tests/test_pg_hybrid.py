@@ -279,6 +279,8 @@ def test_live_bm25_filters_human_mouse_or_and_impossible_values() -> None:
 
     assert len(human_rows) == 10
     assert len(mouse_rows) == 10
+    assert len(or_rows) == 10
+    assert len(and_rows) == 10
     assert all(human in values[str(row["gse"])][0] for row in human_rows)
     assert all(mouse in values[str(row["gse"])][0] for row in mouse_rows)
     assert all({human, mouse} & set(values[str(row["gse"])][0]) for row in or_rows)

@@ -78,4 +78,3 @@ class FacetResult:
 class SearchResponse:
     hits: tuple[SearchHit, ...]
     facets: dict[FacetField, FacetResult] = field(default_factory=dict)
-
