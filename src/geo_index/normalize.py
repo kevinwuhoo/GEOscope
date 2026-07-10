@@ -666,6 +666,9 @@ def run(limit: int | None = None, batch: int = 5000) -> int:
 
 def refresh_assays(limit: int | None = None, batch: int = 5000) -> int:
     """Recompute only assay_categories, assay_labels, and assay_status."""
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+
     import time
 
     migrate()
@@ -791,6 +794,13 @@ def demo() -> int:
     return 0
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Tier-1/2 ontology normalization.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -798,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("run")
     rp.add_argument("--limit", type=int, default=None)
     arp = sub.add_parser("assay-refresh")
-    arp.add_argument("--limit", type=int, default=None)
+    arp.add_argument("--limit", type=_non_negative_int, default=None)
     sub.add_parser("report")
     sub.add_parser("demo")
     a = p.parse_args(argv)

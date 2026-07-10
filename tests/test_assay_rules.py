@@ -224,3 +224,31 @@ def test_assay_refresh_cli_dispatches_limit_and_exits_zero(
 
     assert normalize.main(["assay-refresh", "--limit", "7"]) == 0
     assert limits == [7]
+
+
+def test_refresh_assays_rejects_negative_limit_before_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        normalize,
+        "migrate",
+        lambda: pytest.fail("negative limit must be rejected before migration"),
+    )
+
+    with pytest.raises(ValueError, match="limit must be non-negative"):
+        normalize.refresh_assays(limit=-1)
+
+
+def test_assay_refresh_cli_rejects_negative_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        normalize,
+        "refresh_assays",
+        lambda **kwargs: pytest.fail("invalid CLI limit reached refresh"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        normalize.main(["assay-refresh", "--limit", "-1"])
+
+    assert exc_info.value.code == 2
