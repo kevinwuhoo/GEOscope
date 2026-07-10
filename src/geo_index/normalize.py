@@ -618,7 +618,7 @@ _UPDATE_COLS = (
 
 
 def run(limit: int | None = None, batch: int = 5000) -> int:
-    """Map every field for every row and write the results back."""
+    """Map every field for every row; deterministic updates are safe to rerun."""
     import time
 
     migrate()
@@ -665,7 +665,7 @@ def run(limit: int | None = None, batch: int = 5000) -> int:
 
 
 def refresh_assays(limit: int | None = None, batch: int = 5000) -> int:
-    """Recompute only assay_categories, assay_labels, and assay_status."""
+    """Idempotently recompute only the three persisted assay columns."""
     if limit is not None and limit < 0:
         raise ValueError("limit must be non-negative")
 
