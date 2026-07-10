@@ -11,31 +11,75 @@ tags: [postgres, pgvector, paradedb, schema]
 
 > **One Postgres does dense vector + BM25 + structured filters + facets**, via `pgvector` + **ParadeDB `pg_search`**. No separate vector DB or Elasticsearch to keep in sync.
 
+### Temporary v1 model-bake-off columns
+
+The implemented baseline remains `series.embedding vector(384)`. The approved
+model comparison adds two typed columns and independent cosine HNSW indexes:
+
+```sql
+ALTER TABLE series
+  ADD COLUMN embedding_medcpt_768 vector(768),
+  ADD COLUMN embedding_qwen3_06b_1024 vector(1024);
+
+CREATE INDEX series_hnsw_medcpt_768
+  ON series USING hnsw (embedding_medcpt_768 vector_cosine_ops);
+CREATE INDEX series_hnsw_qwen3_06b_1024
+  ON series USING hnsw (embedding_qwen3_06b_1024 vector_cosine_ops);
+```
+
+These columns compare three **single whole-document** representations; they are
+not per-field/multi-vector retrieval. Code selects only registry-whitelisted
+columns, and the MCP server exposes only one deployment-selected active variant.
+→ [[48-Alternate-Embedding-Bakeoff]],
+[[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
+
 Extensions:
-- **`pgvector` 0.8.x** — dense kNN (HNSW), `halfvec`, binary quant, **iterative index scans** (fixes over-filtering). `<=>` cosine.
-- **`pg_search`** (ParadeDB, Tantivy) — **committed choice**: real **BM25** *and* first-class, fast **faceting** (`pdb.agg`) in one extension; transactional/auto-updating. → [[24-Faceted-Search]]
+- **[`pgvector`](https://github.com/pgvector/pgvector)** — dense cosine kNN
+  with HNSW and iterative scans for filtered retrieval.
+- **[`pg_search`](https://www.paradedb.com/blog/introducing-search)**
+  (ParadeDB/Tantivy) — the committed BM25 engine. The current v1 facets use
+  explicit disjunctive SQL `GROUP BY`; `pdb.agg` is a later optimization to
+  benchmark, not the implemented contract. → [[24-Faceted-Search]]
 - **`pg_trgm`** — fuzzy / gene-symbol / accession matching.
-- Plain columns + `text[]` arrays — filters + ontology ancestor facets.
+- Plain columns + `text[]` arrays — current flat filters/facets; ancestor arrays
+  are v2+.
 
 ### Why `pg_search` (over native FTS / `pg_textsearch`)
 
-Faceting is make-or-break for this product — *"clean ontology + advanced search + strict enums the LLM or human can query"* ([[00-Overview#North star|north star]]) — and we want it **fast and first-class alongside real BM25**, without rewriting the query layer as we scale.
+Faceting is make-or-break for this product—*"clean ontology + advanced search +
+strict enums the LLM or human can query"* ([[00-Overview#North star|north
+star]]). The committed v1 split is `pg_search` for BM25 plus portable,
+disjunctive-correct SQL counts over the four normalized arrays.
 
-> Nuance: facet *counts* don't strictly *require* `pg_search` — native `GROUP BY` computes them fine at 289k rows. But `pg_search`'s columnar `pdb.agg` keeps facets sub-100ms toward sample-level, and bundles true BM25 in the same extension. Committing now avoids a later rewrite.
+The measured 222,961-row implementation uses `COUNT(DISTINCT series.id)` over
+unnested values: 0.612 s for all four exact facets and 0.308 s for a BM25-scoped
+1,000-candidate run on the development database
+([[42-Build-Log#Status — 2026-07-10 (normalized filters and facets)]]). These
+are observations, not latency SLOs. Benchmark `pdb.agg` only if this becomes a
+real bottleneck or the project moves to sample-level indexing.
 
 | Option | Maturity | Deps | Faceting | Verdict |
 |---|---|---|---|---|
-| **ParadeDB `pg_search`** | most established BM25 extension; large deploy base | Rust / `pgrx` | ✅ first-class (`pdb.agg`) | **Chosen.** Self-host via ParadeDB Docker. |
+| **ParadeDB `pg_search`** | deployed in the current prototype | Rust / `pgrx` | supports `pdb.agg`; v1 uses SQL counts | **Chosen for BM25.** Self-host via ParadeDB Docker. |
 | Native `tsvector` | core Postgres, ~15 yrs | none | via `GROUP BY` only | fallback if `pg_search` ever unavailable |
-| Timescale `pg_textsearch` | v1.0 (Mar 2026), newer | C, no pgrx | ❌ none yet | not a swap-in — no faceting at v1.0 |
+| Timescale `pg_textsearch` | alternative BM25 extension | C | re-check current capabilities if reconsidered | not the implemented stack |
 
-> ⚠️ **Deployment watch-out:** `pg_search` is often **not available on managed RDS/Aurora**. Self-host (Docker) for the spike; use **ParadeDB Cloud** or self-managed Postgres for production. If that ever becomes a hard blocker, native FTS is the graceful degradation (facets still work via `GROUP BY`, you just lose real BM25 ranking + `pdb.agg` speed).
+> ⚠️ **Deployment watch-out:** extension availability must be verified for any
+> eventual managed Postgres target. The spike stays on the working ParadeDB
+> image. If a future host lacks `pg_search`, native FTS is the graceful
+> degradation; SQL facet counts still work, but ranking behavior must be
+> re-evaluated.
 
-## Schema (sketch)
+## Target schema sketch
+
+The following `geo_series`/`geo_series_raw` names are the broader target model
+from the original architecture. The implemented prototype table is `series`,
+whose current and bake-off columns are documented above; this sketch is not
+copy-paste migration DDL.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_search;   -- ParadeDB: BM25 + faceting (pdb.agg / pdb.score)
+CREATE EXTENSION IF NOT EXISTS pg_search;   -- ParadeDB BM25 (pdb.score; optional pdb.agg)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;     -- fuzzy / symbol / accession matching
 
 -- raw landing (21-Ingestion)
@@ -72,17 +116,17 @@ CREATE TABLE geo_series (
   platform_technology text[],    -- GPL 'technology' attr: seq / array / … (coarse facet)
   is_single_cell    boolean,
   -- search
-  embedding         halfvec(1536),        -- one doc embedding; or vector(768) for MedCPT. See 28.
-  bm25_doc          text,                 -- concatenated narrative + normalized labels (BM25)
+  embedding         vector(384),           -- implemented BGE baseline; candidate columns are described above. See 28/48.
+  bm25_doc          text,                 -- concatenated narrative (normalized-label injection is a later ablation)
   confidence        jsonb,                -- per-field mapping confidence
   display           jsonb                 -- everything the UI/LLM shows
 );
 
 -- indexes
-CREATE INDEX ON geo_series USING hnsw (embedding halfvec_cosine_ops);
+CREATE INDEX ON geo_series USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX ON geo_series USING gin (ancestors);
 CREATE INDEX ON geo_series USING gin (organism_id);
-CREATE INDEX ON geo_series USING bm25 (gse, bm25_doc)          -- pg_search: BM25 + facets
+CREATE INDEX ON geo_series USING bm25 (gse, bm25_doc)          -- pg_search: BM25
   WITH (key_field='gse');
 CREATE INDEX ON geo_series USING gin (bm25_doc gin_trgm_ops);  -- fuzzy/symbol fallback
 ```
@@ -92,35 +136,55 @@ CREATE INDEX ON geo_series USING gin (bm25_doc gin_trgm_ops);  -- fuzzy/symbol f
 No built-in fusion function — RRF is a windowed-`UNION` idiom ([ParadeDB's recipe](https://www.paradedb.com/blog/hybrid-search-in-postgresql-the-missing-manual)):
 
 ```sql
-WITH dense AS (
-  SELECT gse, ROW_NUMBER() OVER (ORDER BY embedding <=> :qvec) AS r
+WITH dense_ann AS MATERIALIZED (
+  SELECT gse, embedding <=> :qvec AS distance
   FROM geo_series
   WHERE organism_id @> ARRAY['NCBITaxon:9606']          -- filters apply here
-  ORDER BY embedding <=> :qvec LIMIT 100
+  ORDER BY embedding <=> :qvec                          -- keep raw kNN order
+  LIMIT 100
+),
+dense AS (
+  SELECT gse,
+         ROW_NUMBER() OVER (ORDER BY distance + 0, gse ASC) AS r
+  FROM dense_ann                                        -- strict outer re-sort
 ),
 lexical AS (   -- pg_search BM25
-  SELECT gse, ROW_NUMBER() OVER (ORDER BY pdb.score(gse) DESC) AS r
+  SELECT gse, ROW_NUMBER() OVER (ORDER BY pdb.score(gse) DESC, gse ASC) AS r
   FROM geo_series
   WHERE bm25_doc @@@ :qtext          -- and structured filters as needed
+  ORDER BY pdb.score(gse) DESC, gse ASC
   LIMIT 100
 )
 SELECT gse, SUM(1.0/(60+r)) AS rrf
 FROM (SELECT * FROM dense UNION ALL SELECT * FROM lexical) u
-GROUP BY gse ORDER BY rrf DESC LIMIT 20;
+GROUP BY gse ORDER BY rrf DESC, gse ASC LIMIT 20;
 ```
 
-Set `SET hnsw.iterative_scan = relaxed_order;` so filtered kNN doesn't under-return.
+The frozen retrieval profile sets `hnsw.ef_search=100` and
+`hnsw.iterative_scan=relaxed_order`. The materialized outer sort follows
+pgvector's relaxed-scan guidance and makes ordering within the approximate ANN
+candidate set stable without disabling its raw-operator index path; it does not
+claim exact membership at the inner cutoff. →
+[[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
 
 ## Facet queries
 
-- **Fast path (`pg_search`):** `pdb.agg` returns value→count buckets over the columnar index in a single pass — the primary facet mechanism.
-- **Simple facet (portable):** `SELECT unnest(organism_id) v, COUNT(*) FROM (<result set>) GROUP BY v` — the `GROUP BY` fallback if `pg_search` is unavailable.
-- **Disjunctive** ([[24-Faceted-Search#A. Disjunctive]]): compute each facet where its *own* predicate is omitted — `pdb.agg` per facet, or a small `GROUP BY` per facet.
-- **Hierarchical roll-up** ([[24-Faceted-Search#B. Ontology-hierarchy]]): `GROUP BY unnest(ancestors)` — every record counts toward all its ancestors.
+- **Implemented v1:** unnest one whitelisted array, count distinct series/value
+  pairs with `GROUP BY`, omit the facet's own selected filter, sort by count then
+  value, and cap buckets. Text-query facets count over a bounded ranked pool;
+  blank-query facets count all matching rows. →
+  [[45-Normalized-Filters-and-Facets-Plan]]
+- **Possible optimization:** benchmark `pdb.agg` against the same disjunctive
+  semantics before replacing anything.
+- **Hierarchical roll-up (v2+):** `GROUP BY unnest(ancestors)` only after an
+  ontology-backed field and ancestor materialization pass the tissue gate.
 
 ## Scale headroom
 
-289k rows is small — HNSW and `pg_search` faceting are comfortable out of the box. `pgvectorscale` (StreamingDiskANN + SBQ) is the lever to pull only if/when you go **sample-level (8.6M)**. → [[40-Roadmap]]
+The current 222,961-row series corpus works with HNSW, BM25, and SQL facets at
+the measurements above. Evaluate a scale extension such as
+[`pgvectorscale`](https://github.com/timescale/pgvectorscale) only if the project
+moves to **sample-level (8.6M)** indexing. → [[40-Roadmap]]
 
 ## Alternatives considered (and why not, for the spike)
 
@@ -137,6 +201,6 @@ Full engine comparison notes live in [[99-Sources]].
 
 - pgvector 0.8 (HNSW, halfvec, iterative scans) — https://www.postgresql.org/about/news/pgvector-080-released-2952/ · GitHub — https://github.com/pgvector/pgvector · filtered kNN on Aurora — https://aws.amazon.com/blogs/database/supercharging-vector-search-performance-and-relevance-with-pgvector-0-8-0-on-amazon-aurora-postgresql/
 - ParadeDB `pg_search` — https://www.paradedb.com/blog/introducing-search · hybrid RRF recipe — https://www.paradedb.com/blog/hybrid-search-in-postgresql-the-missing-manual · faceting — https://www.paradedb.com/blog/faceting
-- Timescale `pg_textsearch` (v1.0 GA; C; no faceting yet) — https://github.com/timescale/pg_textsearch · https://www.tigerdata.com/blog/introducing-pg_textsearch-true-bm25-ranking-hybrid-retrieval-postgres
+- Timescale `pg_textsearch` — https://github.com/timescale/pg_textsearch
 - pgvectorscale (StreamingDiskANN + SBQ) — https://github.com/timescale/pgvectorscale
 - Alternatives — OpenSearch RRF — https://opensearch.org/blog/introducing-reciprocal-rank-fusion-hybrid-search/ · Elasticsearch retrievers — https://www.elastic.co/docs/reference/elasticsearch/rest-apis/retrievers/rrf-retriever · Qdrant — https://qdrant.tech/documentation/search/hybrid-queries/ · Weaviate — https://docs.weaviate.io/weaviate/concepts/search/hybrid-search · Milvus — https://milvus.io/blog/introduce-milvus-2-5-full-text-search-powerful-metadata-filtering-and-more.md · Vespa — https://docs.vespa.ai/en/querying/grouping.html · Typesense — https://typesense.org/docs/30.2/api/search.html · LanceDB (no native facets) — https://github.com/lancedb/lancedb/issues/1348

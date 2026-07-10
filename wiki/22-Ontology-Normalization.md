@@ -69,7 +69,14 @@ Route by **confidence**: tier 1–2 auto-accept; tier 3 accept above a threshold
 | Hallucination risk | n/a (retrieval) | none if grounded via lookup |
 | Handles new phrasings | yes, natively | only via the cascade |
 
-**You need both, and they compound:** normalized values (`assay: 10x 3′ scRNA-seq`, `organism: Homo sapiens`) get **written back into the text you embed** — so retrieval gets a cleaner, richer signal, *and* you get clean facets. Normalization is not replaced by embeddings; it's upstream of them.
+**You need both, but test the interaction:** normalized values provide clean
+facets and filters even when they are not embedded. The current embedding
+bake-off deliberately holds the existing narrative `embed_text` fixed so it
+compares model pipelines rather than changing documents at the same time.
+Injecting normalized labels such as `assay: 10x 3′ scRNA-seq` is a later
+controlled document ablation if the baseline evaluation justifies it.
+Normalization is not replaced by embeddings, but it need not be coupled to the
+first embedding experiment. → [[48-Alternate-Embedding-Bakeoff]]
 
 ## Ontology-hierarchy note (for facets)
 

@@ -42,8 +42,12 @@ tags: [glossary, reference]
 
 ## Search / RAG
 - **Dense / sparse retrieval** — embedding kNN vs. term-based (BM25).
-- **BM25** — the standard lexical ranking function. Our chosen provider is **ParadeDB `pg_search`** (real BM25 + faceting). Postgres native FTS `ts_rank` ≠ BM25 (fallback only); `pg_textsearch` is a newer C alternative without faceting yet. → [[26-Datastore-Postgres]]
-- **`pg_search` / `pdb.score` / `pdb.agg`** — ParadeDB's BM25 search operator (`@@@`), relevance score, and single-pass facet aggregation. The chosen lexical + facet engine.
+- **BM25** — the standard lexical ranking function. Our chosen provider is
+  **ParadeDB `pg_search`**; current facets use separate SQL counts. Postgres
+  native FTS `ts_rank` is not BM25. → [[26-Datastore-Postgres]]
+- **`pg_search` / `pdb.score` / `pdb.agg`** — ParadeDB's BM25 search operator
+  (`@@@`), relevance score, and optional single-pass facet aggregation. v1 uses
+  `pg_search` for lexical retrieval and explicit SQL `GROUP BY` for facets.
 - **RRF** — Reciprocal Rank Fusion; `Σ 1/(k+rank)`, k≈60; rank-based, no score normalization.
 - **HNSW** — graph ANN index for vectors.
 - **Reranker / cross-encoder** — re-scores `(query, doc)` jointly for top-k; e.g. MedCPT Cross-Encoder, bge-reranker.
@@ -52,13 +56,28 @@ tags: [glossary, reference]
 - **Facet** — `(value, count)` buckets over a result set; disjunctive = OR-within/AND-across.
 
 ## Models
-- **text-embedding-3-small/large** — OpenAI embeddings (cheap baseline).
-- **MedCPT** — NCBI biomedical retriever (Query+Article bi-encoders + Cross-Encoder), trained on PubMed click logs.
-- **BGE-M3 / Qwen3-Embedding / NV-Embed** — strong open embedding models.
+- **BGE-small-en-v1.5** — current 384-dimensional whole-document retrieval baseline.
+- **MedCPT** — NCBI biomedical retriever (paired Query+Article bi-encoders;
+  768 dimensions) in the v1 bake-off.
+- **Qwen3-Embedding-0.6B** — open embedding model tested at its full
+  1,024-dimensional output in the v1 bake-off.
+- **text-embedding-3-small/large** — hosted OpenAI embeddings considered in
+  early research, not part of the fixed local-model bake-off.
 - **SapBERT / BioLORD** — biomedical *entity/synonym* embedders (for normalization, not document search).
 
 ## Infra
 - **pgvector** — Postgres vector extension (HNSW, `halfvec`, iterative scans).
-- **ParadeDB / pg_search** — Postgres BM25 + faceting (Tantivy-backed).
+- **ParadeDB / pg_search** — Postgres BM25 plus optional Tantivy-backed
+  aggregation; v1 uses it for lexical ranking.
 - **pgvectorscale** — StreamingDiskANN + quantization for scale-up.
 - **MCP** — Model Context Protocol; how the LLM client calls our search tools. → [[27-MCP-Interface]]
+
+## Sources
+
+- Master project reference index — [[99-Sources]]
+- BGE small v1.5 — https://huggingface.co/BAAI/bge-small-en-v1.5
+- MedCPT paper — https://academic.oup.com/bioinformatics/article/39/11/btad651/7335842
+- Qwen3-Embedding-0.6B — https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
+- pgvector — https://github.com/pgvector/pgvector
+- ParadeDB `pg_search` — https://www.paradedb.com/blog/introducing-search
+- Model Context Protocol — https://modelcontextprotocol.io/

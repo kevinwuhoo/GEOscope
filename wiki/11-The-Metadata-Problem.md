@@ -25,8 +25,12 @@ A literal query for `"single cell RNA"` matches none of the records that only sa
 
 ### How we fix it (two complementary mechanisms)
 1. **Dense/semantic retrieval** — embed the free text so "single cell RNA" lands near "10x Chromium droplet-based scRNA" in vector space even with zero shared tokens. → [[23-Search-and-Retrieval]]
-2. **Ontology-aware query expansion** — expand the query into the known synonym/assay set (grounded in EFO/OBI, not hallucinated) before retrieval. → [[23-Search-and-Retrieval#Query expansion]]
-3. **Normalized `assay` facet** — a controlled `assay` field (EFO) so the *result* is filterable to "10x 3′ vs 5′ vs SPLiT-seq". → [[22-Ontology-Normalization]]
+2. **Client-side query expansion (v1)** — an LLM client may use closed assay
+   labels returned by the service; deterministic EFO/OBI-grounded expansion is
+   a later server feature. → [[23-Search-and-Retrieval]]
+3. **Normalized `assay` facet** — current closed category/detail labels make the
+   result filterable to "10x 3′ vs 5′ vs SPLiT-seq"; formal EFO grounding is a
+   later ontology step. → [[22-Ontology-Normalization]]
 
 ## Failure 2 — the same value written many ways
 
@@ -48,7 +52,12 @@ You cannot build a facet or a filter on the raw strings. You need to **collapse 
 
 ## Design consequence
 
-> **Search and normalization are two jobs, not one.** Embeddings alone give recall but not clean facets; ontology IDs alone give facets but not fuzzy recall. We need both, and they reinforce each other: normalized values get folded back into the embedded document text, improving retrieval too. This split drives the whole [[20-Architecture-Overview|architecture]].
+> **Search and normalization are two jobs, not one.** Embeddings give fuzzy
+> recall; controlled IDs/labels give clean facets and filters. The current model
+> bake-off holds the narrative embedding document fixed and keeps normalized
+> values in separate columns. Folding those values into the document is a later
+> controlled ablation, not an assumption. This split drives the whole
+> [[20-Architecture-Overview|architecture]].
 
 ## Sources
 

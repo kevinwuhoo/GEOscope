@@ -25,7 +25,12 @@ For "search precisely against one field," if that field is categorical the *most
 
 The per-field-embedding question only really applies to the narrative bucket. There:
 
-- **Default: one document embedding** = `title + summary + overall_design + normalized labels`. The narrative fields all describe the *same study*, and real queries are study-level ("single cell RNA in liver"), so concatenation rarely hurts. One vector, one HNSW index, ~$6 to build ([[25-Embeddings-and-Cost]]).
+- **Default: one frozen document embedding** = the current `embed_text` composed
+  from title, study type, raw organism names, summary, overall design, molecule,
+  sample source, and characteristics. Normalized-label injection is a later
+  controlled ablation. The fields describe the same study and real queries are
+  study-level, so one vector is the simplest starting point. →
+  [[25-Embeddings-and-Cost]], [[48-Alternate-Embedding-Bakeoff]]
 - **The risk it trades against — dilution.** Averaging a 2,000-token summary with a one-line design statement can bury a short-but-important signal. Whether that actually hurts *your* queries is an **eval question**, not an a-priori one.
 
 ### When per-field / multi-vector embedding earns its complexity
@@ -47,9 +52,9 @@ Not by field embeddings — by **combining the tracks**:
 
 ```
 query: "single cell RNA in liver"
-  ├─ facet filter:  tissue ancestors ⊇ UBERON:liver     ← precision (structured)
+  ├─ future facet:  tissue ancestors ⊇ UBERON:liver     ← precision (v2+)
   └─ dense search:  "single cell RNA" over narrative vec ← recall (semantic)
-        + assay expansion → 10x/Drop-seq/SPLiT-seq       ← 23-Search-and-Retrieval
+        + client assay expansion → 10x/Drop-seq/SPLiT-seq ← v1 client behavior
 ```
 
 Facets give precision; the embedding gives fuzzy recall; expansion bridges vocabulary. Keeping them separate is what makes each one good at its job.
@@ -57,6 +62,12 @@ Facets give precision; the embedding gives fuzzy recall; expansion bridges vocab
 ## Decision
 
 > **v1 = one whole-document embedding + normalized fields as facets/filters + `pg_search` BM25 for exact tokens.** This already delivers *both* precise field search (facets) and semantic search (doc vector). Add per-field/multi-vector embeddings **only if the eval shows narrative dilution** — it's a measured refinement, not a starting point.
+
+The temporary BGE, MedCPT, and Qwen columns in
+[[48-Alternate-Embedding-Bakeoff]] do not reverse this decision: each column is
+one alternative representation of the same whole GSE document. Search uses one
+selected model at a time. Keeping candidates side by side makes the comparison
+reproducible; it does not combine several field vectors at query time.
 
 → tracked as an open item in [[41-Open-Questions#Search]].
 

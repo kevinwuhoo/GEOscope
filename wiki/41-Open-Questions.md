@@ -10,36 +10,58 @@ tags: [decisions, open-questions]
 Decisions still to make. ✅ = answered by you already; ❓ = needs a call.
 
 ## Answered (from the kickoff)
-- ✅ **Corpus:** all of GEO (I suggest a scoped first slice to iterate, then widen — see below).
+- ✅ **Corpus ambition:** all of GEO; the fixed v1 comparison uses the complete
+  222,961-series snapshot already loaded, followed by a separately versioned
+  freshness top-up if the spike continues.
 - ✅ **Output:** ranked list first; summary/conversation via LLM over MCP. → [[27-MCP-Interface]]
 - ✅ **Ambition:** prototype / spike. → [[40-Roadmap]]
-- ✅ **Infra:** Postgres-first; open to a good open embedding; cost-conscious (it's trivial anyway). → [[25-Embeddings-and-Cost]], [[26-Datastore-Postgres]]
+- ✅ **Infra:** Postgres-first and cost-conscious; compare local embedding
+  pipelines with measured compute, memory, latency, and storage. →
+  [[25-Embeddings-and-Cost]], [[26-Datastore-Postgres]]
+- ✅ **Initial MCP audience:** invite-only access for you and selected coworkers;
+  public/self-service access is deferred. → [[47-MCP-Server-Plan]]
+- ✅ **Third v1 normalized field:** assay was implemented alongside organism and
+  sex; tissue is the next bounded ontology experiment. →
+  [[22-Ontology-Normalization]], [[43-Tissue-Candidate-Generation-Plan]]
+- ✅ **Initial corpus/source:** use the full 222,961-series GEOmetadb snapshot
+  for the fixed spike; defer post-2024 metadata-only top-up until after the
+  retrieval/model decision. → [[21-Ingestion-Pipeline]], [[42-Build-Log]]
 
 ## Still open
 
 ### Scope & unit
-- ❓ **Full corpus first, or a human+mouse RNA-seq slice first?** I lean *slice-first* for iteration speed; the crawl code is identical. Your call on patience vs. completeness.
 - ❓ **Series-only, or also persist per-sample rows now?** Storing raw samples now (cheap) preserves the v2 option without committing to indexing 8.6M docs.
 
 ### Normalization
-- ❓ **Which 3rd field for the spike:** `assay` (EFO, best for the single-cell demo) vs `tissue` (UBERON, common filter). I lean `assay`.
 - ❓ **Confidence threshold `τ`** for auto-accepting tier-3 similarity mappings — set empirically from the eval.
 - ❓ **How to surface uncertainty** in facets: hide low-confidence mappings, or show them tagged "predicted"?
 - ❓ **Sex convention:** PATO (matches CELLxGENE/expression world) — confirm we don't need NCIT for any downstream consumer.
 
 ### Search
-- ❓ **Hybrid: fuse or route?** Keep lexical (native FTS) for exact IDs regardless; whether to RRF-fuse with dense depends on the embedding model — decide from eval. → [[23-Search-and-Retrieval]]
+- ❓ **Hybrid: fuse or route?** Keep lexical `pg_search`/BM25 for exact IDs
+  regardless; whether to RRF-fuse with dense depends on the embedding model—
+  decide from eval. → [[23-Search-and-Retrieval]]
 - ❓ **Embedding granularity:** one whole-doc embedding (v1 default) vs per-field/multi-vector. Split only if the eval shows narrative dilution. → [[28-Embedding-Granularity]]
-- ✅ **Lexical / facet engine:** **ParadeDB `pg_search`** (real BM25 + first-class faceting), self-hosted via the ParadeDB Docker image. Facets are the priority, so this is committed. Managed-hosting availability (RDS/Aurora often lack it) is the one thing to revisit for production. → [[26-Datastore-Postgres]]
+- ✅ **Lexical / facet implementation:** **ParadeDB `pg_search`** supplies BM25;
+  explicit disjunctive SQL `GROUP BY` supplies the current four facets. Benchmark
+  `pdb.agg` only if counts become limiting. Self-hosted ParadeDB remains the
+  spike environment; managed-hosting extension availability is a later concern.
+  → [[26-Datastore-Postgres]]
 - ❓ **Reranking in v1?** Probably defer to the LLM client; revisit if eval shows top-k ordering is weak.
 
 ### Platform / ops
 - ❓ **Self-host vs managed Postgres?** Spike = self-host (ParadeDB Docker) so `pg_search` is available. Managed later needs `pg_search` availability check.
 - ❓ **Where does this live long-term?** Personal project, internal BillionToOne tool, or public? Affects data-refresh cadence and whether we harden ingest.
-- ❓ **Embedding model final pick** — `text-embedding-3-small` to start; MedCPT/open contender decided by eval.
+- ❓ **Embedding model final pick (v1)** — compare the existing
+  `bge-small-en-v1.5` baseline with paired MedCPT and
+  `Qwen3-Embedding-0.6B` (1,024 dimensions), then promote only from the reviewed
+  retrieval eval. → [[48-Alternate-Embedding-Bakeoff]],
+  [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
+- ❓ **MCP identity provider and host (v1)** — transport and invite policy are fixed,
+  but the OAuth issuer, public domain, and host remain deployment choices. →
+  [[47-MCP-Server-Plan]]
 
 ### Product
-- ❓ **Who's the user?** You + a few colleagues, or a broader internal audience? Sets the bar for the MCP tool ergonomics and whether a human UI is ever needed.
 - ❓ **Refresh expectations** — one-time index for the spike, or living/refreshed? (Ingest is idempotent either way.)
 
 ## Parking lot (interesting, later)

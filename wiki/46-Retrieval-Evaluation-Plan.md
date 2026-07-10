@@ -10,6 +10,10 @@ created: 2026-07-10
 ← [[Home]] · operationalizes [[25-Embeddings-and-Cost#Eval]] · uses filtered
 retrieval from [[45-Normalized-Filters-and-Facets-Plan]]
 
+> **Follow-on:** land the single-BGE baseline and reviewed qrels here first.
+> [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] then reuses the same
+> harness, re-pools across BGE/MedCPT/Qwen, and compares seven fixed systems.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use

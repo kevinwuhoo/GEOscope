@@ -7,7 +7,12 @@ created: 2026-07-08
 
 # 🧬 GEO Metadata Index
 
-> A system that **indexes and serves NCBI GEO metadata** so that a search for *"single cell RNA"* actually surfaces 10x 3′, 10x 5′, Drop-seq, Smart-seq2, and SPLiT-seq datasets — and so that messy submitter fields (`sex = M/F/0/1`, free-text organism/tissue/disease) collapse onto a **common ontology**. Semantic + faceted + keyword search, exposed over **MCP** so an LLM can do the synthesis and conversation on top.
+> A system that **indexes and serves NCBI GEO metadata** so conceptual queries
+> can cross submitter vocabulary, while messy fields collapse onto controlled
+> values that support precise filters and facets. The current v1 normalizes
+> organism, sex, and assay; tissue and other complex ontology fields follow a
+> measured decision gate. Semantic + faceted + keyword search is exposed over
+> **MCP** so an LLM client can synthesize and converse on top.
 
 This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Overview]] and follow the wikilinks.
 
@@ -20,13 +25,13 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 
 ### The design
 - [[20-Architecture-Overview]] — the whole system, end to end
-- [[21-Ingestion-Pipeline]] — fetch → parse → normalize → embed → index
+- [[21-Ingestion-Pipeline]] — chosen bulk snapshot, rebuild order, and deferred top-up path
 - [[22-Ontology-Normalization]] — field→ontology map, the mapping cascade, RAG vs. IDs
 - [[23-Search-and-Retrieval]] — hybrid retrieval, query expansion, reranking
 - [[24-Faceted-Search]] — facet model, ontology-backed hierarchical facets
-- [[25-Embeddings-and-Cost]] — model options, **cost estimates**, the eval plan
+- [[25-Embeddings-and-Cost]] — model options, measured runtime/storage, and the eval plan
 - [[28-Embedding-Granularity]] — per-field vs whole-document embedding (field→mechanism routing)
-- [[26-Datastore-Postgres]] — pgvector + ParadeDB `pg_search` (BM25 + faceting), why one Postgres
+- [[26-Datastore-Postgres]] — pgvector + ParadeDB `pg_search` BM25 + SQL facets, why one Postgres
 - [[27-MCP-Interface]] — the MCP server, its tools, and "the LLM is the RAG loop"
 
 ### Context & execution
@@ -38,16 +43,25 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[44-Normalization-Tests-and-Assay-Hardening-Plan]] — Track 1: tests + contextual assay rules + targeted assay refresh
 - [[45-Normalized-Filters-and-Facets-Plan]] — Track 2: query/facet layer over the populated organism, sex, and assay arrays
 - [[46-Retrieval-Evaluation-Plan]] — Track 3: 16-query pooled human evaluation, no trained model
-- [[47-MCP-Server-Plan]] — Track 4: local stdio MCP server with three stable tools
+- [[47-MCP-Server-Plan]] — Track 4: invite-only remote FastMCP server with three stable tools
+- [[48-Alternate-Embedding-Bakeoff]] — approved proposal: one temporary column per model
+- [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] — resumable builds, loading, evaluation, and active-model integration
+- [[50-Coworker-Handoff-Prompts]] — copy-ready prompts for the remote MCP and embedding owners
 - [[90-Glossary]] — every acronym in one place
 - [[99-Sources]] — all citations
 
 ## The 30-second version
 
-1. **Ingest** all of GEO (~289k GSE series) via E-utilities + FTP; parse SOFT/MINiML.
-2. **Normalize** the free-text fields onto controlled ontology IDs (organism→NCBITaxon, tissue→UBERON, cell type→CL, disease→MONDO, assay→EFO, sex→PATO) using a cheap-first cascade.
-3. **Embed** each series into a vector, and index everything in **one Postgres** (`pgvector` for dense, `pg_search`/BM25 for lexical, columns + ancestor arrays for facets).
-4. **Serve** hybrid search + facet counts + get-by-accession as an **MCP server**.
+1. **Ingest** the chosen 222,961-series GEOmetadb snapshot; retain metadata-only
+   SOFT tooling for a later post-2024 top-up.
+2. **Normalize** organism→NCBITaxon, sex→PATO, and assay→closed category/detail
+   labels today. Tissue→UBERON is the next experiment; disease/cell type and
+   hierarchy are v2+.
+3. **Embed** the frozen narrative document once per series and index it in **one
+   Postgres** (`pgvector` for dense, `pg_search`/BM25 for lexical, four flat
+   normalized arrays for current filters/facets).
+4. **Serve** hybrid search + facet counts + get-by-accession as an
+   **invite-only remote MCP server**.
 5. The **LLM client** (Claude, etc.) does query understanding, synonym expansion, and — because it's just calling tools — the summary and conversational answers for free.
 
 → Recommended v1 target and rationale live in [[40-Roadmap]].

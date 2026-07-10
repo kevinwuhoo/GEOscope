@@ -9,9 +9,25 @@ tags: [ingestion, pipeline, etl]
 
 ## Goal
 
-Get all ~289k GSE series (metadata only) into `geo_series_raw`, idempotently and re-runnably, respecting NCBI rate limits.
+Maintain a reproducible series-level metadata corpus. For the fixed v1 spike,
+the chosen source is the 222,961-GSE GEOmetadb snapshot already materialized as
+`data/processed/geo_series.jsonl`. A metadata-only top-up from its 2024-02-29
+cutoff to current GEO is a later freshness release.
 
-## Stages
+## Current v1 path
+
+1. Read `data/external/GEOmetadb.sqlite`.
+2. Aggregate GSE rows plus distinct GSM organism/molecule/source/characteristic
+   values with `geo-build-series-docs`.
+3. Write the fixed `geo_series.jsonl` corpus used by BGE and the alternate-model
+   bake-off.
+4. Keep `geo-fetch-summaries` and metadata-only `geo-fetch-soft` as top-up
+   tooling; do not mix new rows into the fixed evaluation corpus mid-bake-off.
+
+This decision and its measured source tradeoff are recorded in
+[[42-Build-Log#What we tried (and what we chose)]].
+
+## Deferred living-corpus path (v2+)
 
 ### 1. Enumerate the universe
 - `esearch.fcgi?db=gds&term=GSE[ETYP]&retmax=…` (paginate) to list all Series UIDs. Optionally scope by organism/date for the spike.
@@ -36,12 +52,19 @@ Get all ~289k GSE series (metadata only) into `geo_series_raw`, idempotently and
 - Write `geo_series_raw(gse PK, esummary jsonb, miniml jsonb, samples jsonb, sra jsonb, fetched_at, source_etag)`.
 - **Idempotent:** upsert on `gse`; skip if `update_date` unchanged. This makes incremental refresh trivial later.
 
-## Operational notes
+## Operational notes for the deferred top-up
 
-- **Politeness:** cap ≤10 req/s, backoff on 429/5xx, resumable checkpoints (last UID processed). One full crawl of 289k series is hours, not days.
-- **Storage:** raw JSON for 289k series is a few GB — nothing.
-- **Refresh:** GEO grows ~continuously; re-run enumeration weekly, re-fetch only changed `update_date`. Out of scope for the spike but the idempotent design gets it for free.
-- **Don't** lean on [[10-GEO-Data-Model#GEOmetadb — tempting but stale|GEOmetadb]] as the source (stale since 2021) — but its SQLite schema is a fine reference for table shapes.
+- **Politeness:** cap at NCBI's documented API-key rate, back off on 429/5xx,
+  and checkpoint the last UID
+  ([usage guide](https://www.ncbi.nlm.nih.gov/books/NBK25497/)).
+- **Throughput:** the existing metadata-only experiment measured about 2.3
+  requests/s and roughly 26 hours for the gap; remeasure before scheduling a
+  freshness run. → [[42-Build-Log#Metadata source — crawl vs. bulk]]
+- **Storage/refresh cadence:** measure the top-up artifact and choose a cadence
+  only if the spike becomes a maintained service.
+- The selected GEOmetadb mirror was measured through 2024-02-29; it is the v1
+  bulk source, not a claim of current completeness. Use top-up tooling for newer
+  releases rather than silently relabeling the snapshot as current GEO.
 
 ### Current v1 index rebuild and resume contract
 
@@ -79,13 +102,14 @@ orchestrator remain **(v2+)** work.
 - Download / FTP layout — https://www.ncbi.nlm.nih.gov/geo/info/download.html · programmatic access — https://www.ncbi.nlm.nih.gov/geo/info/geo_paccess.html
 - HTS→SRA linkage — https://www.ncbi.nlm.nih.gov/geo/info/seq.html
 - GEOparse — https://github.com/guma44/GEOparse · pysradb — https://github.com/saketkc/pysradb
-- GEOmetadb (stale) — https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html · https://support.bioconductor.org/p/9149627/
+- GEOmetadb package/schema — https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html
 
 ## Handoff
 
-Raw rows → [[22-Ontology-Normalization]] extracts fields and assigns ontology IDs; then [[25-Embeddings-and-Cost|embedding]] + [[26-Datastore-Postgres|indexing]].
+The fixed JSONL → [[25-Embeddings-and-Cost|embedding]] and the implemented
+`series` table; [[22-Ontology-Normalization]] then populates the current flat
+filter/facet columns.
 
 ## Open questions
 
-- Full corpus vs. a scoped first slice (e.g. human+mouse) for the very first crawl? → [[41-Open-Questions]]
 - Series-level only, or also persist per-sample rows now for a later v2? (Cheap to store raw either way.)

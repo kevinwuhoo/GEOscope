@@ -17,11 +17,14 @@ Every note that makes a **factual or external claim** must end with a `## Source
 This project is a **v1 spike**, deliberately scoped. When you describe or add functionality, **label its scope** so the boundary stays legible. Use an explicit tag inline — `**(v1)**` / `**(v2+)**` — and put anything deferred under the "Later / v2" section of [[40-Roadmap]].
 
 **v1 (the spike — build this):**
-- **Series-level (GSE)** documents only (~289k), *not* per-sample.
-- One Postgres: `pgvector` + **ParadeDB `pg_search`** (BM25 + faceting) — committed.
-- One **whole-document embedding** + normalized fields as facets/filters.
-- Normalize **3 fields** end-to-end (sex, organism, + assay or tissue).
-- Hybrid retrieval + ontology-aware expansion; facets as closed ontology enums.
+- **Series-level (GSE)** documents only (current fixed snapshot: 222,961), *not* per-sample.
+- One Postgres: `pgvector` + **ParadeDB `pg_search`** for BM25 + disjunctive SQL facets — committed.
+- One **whole-document embedding** of the frozen current narrative; normalized
+  fields are separate facets/filters. Normalized-label injection is a later
+  document ablation, not part of the model bake-off.
+- Normalize **3 fields** end-to-end: sex, organism, and assay. Tissue is the next experiment.
+- Hybrid retrieval; the LLM client owns v1 query expansion. Deterministic
+  ontology expansion is v2+. Facets are closed controlled enums.
 - **MCP server** exposes retrieval; the **LLM client** does summary/conversation.
 - A small **eval set** decides model/mapper choices.
 
@@ -35,7 +38,7 @@ When in doubt about scope, ask before promoting a v2 idea into the v1 plan.
 
 ## Committed decisions (don't re-litigate without reason)
 
-Postgres-only · `pg_search` for BM25+facets · series-level v1 · one doc embedding · retrieval-in-service / generation-in-LLM (MCP) · **CELLxGENE field→ontology schema** (organism→NCBITaxon, tissue→UBERON, cell type→CL, disease→MONDO, assay→EFO, sex→PATO).
+Postgres-only · `pg_search` for BM25 + disjunctive SQL facets · series-level v1 · one doc embedding · retrieval-in-service / generation-in-LLM (MCP) · **CELLxGENE field→ontology schema** (organism→NCBITaxon, tissue→UBERON, cell type→CL, disease→MONDO, assay→EFO, sex→PATO).
 
 ## Gotchas to preserve (don't "simplify" these away)
 

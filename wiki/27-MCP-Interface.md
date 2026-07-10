@@ -8,9 +8,36 @@ tags: [mcp, rag, api, llm]
 ← [[Home]] · consumes [[23-Search-and-Retrieval]], [[24-Faceted-Search]]
 
 > **Implementation tranche:** [[47-MCP-Server-Plan]] starts with
-> `search_datasets`, `get_dataset`, and `facet_values` over local stdio.
-> `expand_terms`, `resolve_ontology`, and non-GSE lookup wait for the tissue
-> mapper and broader record indexing.
+> `search_datasets`, `get_dataset`, and `facet_values` over an invite-only
+> remote Streamable HTTP endpoint. `expand_terms`, `resolve_ontology`, and
+> non-GSE lookup wait for the tissue mapper and broader record indexing.
+
+## Hosted v1 access
+
+The **(v1)** product surface is a standalone FastMCP 3 ASGI service at `/mcp`.
+FastMCP recommends Streamable HTTP for centralized, multi-client network
+deployments and exposes an ASGI app through `http_app()`
+([running servers](https://gofastmcp.com/deployment/running-server),
+[HTTP deployment](https://gofastmcp.com/deployment/http)).
+
+Access is private:
+
+1. an external OAuth authorization server authenticates users and issues JWTs;
+2. the MCP resource server verifies signature, expiry, issuer, audience, and
+   `geo:read` through the issuer's JWKS;
+3. server-wide authorization checks the verified stable `sub` claim against an
+   explicit invitation list.
+
+FastMCP provides JWT/JWKS verification, remote OAuth discovery metadata, and
+server-wide authorization checks
+([token verification](https://gofastmcp.com/servers/auth/token-verification),
+[remote OAuth](https://gofastmcp.com/servers/auth/remote-oauth),
+[authorization](https://gofastmcp.com/servers/authorization)). Static bearer
+tokens remain development fixtures, not production invitations.
+
+The identity provider, hostname, and hosting platform are deployment choices.
+Public/anonymous access, self-service invitation, and multi-tenant administration
+are **(v2+)**.
 
 ## Your question, answered
 
@@ -26,12 +53,12 @@ sequenceDiagram
   participant PG as Postgres
   U->>L: "find single cell RNA datasets in human PBMC"
   L->>L: expand: scRNA-seq, 10x 3'/5', Drop-seq, SPLiT-seq...
-  L->>S: search(query, filters={organism, tissue})
+  L->>S: search_datasets(query, filters={organism, assay})
   S->>PG: hybrid retrieve + facet counts
   PG-->>S: ranked GSE list + facets
   S-->>L: results + facets (structured)
   L->>S: get_dataset("GSE123456")   %% drill in
-  S-->>L: full record
+  S-->>L: indexed bounded detail
   L-->>U: grounded summary + cited GSE list + "want to filter to 5'?"
 ```
 
@@ -42,18 +69,25 @@ sequenceDiagram
 - **Clean contract.** Tools return structured data; the model composes. Same server works for a human UI, an agent, or a notebook.
 - **Cheaper + simpler spike.** No LLM serving, no prompt-eval harness for generation on your side. You still own the part that's hard and defensible: **retrieval + normalization quality.**
 
-## Proposed tools
+## v1 tools
 
 | Tool | Input | Returns | Notes |
 |---|---|---|---|
-| `search_datasets` | `query`, `filters{}`, `expand?`, `limit` | ranked `[{gse, score, title, organism, assay, tissue, n_samples, year, snippet}]` + `facet_counts{}` | the workhorse; hybrid + facets in one call |
-| `get_dataset` | `gse` | indexed GSE metadata, normalized fields, and GEO/PubMed links | drill-in; raw SOFT/GSM/SRA are not indexed yet |
-| `facet_values` | `field`, `query?`, `prefix?` | `[{id, label, count}]` | populate/expand a facet; hierarchy-aware |
+| `search_datasets` | `query`, `filters{}`, `mode`, `limit` | `{query, filters, mode, limit, retrieval_version, embedding_variant, results:[...], facets:{...}}` | v1 workhorse; hybrid + current four facets in one call |
+| `get_dataset` | `gse` | `{found, dataset}` with bounded indexed metadata and GEO/PubMed links | drill-in; raw SOFT/GSM/SRA are not indexed yet |
+| `facet_values` | `field`, `query?`, `filters?`, `mode?`, `limit?` | `{field, buckets:[{value,label,count}], scope, candidate_count, retrieval_version, embedding_variant}` | flat facet browsing; prefix/autocomplete and hierarchy are deferred |
+
+### Deferred tools **(v2+)**
+
+These are design options, not part of the hosted v1 tool list:
+
+| Tool | Input | Returns | Dependency |
+|---|---|---|---|
 | `expand_terms` | `text` | `{ontology_terms:[…], synonyms:[…]}` | server-side ontology-grounded expansion (fallback if the client doesn't) |
 | `resolve_ontology` | `text`, `field` | candidate `{id, label, confidence}` | exposes the [[22-Ontology-Normalization|normalization]] mapper |
 | `lookup_accession` | `GSE/GSM/GPL` | record or cross-refs | exact fetch |
 
-**Design guidance for tools:** return compact, structured, **token-efficient** payloads (IDs + labels + short snippets, not full SOFT); include `facet_counts` so the model can suggest refinements; always include the accession so answers are citable/verifiable.
+**Design guidance for tools:** return compact, structured, **token-efficient** payloads (IDs + labels + short snippets, not full SOFT); include `facets` so the model can suggest refinements; always include the accession so answers are citable/verifiable.
 
 ### Strict enums, not free-text filters (the north star, operationalized)
 
@@ -63,27 +97,42 @@ EFO grounding is implemented. This is the mechanism behind
 [[00-Overview#North star|"strict enums the LLM or human can query"]]:
 
 - `facet_values` hands the caller the **valid vocabulary** for a field (IDs + labels + counts), so an LLM or a human UI **selects from a closed set** instead of guessing strings.
-- The flow: the model resolves "human" → `NCBITaxon:9606` (via `resolve_ontology`/`facet_values`), then filters on the **ID**. No ambiguity, no silent empty results from a misspelled value.
+- The v1 flow: the model maps "human" to `NCBITaxon:9606` from its own
+  knowledge or `facet_values`, then filters on the **ID**. The deferred
+  `resolve_ontology` tool can make that grounding server-owned later.
 - **Free text still works for the *semantic* part** (`query` → dense + expansion), but **facets are enums**. Semantic recall + enum precision, cleanly separated. → [[24-Faceted-Search]], [[22-Ontology-Normalization]]
 - Bonus: because the vocabulary is closed and known, the server can *validate* filter inputs and return "did you mean…" candidates — making agent-issued queries reliable rather than best-effort.
 
 ## Query expansion: client or server?
 
-Both, layered:
+Both are possible, but only the first is **(v1)**:
 - **Client-side (primary):** the LLM naturally expands "single cell RNA" → the assay set. Best quality, no code.
-- **Server-side (`expand_terms`, fallback):** ontology-grounded expansion for non-LLM callers and to keep behavior deterministic/testable. Ground in EFO/OBI to avoid drift. → [[23-Search-and-Retrieval#1. Query understanding]]
+- **Server-side (`expand_terms`, fallback, v2+):** ontology-grounded expansion
+  for non-LLM callers and deterministic behavior after the tissue mapper has a
+  stable contract. → [[23-Search-and-Retrieval#1. Query understanding]]
 
 ## Build notes
 
-- Python **MCP SDK** (FastMCP-style); thin layer over the [[26-Datastore-Postgres|Postgres]] queries.
-- Stateless tools; pagination via `offset`/cursor.
+- Standalone **FastMCP 3**; thin, typed layer over the
+  [[26-Datastore-Postgres|Postgres]] query service.
+- Streamable HTTP with stateless transport, one application worker, TLS at the
+  hosting edge, and mandatory invite-only OAuth/JWT authorization.
+- Read-only tools with bounded result counts; pagination remains **(v2+)**.
 - Ship a tiny "instructions" blurb in the server so clients know to expand assay synonyms and to prefer `search_datasets` first.
 - This is also the natural place to later add server-side reranking ([[23-Search-and-Retrieval#4. Reranking]]) transparently.
+- The active embedding variant is server configuration and appears only as
+  output provenance; callers cannot select a model. →
+  [[48-Alternate-Embedding-Bakeoff]]
 
 → Milestone placement in [[40-Roadmap]].
 
 ## Sources
 
 - Model Context Protocol (MCP) — https://modelcontextprotocol.io/
+- FastMCP running/Streamable HTTP — https://gofastmcp.com/deployment/running-server
+- FastMCP HTTP/ASGI deployment — https://gofastmcp.com/deployment/http
+- FastMCP JWT/JWKS verification — https://gofastmcp.com/servers/auth/token-verification
+- FastMCP remote OAuth discovery — https://gofastmcp.com/servers/auth/remote-oauth
+- FastMCP authorization checks — https://gofastmcp.com/servers/authorization
 - Ranked list vs generated summary (retrieval vs RAG coverage) — https://arxiv.org/pdf/2603.08819
 - Server-side reranking options (if added later) — https://futureagi.com/blog/best-rerankers-for-rag-2026/

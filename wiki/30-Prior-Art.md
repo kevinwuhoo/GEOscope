@@ -11,7 +11,14 @@ The landscape, and the gap we're aiming at.
 
 ## Access / re-indexing (no ontology normalization)
 
-- **GEOmetadb** — SQLite dump of parsed GEO metadata for arbitrary SQL. Great schema reference; **stale since ~2021**. The [GitHub repo](https://github.com/zhujack/GEOmetadb) is *only* the Bioconductor R client (downloads a pre-built `.sqlite.gz`, plus `geoConvert`/platform-mapping helpers) — no ETL code. Per the paper, the actual pipeline was custom **PHP** SOFT-file parsers (GDS parser adapted from EzArray) writing into a **MySQL** database on the authors' own server, with an R script exporting that to SQLite for distribution. That PHP/MySQL scraper was never published, so once its authors stopped running it, there was no public code for anyone else to revive — explaining the staleness. ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC2639278/), verified directly; [repo](https://github.com/zhujack/GEOmetadb), verified directly)
+- **GEOmetadb** — SQLite dump of parsed GEO metadata for arbitrary SQL. The
+  client repository downloads a pre-built database rather than publishing the
+  upstream ETL. Although older community reports described stale releases, the
+  mirror measured for this project runs through 2024-02-29 (222,961 GSEs). We
+  use that fixed v1 snapshot with an explicit cutoff, not as a live source.
+  ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC2639278/),
+  [client repo](https://github.com/zhujack/GEOmetadb),
+  [[42-Build-Log#Metadata source — crawl vs. bulk]])
 - **OmicIDX** (Sean Davis) — treats repo metadata "as data": ingests SRA + BioSample, serves GraphQL/OpenAPI + a public **BigQuery** dataset, adds heuristic MeSH/ontology hints. Access-first. ([github](https://github.com/omicidx/omicidx-api))
 - **ARCHS4** — uniformly *re-aligned* ~188k human+mouse RNA-seq samples; tissue/cell-line are manually curated, **not** ontology-mapped. ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC5893633/))
 - **recount3** — ~750k uniformly processed samples; ships **raw** metadata and *delegates* ontology normalization to MetaSRA. ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC8628444/))
@@ -47,7 +54,7 @@ The landscape, and the gap we're aiming at.
 | CELLxGENE | the field→ontology schema (verbatim) |
 | MetaSRA | the deterministic-first mapping approach + sample-type idea |
 | STARGEO | proof that ontology tags make GEO searchable (but automate it) |
-| GEOmetadb | table-shape inspiration for raw landing; also a cautionary tale — an unpublished, single-server ETL is a single point of failure for the whole ecosystem |
+| GEOmetadb | fixed v1 bulk snapshot and table-shape inspiration; its unpublished upstream ETL and explicit cutoff argue for our own reproducible top-up path |
 | recount3 | "delegate hard bits" mindset — we delegate *generation* to the LLM |
 
 ## Sources

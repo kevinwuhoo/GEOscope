@@ -94,7 +94,10 @@ mirror we pulled is **current through 2024-02-29** (222,961 GSE, 7.0M GSM,
 ### Embedding
 `bge-small-en-v1.5` (384-dim), local on Apple-Silicon MPS: ~140 docs/s → full
 corpus in ~22 min, **$0**. This is a *test baseline* — the model pick is still
-an eval decision (MedCPT / OpenAI to A/B). See [[25-Embeddings-and-Cost]].
+an eval decision. The approved comparison is the existing BGE-small 384 baseline
+versus MedCPT 768 and Qwen3-Embedding-0.6B at 1,024 dimensions. No contender has
+won yet. See [[48-Alternate-Embedding-Bakeoff]] and
+[[49-Alternate-Embedding-Bakeoff-Implementation-Plan]].
 
 ## Findings that revise earlier assumptions
 
@@ -142,8 +145,8 @@ with a domain expert before we pick the demo:
 
 ## Status — 2026-07-10 (normalized filters and facets)
 
-Track 2's **v1** query layer is implemented on
-`codex/track2-normalized-filters` (`98ebee3`; shared contract `792389a`). It
+Track 2's **v1** query layer is implemented and merged on the current main
+history (`98ebee3`; shared contract `792389a`). It
 adds exactly four normalized fields: `organism_ids`, `sex_ids`,
 `assay_categories`, and `assay_labels`.
 

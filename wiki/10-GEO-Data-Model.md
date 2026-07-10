@@ -19,7 +19,9 @@ GEO organizes everything into four record types ([overview](https://www.ncbi.nlm
 | **DataSet** | `GDSxxx` | A *curated* comparable collection of Samples | **NCBI curators** | ~4,348 |
 
 Key facts:
-- **GSE (Series) is our primary unit** for v1 — it's the "study" a user searches for, and there are a tractable ~289k of them. → [[40-Roadmap]]
+- **GSE (Series) is our primary unit** for v1 — it is the "study" a user
+  searches for. Public GEO is roughly 289k series at the cited snapshot; this
+  project's fixed v1 GEOmetadb corpus contains 222,961. → [[40-Roadmap]]
 - **GSE↔GSM is many-to-many, not one-to-one.** Every sample is submitted under a series (samples don't exist independently), but a sample can appear in *multiple* series — e.g. a reused control, or a sample present in both its original series and a **SuperSeries** that bundles several component GSEs. **SuperSeries nest** sub-series. Consequence for indexing: series-level rollups lose per-sample co-occurrence → [[24-Faceted-Search|the facet caveat]].
 - **GDS is effectively frozen** (~4k, curation dormant for years). Don't build on it.
 - The rich free text is author-supplied at GSE and GSM level → the [[11-The-Metadata-Problem|normalization problem]].
@@ -88,15 +90,25 @@ Root: `ftp://ftp.ncbi.nlm.nih.gov/geo/`
 - **GEOparse** (`pip install GEOparse`) — parses SOFT into Python objects (GSE/GSM/GPL). Python analogue of R's GEOquery. [github](https://github.com/guma44/GEOparse)
 - **pysradb** (`pip install pysradb`) — bridges **GSE/GSM ↔ SRP/SRX/SRR**; useful for pulling SRA `library_*` fields. [github](https://github.com/saketkc/pysradb)
 
-### GEOmetadb — tempting but stale
-A SQLite dump of parsed GEO metadata (gse/gsm/gpl/gds tables). **Last rebuilt ~2021-11-03** and widely reported outdated — use it to prototype schema ideas, **not** as a live source. ([Bioconductor](https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html))
+### GEOmetadb — chosen fixed v1 snapshot, not a live feed
+A SQLite dump of parsed GEO metadata (gse/gsm/gpl/gds tables). The mirror used
+by this project was measured through **2024-02-29** with 222,961 GSEs and was
+chosen as the v1 bulk source; that is newer than the earlier 2021 assumption but
+still not current GEO. Keep its cutoff explicit and use metadata-only top-up
+tooling for later releases. ([Bioconductor package/schema](https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html),
+[[42-Build-Log#Metadata source — crawl vs. bulk]])
 
-## Practical ingest recommendation
+## Deferred post-snapshot top-up (v2+)
 
-1. `esearch`/`esummary` (JSON) over `db=gds` to enumerate the GSE universe + light summaries (fast, indexable field extraction).
-2. Pull **Series matrix header** or **family MINiML** from FTP for full metadata incl. per-sample characteristics.
-3. For sequencing series, `elink`/`pysradb` to enrich with SRA `library_*` fields.
-4. Parse with GEOparse; land raw records before normalizing.
+The fixed v1 corpus does not run a first crawl. For a later freshness release:
+
+1. use `esearch`/`esummary` over `db=gds` to enumerate records after the snapshot cutoff;
+2. fetch metadata-only brief SOFT with the existing `geo-fetch-soft` path;
+3. parse/aggregate those records into a separately versioned corpus;
+4. optionally enrich sequencing records through SRA before a full rebuild.
+
+Do not switch to full family SOFT/FTP payloads without revisiting the measured
+size/availability problems in [[42-Build-Log#Metadata source — crawl vs. bulk]].
 
 Full pipeline in [[21-Ingestion-Pipeline]].
 
@@ -106,6 +118,6 @@ Full pipeline in [[21-Ingestion-Pipeline]].
 - SOFT — https://www.ncbi.nlm.nih.gov/geo/info/soft.html · MINiML — https://www.ncbi.nlm.nih.gov/geo/info/MINiML.html
 - Download / FTP layout — https://www.ncbi.nlm.nih.gov/geo/info/download.html · programmatic access — https://www.ncbi.nlm.nih.gov/geo/info/geo_paccess.html · HTS→SRA — https://www.ncbi.nlm.nih.gov/geo/info/seq.html
 - Homepage counts — https://www.ncbi.nlm.nih.gov/geo/
-- E-utilities — https://www.ncbi.nlm.nih.gov/books/NBK25501/ · rate limits — https://www.ncbi.nlm.nih.gov/books/NBK25497/ · JSON — https://www.ncbi.nlm.nih.gov/books/NBK25499/
+- E-utilities — https://www.ncbi.nlm.nih.gov/books/NBK25501/ · rate limits — https://www.ncbi.nlm.nih.gov/books/NBK25497/ · API-key account — https://www.ncbi.nlm.nih.gov/account/ · JSON — https://www.ncbi.nlm.nih.gov/books/NBK25499/
 - GEOparse — https://github.com/guma44/GEOparse · pysradb — https://github.com/saketkc/pysradb
-- GEOmetadb (stale since 2021) — https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html · https://support.bioconductor.org/p/9149627/
+- GEOmetadb package/schema — https://www.bioconductor.org/packages/release/bioc/html/GEOmetadb.html

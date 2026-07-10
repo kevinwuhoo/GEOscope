@@ -11,53 +11,81 @@ tags: [search, retrieval, rag, hybrid]
 
 ```mermaid
 flowchart LR
-  Q[user query\n'single cell RNA'] --> QU[query understanding\n+ ontology-aware expansion]
+  Q[user conceptual query] --> QU[v1 LLM-client understanding\n+ optional synonym expansion]
   QU --> H1[dense: pgvector\nembedding kNN]
   QU --> H2[sparse: pg_search BM25\naccessions, gene symbols]
-  QU --> FIL[structured filters\norganism/year/assay]
+  QU --> FIL[current structured filters\norganism/sex/assay]
   H1 --> RRF[RRF fusion]
   H2 --> RRF
   FIL -. applied to both .-> RRF
-  RRF --> RR[optional rerank\ncross-encoder]
-  RR --> OUT[ranked GSE list + facet counts]
+  RRF --> RR[optional rerank\nv2+]
+  RR --> OUT[ranked GSE list + facets]
 ```
 
-## 1. Query understanding & expansion — *this is the "single cell RNA" fix*
+## 1. Query understanding & expansion
 
-Two layers, both ideally done by the **LLM client over MCP** (see [[27-MCP-Interface]]), with a deterministic fallback in the service:
+For **(v1)**, the LLM client over MCP is the only expansion layer; the server
+accepts the resulting free-text query and closed filters. This keeps Track 4
+deterministic and model-free. “Single cell RNA” remains one eval case, but the
+measured value proposition is broader conceptual/cross-vocabulary discovery
+([[42-Build-Log#What semantic search did prove valuable for]]).
 
-- **Synonym / assay expansion.** "single cell RNA" → `{scRNA-seq, 10x 3′, 10x 5′, Chromium, Drop-seq, Smart-seq2, SPLiT-seq, sci-RNA-seq, CEL-seq2, droplet-based}`. **Ground the expansion in EFO/OBI**, don't trust free LLM generation — ontology-grounded expansion both lifts recall and cuts hallucinated drift (BMQExpander reports +6.5% NDCG@10 over the best baseline and +15.7% robustness by grounding LLM expansion in the ontology; [arXiv 2508.11784](https://arxiv.org/abs/2508.11784)).
-- **Multi-query** (optional): 3–5 paraphrases, each retrieved, results fused with RRF. Raises recall on terminology-diverse corpora — exactly ours.
+- **Client synonym expansion (optional):** the client can map a concept to
+  assay labels returned by `facet_values` and/or enrich the free-text query.
+- **Client multi-query (optional):** the client may issue paraphrases and combine
+  returned accessions; the service exposes no multi-query endpoint in v1.
 
-> Because the assay concept is *also* a normalized facet ([[22-Ontology-Normalization]]), expansion can be **structural** too: "single cell RNA" → filter `assay ∈ descendants(EFO single-cell RNA sequencing)`. Semantic + structural expansion together is the strong play.
+Deterministic ontology-grounded expansion and hierarchy traversal are **(v2+)**.
+They remain promising—ontology-grounded expansion has published retrieval
+evidence ([BMQExpander](https://arxiv.org/abs/2508.11784))—but depend on a
+stable ontology mapper and are not Track 4 behavior.
 
 ## 2. Hybrid retrieval (dense + sparse)
 
-- **Dense** (`pgvector`): semantics/paraphrase — the core recall driver for the synonym problem.
+- **Dense** ([`pgvector`](https://github.com/pgvector/pgvector)): semantics and
+  paraphrase.
 - **Sparse/BM25** (`pg_search`): exact tokens embeddings fumble — **accessions (`GSE12345`), gene symbols, platform IDs (`GPL24676`), assay abbreviations**.
-- **Fuse with RRF** (`score = Σ 1/(k+rank)`, k≈60): rank-based, needs no score normalization between the two lists — the standard, and easy in SQL. → [[26-Datastore-Postgres#Hybrid query]]
+- **Fuse with RRF** (`score = Σ 1/(k+rank)`, k≈60): rank-based and needs no
+  cross-system score normalization
+  ([retrieval benchmark](https://ceur-ws.org/Vol-4173/T3-7.pdf)). →
+  [[26-Datastore-Postgres#Hybrid query]]
 
-> ⚠️ **Hybrid is not automatically better.** Recent benchmarks: with a strong embedding model, adding BM25 can *hurt*; with weaker models it helps a lot (RRF hybrid ~+38% MAP@10 over BM25 alone in one benchmark). **Decision: BM25 stays for exact-ID matching regardless, but whether to fuse-vs-route is an [[25-Embeddings-and-Cost#Eval|eval]] question.**
+> ⚠️ **Hybrid is not automatically better.** Published results vary by model
+> and corpus ([example benchmark](https://ceur-ws.org/Vol-4173/T3-7.pdf)).
+> **Decision:** BM25 stays for exact-ID matching; fuse-vs-route is an eval
+> question. The **(v1)** BGE/MedCPT/Qwen comparison measures dense and hybrid
+> for every model. → [[48-Alternate-Embedding-Bakeoff]]
 
 ## 3. Filtering
 
-Structured filters (organism, assay, tissue, year, sample_count, hierarchy ancestors) apply *alongside* the vector query. pgvector 0.8's **iterative index scans** fixed the old "over-filtering returns too few rows" problem — set `hnsw.iterative_scan = relaxed_order`. → [[26-Datastore-Postgres]]
+The current four filters—`organism_ids`, `sex_ids`, `assay_categories`, and
+`assay_labels`—apply inside BM25 and dense candidate branches before limits.
+Filtered HNSW uses `hnsw.iterative_scan = relaxed_order`, as supported by
+[pgvector](https://github.com/pgvector/pgvector#iterative-index-scans). Tissue,
+year, sample-count, and ancestor hierarchy are **(v2+)**. →
+[[45-Normalized-Filters-and-Facets-Plan]]
 
 ## 4. Reranking (optional, high ROI)
 
-Two-stage retrieve-then-rerank: get top-50–100 cheaply, then a **cross-encoder** re-sorts to top-10 (adds ~50–200 ms, often the single biggest quality win).
+Two-stage retrieve-then-rerank can retrieve a wider pool and use a
+**cross-encoder** to re-sort it, at additional measured latency.
 - **Where it lives:** for the spike, **skip it in the service** — the MCP client's LLM can rerank/select from a top-50 list, or you add it later.
-- **If self-hosting:** `bge-reranker-v2-m3` or `mxbai-rerank-v2` / `Qwen3-Reranker` (Apache-2.0). **Managed:** Cohere Rerank. **Domain-native:** the **MedCPT Cross-Encoder** (NCBI, trained on PubMed) pairs naturally if you use MedCPT embeddings. → [[25-Embeddings-and-Cost]]
+- **If revisited:** evaluate candidates on the same qrels rather than selecting
+  from a generic leaderboard. The [MedCPT Cross-Encoder](https://academic.oup.com/bioinformatics/article/39/11/btad651/7335842)
+  is the domain-native starting point if MedCPT retrieval wins. →
+  [[25-Embeddings-and-Cost]]
 
 ## 5. Output
 
-The service returns a **ranked list of GSE records** + facet counts. That's the faithful, inspectable, low-hallucination deliverable for *discovery*. Summaries/answers are layered by the LLM client — see [[27-MCP-Interface]] for why that split is right.
+The service returns a **ranked list of bounded GSE records** plus `facets`.
+Summaries/answers are layered by the LLM client—see [[27-MCP-Interface]] for why
+that split is right.
 
 ## What we build vs. what the LLM does
 
 | Step | Owner |
 |---|---|
-| Synonym/ontology expansion | LLM client (primary) + service fallback |
+| Synonym/query expansion | LLM client in v1; deterministic service expansion v2+ |
 | Dense + sparse retrieval, fusion | **Service** |
 | Filtering + facet counts | **Service** |
 | Reranking | Service (later) *or* LLM |
@@ -65,9 +93,9 @@ The service returns a **ranked list of GSE records** + facet counts. That's the 
 
 ## Sources
 
+- pgvector HNSW and iterative scans — https://github.com/pgvector/pgvector · https://github.com/pgvector/pgvector#iterative-index-scans
 - Ontology-grounded query expansion (BMQExpander) — https://arxiv.org/abs/2508.11784
 - LLM query understanding for live RAG — https://arxiv.org/pdf/2506.21384
 - RRF hybrid dense+sparse — https://ceur-ws.org/Vol-4173/T3-7.pdf
 - MedCPT retriever + cross-encoder (NCBI) — https://academic.oup.com/bioinformatics/article/39/11/btad651/7335842
-- Reranker options (2026) — https://futureagi.com/blog/best-rerankers-for-rag-2026/
 - Ranked list vs generated summary (coverage) — https://arxiv.org/pdf/2603.08819

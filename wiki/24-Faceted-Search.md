@@ -16,7 +16,11 @@ tags: [facets, search, ontology]
 
 For a given query result set, each facet returns `(value, count)` buckets — e.g. `Organism: Homo sapiens (1,204) · Mus musculus (612)`. These drive the drill-down UI/agent filters.
 
-> ⚠️ **Series-aggregation caveat (correctness gotcha).** Because v1 indexes at the **series** level, per-sample fields are rolled up to the series as *sets of distinct values* (a series gets `tissue ∈ {liver, spleen}`, `sex ∈ {M, F}`). That means a multi-field series facet query is **"contains these values", not "a sample with all these values"**:
+> ⚠️ **Series-aggregation caveat (correctness gotcha).** Because v1 indexes at
+> the **series** level, per-sample fields are rolled up as sets of distinct
+> values (for example, one series can contain both human/mouse organisms and
+> male/female sex values). A multi-field series facet query therefore means
+> **"the series contains these values," not "one sample has all these values"**:
 > - `sex=female AND tissue=liver` matches any series that has *some* female sample **and** *some* liver sample — **not necessarily the same sample**. A study with male-liver + female-spleen samples matches spuriously.
 > - You also **cannot** answer sample-scoped questions ("find the *samples* that are female-liver-scRNA") at series granularity at all.
 >
@@ -61,18 +65,26 @@ Selecting a parent term should match all descendants. Two patterns:
    - Cost: bigger index; re-materialize when the ontology version changes.
 2. **Query-time descendant expansion.** Keep only the leaf term; at query time look up all descendants and expand into a big `IN (…)`. Simpler indexing, always current, but expansion sets can be huge and slow.
 
-> **Decision:** materialized ancestor arrays. Ontologies change slowly; queries are frequent; and it turns hierarchy into ordinary array containment + `GROUP BY`. This is the standard biomedical-search approach (path-hierarchy tokenizer in ES, `lvl0/1/2` in Algolia — same idea, ancestor-set variant for DAGs).
+> **v2 hierarchy decision:** if/when ontology roll-ups land, materialize ancestor
+> arrays. Ontologies change slowly; queries are frequent; and it turns hierarchy
+> into ordinary array containment + `GROUP BY`. The current v1 ships four flat
+> arrays only; no ancestor closure is populated or queried yet.
 
 ## Engine reality
 
 - **Postgres native:** facets = `GROUP BY value, COUNT(*)` (+ `GROUPING SETS`), ancestor arrays via `@>`/`unnest`. Works fine at 289k rows; disjunctive facets = a handful of small queries.
 - **ParadeDB `pg_search`:** first-class faceting via `pdb.agg` over a columnar (Tantivy) index — sub-100ms facets over tens of millions of rows, single pass. Use this if native `GROUP BY` gets slow (mainly a v2 / sample-level concern).
 
-Both live in the **same Postgres**; `pg_search`'s `pdb.agg` is our primary facet path (committed), with `GROUP BY` as the portable fallback. → [[26-Datastore-Postgres]]
+Both can live in the **same Postgres**. The implemented v1 facet path is explicit
+disjunctive SQL `GROUP BY`; `pdb.agg` is a later optimization to benchmark only
+if native counts become limiting. → [[26-Datastore-Postgres]]
 
 ## Ties back to search
 
-Facets aren't separate from [[23-Search-and-Retrieval|retrieval]] — they're aggregations **over the current (filtered, hybrid-retrieved) result set**. The MCP `search` tool returns both the ranked list and the facet counts in one response. → [[27-MCP-Interface]]
+Facets are scoped to [[23-Search-and-Retrieval|retrieval]] candidates or all
+filter-matching rows. MCP `search_datasets` returns ranked results plus
+disjunctive facet counts; `facet_values` exposes bounded buckets directly. →
+[[27-MCP-Interface]]
 
 ## Sources
 
