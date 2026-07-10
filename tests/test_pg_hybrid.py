@@ -153,6 +153,27 @@ def test_filter_index_cli_dispatches_without_rebuilding_other_indexes(
     assert calls == 1
 
 
+def test_full_index_build_finishes_with_normalized_array_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _TransactionalConnection()
+    filter_index_calls = 0
+
+    def fake_filter_indexes() -> int:
+        nonlocal filter_index_calls
+        filter_index_calls += 1
+        return 11
+
+    monkeypatch.setattr(pg_hybrid, "_connect", lambda: conn)
+    monkeypatch.setattr(pg_hybrid, "build_filter_indexes", fake_filter_indexes)
+
+    assert pg_hybrid.build_indexes() == 11
+    statements = [statement for statement, _ in conn.cursor_instance.calls]
+    assert any("USING bm25" in statement for statement in statements)
+    assert any("USING hnsw" in statement for statement in statements)
+    assert filter_index_calls == 1
+
+
 def test_search_with_facets_embeds_once_and_reuses_query_vector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

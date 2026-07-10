@@ -29,8 +29,10 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
    add the test foundation, fix broad 10x/chromium matching, then refresh only the
    three persisted assay columns.
 2. [[45-Normalized-Filters-and-Facets-Plan|Normalized filters + facets]] — the
-   organism/sex/assay arrays are **already populated**; add GIN indexes, filtered
-   retrieval, disjunctive counts, and API exposure.
+   organism/sex/assay arrays are **already populated**. **Implemented
+   2026-07-10:** filtered retrieval, disjunctive counts, scoped HTTP facets, and
+   the four-index migration command. Applying the GIN DDL to the shared database
+   still requires approval.
 3. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
    and hybrid results for 16 fixed queries and measure Recall@20, NDCG@10, and
    MRR@20 with reviewed qrels.
@@ -65,12 +67,16 @@ Track 2 lands, so neither needs to wait for tissue mapping.
   [[22-Ontology-Normalization]]
 - [ ] Harden assay matching and refresh its persisted columns. →
   [[44-Normalization-Tests-and-Assay-Hardening-Plan]]
-- [ ] Add normalized filters, GIN indexes, and disjunctive facet counts. →
+- [x] Implement normalized filters, the GIN migration command, and disjunctive
+  facet counts. →
   [[45-Normalized-Filters-and-Facets-Plan]]
+- [ ] Apply the four normalized-array GIN indexes to the populated shared
+  database after approval. → [[45-Normalized-Filters-and-Facets-Plan]]
 - [ ] Materialize ancestor arrays only after an ontology-backed field needs
   hierarchy. → [[24-Faceted-Search]]
 - [ ] Fold normalized labels back into embedding doc; re-embed (cheap).
-- [ ] Facet counts (native `GROUP BY`, disjunctive-correct). →
+- [x] Facet counts (native `GROUP BY`, disjunctive-correct, with an explicit
+  1,000-candidate scope for text queries). →
   [[45-Normalized-Filters-and-Facets-Plan]]
 - [ ] Measure normalization precision/coverage vs. hand labels.
 

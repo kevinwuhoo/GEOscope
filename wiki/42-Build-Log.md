@@ -101,6 +101,73 @@ with a domain expert before we pick the demo:
 6. **Non-model-organism / environmental & toxicogenomics** — worst-standardized
    metadata, so semantic search has the most headroom.
 
+## Status — 2026-07-10 (normalized filters and facets)
+
+Track 2's **v1** query layer is implemented on
+`codex/track2-normalized-filters` (`98ebee3`; shared contract `792389a`). It
+adds exactly four normalized fields: `organism_ids`, `sex_ids`,
+`assay_categories`, and `assay_labels`.
+
+Implemented behavior:
+
+- values within one field use array overlap (OR); different fields are ANDed;
+- filters run inside BM25, dense, and both hybrid candidate branches before
+  their limits;
+- filtered dense/HNSW queries enable iterative scanning;
+- facets omit their own selected filter, retain every other filter, and count
+  distinct series/value pairs;
+- blank-query facets are exact over all matching rows; text-query facets are
+  labeled as a bounded 1,000-candidate pool;
+- `/api/search` accepts repeatable organism, sex, assay-category, and
+  assay-label parameters and returns the normalized request plus scoped facets.
+
+Read-only verification against the 222,961-row local database:
+
+| Check | Result |
+|---|---:|
+| human (`NCBITaxon:9606`) | 97,114 |
+| mouse (`NCBITaxon:10090`) | 71,204 |
+| female (`PATO:0000383`) | 24,719 |
+| male (`PATO:0000384`) | 28,934 |
+| offline tests | 33 passed, 4 integration tests deselected |
+| selected read-only Postgres tests | 3 passed |
+| exact four-facet aggregation | 0.612 s observed |
+| BM25 four-facet 1,000-candidate aggregation | 0.308 s observed |
+
+The human-only, mouse-only, OR-within, AND-across, impossible-value, own-facet
+alternative, and rare filtered-dense cases all passed. These timings are local
+observations, not CI thresholds.
+
+The four GIN indexes are implemented but were deliberately **not** created on
+the shared database. After database-change approval, apply only the missing
+indexes with:
+
+```bash
+uv run python -m geo_index.pg_hybrid filter-index
+```
+
+For a complete rebuild, the checked-in ETL order is:
+
+```bash
+uv run geo-build-series-docs
+uv run geo-embed
+uv run python -m geo_index.pg_hybrid init   # destructive; isolated/local only
+uv run python -m geo_index.pg_hybrid load
+uv run geo-normalize migrate
+uv run geo-normalize run
+uv run python -m geo_index.pg_hybrid index
+uv run geo-normalize report
+```
+
+`init` creates the v1 normalized columns, `migrate` idempotently supplies the
+complete normalization schema, and `index` builds BM25, HNSW, and all four GIN
+indexes. No raw-data reload, normalization run, model load, or embedding rebuild
+was performed while implementing Track 2. Final assay-label smoke testing remains
+pending Track 1's targeted persisted-value refresh.
+
+The series-aggregation caveat still applies: `human + female` means the GSE
+contains each value somewhere, not necessarily on the same GSM sample.
+
 ## Sources
 
 - GEOmetadb dump (mirror; currency verified 2026-07-08 from file + `max(submission_date)`) — https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz
@@ -108,5 +175,6 @@ with a domain expert before we pick the demo:
 - `bge-small-en-v1.5` — https://huggingface.co/BAAI/bge-small-en-v1.5
 - E-utilities usage / rate limits — https://www.ncbi.nlm.nih.gov/books/NBK25497/
 
-*All corpus statistics above were measured in this spike on 2026-07-08 against
-the GEOmetadb-derived corpus; they are our own measurements, not external claims.*
+*All corpus statistics above were measured in this spike against the
+GEOmetadb-derived corpus; the Track 2 measurements were collected on 2026-07-10.
+They are our own measurements, not external claims.*

@@ -63,3 +63,45 @@ are skipped; failures are logged to `data/raw/soft/_failures.log` for re-run.
 > corpus) and 404s for freshly-released series. The esummary JSON omits all
 > per-sample metadata. `acc.cgi view=brief` is the only source that is
 > metadata-complete, data-free, and available for new series.
+
+## Rebuild the Postgres search database
+
+The **v1** search database is reproducible from the GEOmetadb SQLite file and
+the generated JSONL/embedding artifacts. Build those artifacts first:
+
+```bash
+uv run geo-build-series-docs
+uv run geo-embed
+```
+
+Then rebuild Postgres in this order:
+
+```bash
+# Destructive: drops and recreates `series`. Use only on an isolated/local DB.
+uv run python -m geo_index.pg_hybrid init
+uv run python -m geo_index.pg_hybrid load
+
+# `migrate` is idempotent and ensures every normalization column exists.
+uv run geo-normalize migrate
+uv run geo-normalize run
+
+# Builds BM25, HNSW, and the four normalized-array GIN indexes.
+uv run python -m geo_index.pg_hybrid index
+uv run geo-normalize report
+```
+
+`load` checks that `geo_series.jsonl`, `embeddings.npy`, and
+`embeddings.ids.json` have identical GSE ordering before inserting anything.
+Running normalization before index creation avoids maintaining the new GIN
+indexes during the full normalization update.
+
+To upgrade an already-populated database without rebuilding BM25, HNSW,
+normalization, or embeddings, run only this command after receiving database
+change approval:
+
+```bash
+uv run python -m geo_index.pg_hybrid filter-index
+```
+
+Filters are series-level: selecting values across fields means the GSE contains
+each value somewhere, not that one GSM sample contains all of them.

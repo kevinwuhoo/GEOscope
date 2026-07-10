@@ -1,8 +1,9 @@
 ---
 title: Normalized Filters and Facets Plan
 tags: [search, filters, facets, postgres, plan, v1]
-status: implementation-plan
+status: implemented
 created: 2026-07-10
+implemented: 2026-07-10
 ---
 
 # 45 · Normalized Filters and Facets Implementation Plan
@@ -28,6 +29,12 @@ explicit rather than presenting approximate semantic counts as corpus totals.
 
 **Tech Stack:** Python 3.11+, dataclasses, psycopg 3, PostgreSQL `TEXT[]` + GIN,
 pg_search BM25, pgvector HNSW, pytest.
+
+> **Implementation status (2026-07-10):** Complete on
+> `codex/track2-normalized-filters` at `98ebee3`; the shared contract is
+> `792389a`. Offline tests and selected read-only Postgres behavior tests pass.
+> The four-index migration is implemented but has not been applied to the shared
+> database. Final assay-label smoke testing follows Track 1's targeted refresh.
 
 ## Global Constraints
 
