@@ -7,6 +7,11 @@ tags: [mcp, rag, api, llm]
 
 ← [[Home]] · consumes [[23-Search-and-Retrieval]], [[24-Faceted-Search]]
 
+> **Implementation tranche:** [[47-MCP-Server-Plan]] starts with
+> `search_datasets`, `get_dataset`, and `facet_values` over local stdio.
+> `expand_terms`, `resolve_ontology`, and non-GSE lookup wait for the tissue
+> mapper and broader record indexing.
+
 ## Your question, answered
 
 > *"I want a ranked list first, but I envision this being used over MCP with an LLM so the LLM can generate [the summary and conversation]. Is that reasonable and possible?"*
@@ -42,7 +47,7 @@ sequenceDiagram
 | Tool | Input | Returns | Notes |
 |---|---|---|---|
 | `search_datasets` | `query`, `filters{}`, `expand?`, `limit` | ranked `[{gse, score, title, organism, assay, tissue, n_samples, year, snippet}]` + `facet_counts{}` | the workhorse; hybrid + facets in one call |
-| `get_dataset` | `gse` | full normalized + raw record, sample summary, links (PubMed/SRA) | drill-in |
+| `get_dataset` | `gse` | indexed GSE metadata, normalized fields, and GEO/PubMed links | drill-in; raw SOFT/GSM/SRA are not indexed yet |
 | `facet_values` | `field`, `query?`, `prefix?` | `[{id, label, count}]` | populate/expand a facet; hierarchy-aware |
 | `expand_terms` | `text` | `{ontology_terms:[…], synonyms:[…]}` | server-side ontology-grounded expansion (fallback if the client doesn't) |
 | `resolve_ontology` | `text`, `field` | candidate `{id, label, confidence}` | exposes the [[22-Ontology-Normalization|normalization]] mapper |
@@ -52,7 +57,10 @@ sequenceDiagram
 
 ### Strict enums, not free-text filters (the north star, operationalized)
 
-Filters accept **controlled ontology IDs**, not raw strings. This is the mechanism behind [[00-Overview#North star|"strict enums the LLM or human can query"]]:
+Filters accept **controlled values**, not arbitrary raw strings. Organism and sex
+use ontology IDs today; assay uses a closed set of category/detail labels until
+EFO grounding is implemented. This is the mechanism behind
+[[00-Overview#North star|"strict enums the LLM or human can query"]]:
 
 - `facet_values` hands the caller the **valid vocabulary** for a field (IDs + labels + counts), so an LLM or a human UI **selects from a closed set** instead of guessing strings.
 - The flow: the model resolves "human" → `NCBITaxon:9606` (via `resolve_ontology`/`facet_values`), then filters on the **ID**. No ambiguity, no silent empty results from a misspelled value.

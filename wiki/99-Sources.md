@@ -75,6 +75,7 @@ Citations gathered during the [[Home|research pass]] (2026-07). Grouped by topic
 
 ## Datastores / search engines
 - pgvector 0.8.0 — https://www.postgresql.org/about/news/pgvector-080-released-2952/ · GitHub — https://github.com/pgvector/pgvector
+- pgvector iterative index scans — https://github.com/pgvector/pgvector#iterative-index-scans
 - pgvector 0.8 filtering on Aurora — https://aws.amazon.com/blogs/database/supercharging-vector-search-performance-and-relevance-with-pgvector-0-8-0-on-amazon-aurora-postgresql/
 - ParadeDB pg_search — https://www.paradedb.com/blog/introducing-search · hybrid RRF recipe — https://www.paradedb.com/blog/hybrid-search-in-postgresql-the-missing-manual · faceting — https://www.paradedb.com/blog/faceting
 - Timescale pg_textsearch (v1.0 GA, C, no faceting yet) — https://github.com/timescale/pg_textsearch · https://www.tigerdata.com/blog/introducing-pg_textsearch-true-bm25-ranking-hybrid-retrieval-postgres
@@ -93,5 +94,10 @@ Citations gathered during the [[Home|research pass]] (2026-07). Grouped by topic
 - ES path_hierarchy tokenizer — https://www.elastic.co/docs/reference/text-analysis/analysis-pathhierarchy-tokenizer
 - Ontology-enhanced faceted search (VLDB) — https://link.springer.com/article/10.1007/s00778-022-00735-3
 - Algolia hierarchicalMenu — https://www.algolia.com/doc/api-reference/widgets/hierarchical-menu/js
+
+## Model Context Protocol
+- Official Python SDK v1 branch — https://github.com/modelcontextprotocol/python-sdk/tree/v1.x
+- MCP Python package/release history — https://pypi.org/project/mcp/
+- Official in-memory MCP server testing — https://py.sdk.modelcontextprotocol.io/testing/
 
 > Full per-topic research notes (with the deeper comparisons) were produced by the research agents during this session; this file is the distilled link index.

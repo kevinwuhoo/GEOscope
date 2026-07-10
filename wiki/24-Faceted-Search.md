@@ -7,6 +7,11 @@ tags: [facets, search, ontology]
 
 ← [[Home]] · depends on [[22-Ontology-Normalization]] · served by [[26-Datastore-Postgres]]
 
+> **v1 implementation:** [[45-Normalized-Filters-and-Facets-Plan]] starts with
+> the already-populated `organism_ids`, `sex_ids`, `assay_categories`, and
+> `assay_labels` arrays. These are flat discovery facets; ontology hierarchy is
+> deferred until tissue or an EFO-grounded assay field makes it useful.
+
 ## What a facet is here
 
 For a given query result set, each facet returns `(value, count)` buckets — e.g. `Organism: Homo sapiens (1,204) · Mus musculus (612)`. These drive the drill-down UI/agent filters.
@@ -23,12 +28,13 @@ For a given query result set, each facet returns `(value, count)` buckets — e.
 
 | Facet | Backing field | Type | Hierarchical? |
 |---|---|---|---|
-| Organism | `organism_id[]` (NCBITaxon) | multi-select | mild |
-| Assay | `assay_id[]` (EFO) | multi-select | **yes** (10x → 3′/5′) |
+| Organism | `organism_ids[]` (NCBITaxon) | multi-select | mild |
+| Assay category/detail (v1) | `assay_categories[]` / `assay_labels[]` | multi-select | no; controlled labels |
+| Assay ontology (later) | future `assay_ids[]` (EFO) | multi-select | **yes** after grounding |
 | Tissue | `tissue_id[]` (UBERON) | multi-select | **yes** |
 | Cell type | `cell_type_id[]` (CL) | multi-select | **yes** (DAG) |
 | Disease | `disease_id[]` (MONDO) | multi-select | **yes** |
-| Sex | `sex_id[]` (PATO) | multi-select | no |
+| Sex | `sex_ids[]` (PATO) | multi-select | no |
 | Sample count | `n_samples` | numeric range buckets | no |
 | Year | `submission_year` | range/histogram | no |
 | Instrument | `instrument_model[]` (GPL, **organism stripped**) | multi-select | no |

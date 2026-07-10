@@ -50,18 +50,23 @@ Notes:
 
 ## Recommended path
 
-1. **Ship v1 on `text-embedding-3-small`** — cheapest, zero infra, instantly available, strong baseline. ~$6 to embed everything.
-2. **Benchmark against MedCPT** (free, domain-native) and one open general model (`BGE-M3` or `Qwen3-Embedding`) on the eval set below. If MedCPT/open wins meaningfully, switch — the re-embed is a coffee break and a few dollars.
+1. **Measure the existing `bge-small-en-v1.5` index first** — all 222,961
+   series are already embedded, so it is the honest zero-incremental-cost baseline.
+2. **Benchmark against MedCPT** (free, domain-native) and, only if warranted,
+   `text-embedding-3-small` or another open model on the same reviewed eval set.
 3. Keep the embedder behind an interface so swapping is one config change.
 
 ## Eval — the thing worth building
 
-Small, honest, reusable. ~50–100 labeled queries with known-relevant GSEs.
+Small, honest, reusable. Start with the 16 fixed pooled cases in
+[[46-Retrieval-Evaluation-Plan]], then expand only if the first review changes a
+decision.
 
 - **Seed queries from the pain:** "single cell RNA" (must return 10x/Drop-seq/SPLiT-seq), "CRISPR screen in T cells", "spatial transcriptomics mouse brain", accession/gene-symbol exact hits, etc.
 - **Metrics:** Recall@20, NDCG@10, MRR. For normalization: precision + coverage per field vs. a hand-labeled sample (MetaSRA-style; expect high precision, watch recall).
 - **What it decides:** embedding model; hybrid fuse-vs-route ([[23-Search-and-Retrieval]]); whether reranking earns its latency; the normalization confidence threshold `τ` ([[22-Ontology-Normalization]]).
-- Build it in week 1 and never argue about model choice again. → [[40-Roadmap]]
+- Build the measured baseline before changing models. →
+  [[46-Retrieval-Evaluation-Plan]], [[40-Roadmap]]
 
 ## Sources
 

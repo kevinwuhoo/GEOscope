@@ -35,6 +35,10 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[41-Open-Questions]] — decisions still to make
 - [[42-Build-Log]] — **what we've built, tried, and measured** (living progress log)
 - [[43-Tissue-Candidate-Generation-Plan]] — next normalization experiment: deterministic candidates + bounded LLM validation
+- [[44-Normalization-Tests-and-Assay-Hardening-Plan]] — Track 1: tests + contextual assay rules + targeted assay refresh
+- [[45-Normalized-Filters-and-Facets-Plan]] — Track 2: query/facet layer over the populated organism, sex, and assay arrays
+- [[46-Retrieval-Evaluation-Plan]] — Track 3: 16-query pooled human evaluation, no trained model
+- [[47-MCP-Server-Plan]] — Track 4: local stdio MCP server with three stable tools
 - [[90-Glossary]] — every acronym in one place
 - [[99-Sources]] — all citations
 
