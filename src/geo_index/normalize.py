@@ -38,6 +38,7 @@ Usage:
     uv run geo-normalize migrate          # add columns (idempotent)
     uv run geo-normalize run              # map + write back all rows
     uv run geo-normalize run --limit 5000
+    uv run geo-normalize assay-refresh    # update only persisted assay columns
     uv run geo-normalize report           # coverage stats over the table
     uv run geo-normalize demo             # show mapping on tricky real values
 """
@@ -574,6 +575,23 @@ _STATUS_FIELDS = ["organism", "sex", "tissue", "cell_type", "cell_line",
                   "disease", "ethnicity", "dev_stage", "assay", "age"]
 
 
+def normalize_assay_fields(row: dict) -> dict[str, object]:
+    """Pure mapping of one series row to its persisted assay columns."""
+    free_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("title", "summary", "overall_design")
+    )
+    categories, labels, status = map_assay(
+        row.get("type") or "",
+        f"{row.get('type') or ''} {free_text}",
+    )
+    return {
+        "assay_categories": categories,
+        "assay_labels": labels,
+        "assay_status": status,
+    }
+
+
 def normalize_row(row: dict) -> dict:
     """Pure mapping of one series row → the normalized column values."""
     out: dict = {}
@@ -585,9 +603,7 @@ def normalize_row(row: dict) -> dict:
         ids, status, _ = _map_curated(fields.get(f, set()), table, unknown=unk)
         out[f"{f}_ids"], out[f"{f}_status"] = ids, status
     out["dev_stage_ids"], out["dev_stage_status"], _ = map_dev_stage(fields.get("dev_stage", set()))
-    free = " ".join(str(row.get(k) or "") for k in ("title", "summary", "overall_design"))
-    cats, labels, astatus = map_assay(row.get("type") or "", (row.get("type") or "") + " " + free)
-    out["assay_categories"], out["assay_labels"], out["assay_status"] = cats, labels, astatus
+    out.update(normalize_assay_fields(row))
     out["age_norm"], out["age_status"] = map_age(fields.get("age", set()))
     return out
 
@@ -646,6 +662,66 @@ def run(limit: int | None = None, batch: int = 5000) -> int:
     for f in _STATUS_FIELDS:
         print(f"  {f:11} mapped {counts[f]:>8,} ({100*counts[f]/max(n,1):4.0f}%)", flush=True)
     return 0
+
+
+def refresh_assays(limit: int | None = None, batch: int = 5000) -> int:
+    """Recompute only assay_categories, assay_labels, and assay_status."""
+    import time
+
+    migrate()
+    read = _connect()
+    try:
+        write = _connect()
+    except BaseException:
+        read.close()
+        raise
+    n = 0
+    started = time.time()
+    update_sql = (
+        "UPDATE series SET assay_categories=%s, assay_labels=%s, "
+        "assay_status=%s WHERE id=%s"
+    )
+    try:
+        with read.cursor(name="assay_refresh_scan") as scan, write.cursor() as cur:
+            scan.itersize = batch
+            sql = (
+                "SELECT id, title, summary, overall_design, type "
+                "FROM series ORDER BY id"
+            )
+            if limit is not None:
+                sql += f" LIMIT {int(limit)}"
+            scan.execute(sql)
+            pending: list[tuple[object, ...]] = []
+            for sid, title, summary, design, type_text in scan:
+                fields = normalize_assay_fields(
+                    {
+                        "title": title,
+                        "summary": summary,
+                        "overall_design": design,
+                        "type": type_text,
+                    }
+                )
+                pending.append(
+                    (
+                        fields["assay_categories"] or None,
+                        fields["assay_labels"] or None,
+                        fields["assay_status"],
+                        sid,
+                    )
+                )
+                n += 1
+                if len(pending) >= batch:
+                    cur.executemany(update_sql, pending)
+                    write.commit()
+                    pending.clear()
+            if pending:
+                cur.executemany(update_sql, pending)
+                write.commit()
+    finally:
+        read.close()
+        write.close()
+    print(f"refreshed assay fields for {n:,} rows in {time.time() - started:.0f}s")
+    return n
 
 
 def report() -> int:
@@ -721,6 +797,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate")
     rp = sub.add_parser("run")
     rp.add_argument("--limit", type=int, default=None)
+    arp = sub.add_parser("assay-refresh")
+    arp.add_argument("--limit", type=int, default=None)
     sub.add_parser("report")
     sub.add_parser("demo")
     a = p.parse_args(argv)
@@ -728,6 +806,9 @@ def main(argv: list[str] | None = None) -> int:
         return migrate()
     if a.cmd == "run":
         return run(limit=a.limit)
+    if a.cmd == "assay-refresh":
+        refresh_assays(limit=a.limit)
+        return 0
     if a.cmd == "report":
         return report()
     if a.cmd == "demo":
