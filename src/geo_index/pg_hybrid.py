@@ -24,6 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
+from .facets import build_filter_clause
+from .search_models import SearchFilters
+
 DSN = os.environ.get("GEO_PG_DSN", "postgresql://postgres:geo@localhost:5433/geo")
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = ROOT / "data/processed/embeddings"
@@ -171,6 +174,65 @@ def embed_query(model, text: str) -> np.ndarray:
     ).astype(np.float32)[0]
 
 
+def _search_statement(mode: str, predicate: str) -> str:
+    """Return retrieval SQL with a prevalidated filter predicate in each branch."""
+
+    if mode == "bm25":
+        return f"""
+            SELECT s.gse, s.title, s.type, paradedb.score(s.id) AS score,
+                   NULL::bigint AS bm25_rank, NULL::bigint AS dense_rank
+            FROM series AS s
+            WHERE s.search_text @@@ %(q)s AND ({predicate})
+            ORDER BY score DESC
+            LIMIT %(topk)s
+        """
+    if mode == "dense":
+        return f"""
+            SELECT s.gse, s.title, s.type,
+                   1 - (s.embedding <=> %(qv)s) AS score,
+                   NULL::bigint AS bm25_rank, NULL::bigint AS dense_rank
+            FROM series AS s
+            WHERE {predicate}
+            ORDER BY s.embedding <=> %(qv)s
+            LIMIT %(topk)s
+        """
+    if mode == "hybrid":
+        return f"""
+            WITH bm25 AS (
+                SELECT s.id,
+                       RANK() OVER (ORDER BY paradedb.score(s.id) DESC) AS rank
+                FROM series AS s
+                WHERE s.search_text @@@ %(q)s AND ({predicate})
+                ORDER BY paradedb.score(s.id) DESC
+                LIMIT %(deep)s
+            ),
+            dense AS (
+                SELECT s.id,
+                       RANK() OVER (ORDER BY s.embedding <=> %(qv)s) AS rank
+                FROM series AS s
+                WHERE {predicate}
+                ORDER BY s.embedding <=> %(qv)s
+                LIMIT %(deep)s
+            ),
+            fused AS (
+                SELECT COALESCE(b.id, d.id) AS id,
+                       COALESCE(1.0 / (%(k0)s + b.rank), 0) +
+                       COALESCE(1.0 / (%(k0)s + d.rank), 0) AS rrf,
+                       b.rank AS bm25_rank,
+                       d.rank AS dense_rank
+                FROM bm25 AS b
+                FULL OUTER JOIN dense AS d USING (id)
+            )
+            SELECT s.gse, s.title, s.type, f.rrf AS score,
+                   f.bm25_rank, f.dense_rank
+            FROM fused AS f
+            JOIN series AS s USING (id)
+            ORDER BY f.rrf DESC
+            LIMIT %(topk)s
+        """
+    raise ValueError(f"unsupported search mode: {mode}")
+
+
 def search_rows(
     conn,
     query: str,
@@ -181,73 +243,46 @@ def search_rows(
     deep: int = 200,
     mode: str = "hybrid",
     k0: int = 60,
+    filters: SearchFilters | None = None,
 ) -> list[dict]:
     """Run a search and return result rows as dicts. mode: hybrid | bm25 | dense.
 
     Pass a preloaded ``model`` (or a precomputed ``qv``) to avoid reloading the
     embedding model per call — the web server does this.
     """
+    if mode not in {"bm25", "dense", "hybrid"}:
+        raise ValueError(f"unsupported search mode: {mode}")
+    if topk < 1 or deep < topk or k0 < 1:
+        raise ValueError("require topk >= 1, deep >= topk, and k0 >= 1")
+    active_filters = filters or SearchFilters()
     if mode != "bm25" and qv is None:
         if model is None:
             model = load_model()
         qv = embed_query(model, query)
-
+    predicate, filter_params = build_filter_clause(active_filters, alias="s")
+    params: dict[str, object] = {
+        "q": query,
+        "qv": qv,
+        "topk": topk,
+        "deep": deep,
+        "k0": k0,
+        **filter_params,
+    }
     with conn.cursor() as cur:
-        if mode == "bm25":
-            cur.execute(
-                """
-                SELECT gse, title, type, paradedb.score(id) AS s, NULL::bigint, NULL::bigint
-                FROM series WHERE search_text @@@ %(q)s
-                ORDER BY s DESC LIMIT %(topk)s;
-                """,
-                {"q": query, "topk": topk},
-            )
-        elif mode == "dense":
-            cur.execute(
-                """
-                SELECT gse, title, type, 1 - (embedding <=> %(qv)s) AS s, NULL::bigint, NULL::bigint
-                FROM series ORDER BY embedding <=> %(qv)s LIMIT %(topk)s;
-                """,
-                {"qv": qv, "topk": topk},
-            )
-        else:  # hybrid RRF
-            cur.execute(
-                """
-                WITH bm25 AS (
-                    SELECT id, RANK() OVER (ORDER BY paradedb.score(id) DESC) AS r
-                    FROM series WHERE search_text @@@ %(q)s
-                    ORDER BY paradedb.score(id) DESC LIMIT %(deep)s
-                ),
-                dense AS (
-                    SELECT id, RANK() OVER (ORDER BY embedding <=> %(qv)s) AS r
-                    FROM series ORDER BY embedding <=> %(qv)s LIMIT %(deep)s
-                ),
-                fused AS (
-                    SELECT COALESCE(b.id, d.id) AS id,
-                           COALESCE(1.0/(%(k0)s + b.r), 0) +
-                           COALESCE(1.0/(%(k0)s + d.r), 0) AS rrf,
-                           b.r AS bm25_rank, d.r AS dense_rank
-                    FROM bm25 b FULL OUTER JOIN dense d USING (id)
-                )
-                SELECT s.gse, s.title, s.type, f.rrf AS s, f.bm25_rank, f.dense_rank
-                FROM fused f JOIN series s USING (id)
-                ORDER BY f.rrf DESC LIMIT %(topk)s;
-                """,
-                {"q": query, "qv": qv, "deep": deep, "topk": topk, "k0": k0},
-            )
-        out = []
-        for gse, title, typ, score, bm25_rank, dense_rank in cur.fetchall():
-            out.append(
-                {
-                    "gse": gse,
-                    "title": title,
-                    "type": typ,
-                    "score": float(score) if score is not None else None,
-                    "bm25_rank": int(bm25_rank) if bm25_rank is not None else None,
-                    "dense_rank": int(dense_rank) if dense_rank is not None else None,
-                }
-            )
-        return out
+        if mode in {"dense", "hybrid"}:
+            cur.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+        cur.execute(_search_statement(mode, predicate), params)
+        return [
+            {
+                "gse": gse,
+                "title": title,
+                "type": study_type,
+                "score": float(score) if score is not None else None,
+                "bm25_rank": int(bm25_rank) if bm25_rank is not None else None,
+                "dense_rank": int(dense_rank) if dense_rank is not None else None,
+            }
+            for gse, title, study_type, score, bm25_rank, dense_rank in cur.fetchall()
+        ]
 
 
 def search(query: str, topk: int = 15, deep: int = 200, mode: str = "hybrid", k0: int = 60) -> int:
