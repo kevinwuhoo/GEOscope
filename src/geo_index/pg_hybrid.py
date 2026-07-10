@@ -24,8 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .facets import build_filter_clause
-from .search_models import SearchFilters
+from .facets import build_filter_clause, facet_counts
+from .search_models import SearchFilters, SearchResponse
 
 DSN = os.environ.get("GEO_PG_DSN", "postgresql://postgres:geo@localhost:5433/geo")
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +74,14 @@ def init() -> int:
                 n_samples      INT,
                 pubmed_id      BIGINT,
                 search_text    TEXT,
-                embedding      vector({DIM})
+                embedding      vector({DIM}),
+                organism_ids TEXT[],
+                organism_status TEXT,
+                sex_ids TEXT[],
+                sex_status TEXT,
+                assay_categories TEXT[],
+                assay_labels TEXT[],
+                assay_status TEXT
             );
             """
         )
@@ -156,6 +163,28 @@ def build_indexes() -> int:
         )
         conn.commit()
         print(f"  HNSW done ({time.time()-t0:.0f}s)", flush=True)
+    return build_filter_indexes()
+
+
+def build_filter_indexes() -> int:
+    """Create only the four GIN indexes used by normalized array filters."""
+
+    statements = (
+        "CREATE INDEX IF NOT EXISTS series_organism_ids_gin "
+        "ON series USING gin (organism_ids)",
+        "CREATE INDEX IF NOT EXISTS series_sex_ids_gin "
+        "ON series USING gin (sex_ids)",
+        "CREATE INDEX IF NOT EXISTS series_assay_categories_gin "
+        "ON series USING gin (assay_categories)",
+        "CREATE INDEX IF NOT EXISTS series_assay_labels_gin "
+        "ON series USING gin (assay_labels)",
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        for statement in statements:
+            cur.execute(statement)
+        cur.execute("ANALYZE series")
+        conn.commit()
+    print("ensured four normalized-array GIN indexes", flush=True)
     return 0
 
 
@@ -285,6 +314,50 @@ def search_rows(
         ]
 
 
+def search_with_facets(
+    conn,
+    query: str,
+    *,
+    filters: SearchFilters | None = None,
+    model=None,
+    qv: np.ndarray | None = None,
+    topk: int = 15,
+    deep: int = 200,
+    mode: str = "hybrid",
+    k0: int = 60,
+    facet_pool: int = 1000,
+) -> SearchResponse:
+    """Run one ranked search and return four scoped, disjunctive facets."""
+
+    active_filters = filters or SearchFilters()
+    if mode != "bm25" and qv is None:
+        if model is None:
+            model = load_model()
+        qv = embed_query(model, query)
+    hits = search_rows(
+        conn,
+        query,
+        qv=qv,
+        topk=topk,
+        deep=deep,
+        mode=mode,
+        k0=k0,
+        filters=active_filters,
+    )
+    facets = facet_counts(
+        conn,
+        query=query,
+        mode=mode,
+        qv=qv,
+        filters=active_filters,
+        retrieve=search_rows,
+        deep=deep,
+        k0=k0,
+        facet_pool=facet_pool,
+    )
+    return SearchResponse(hits=tuple(hits), facets=facets)
+
+
 def search(query: str, topk: int = 15, deep: int = 200, mode: str = "hybrid", k0: int = 60) -> int:
     with _connect() as conn:
         rows = search_rows(conn, query, topk=topk, deep=deep, mode=mode, k0=k0)
@@ -303,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     lp = sub.add_parser("load")
     lp.add_argument("--limit", type=int, default=None)
     sub.add_parser("index")
+    sub.add_parser("filter-index")
     sp = sub.add_parser("search")
     sp.add_argument("query")
     sp.add_argument("--topk", type=int, default=15)
@@ -316,6 +390,8 @@ def main(argv: list[str] | None = None) -> int:
         return load(limit=a.limit)
     if a.cmd == "index":
         return build_indexes()
+    if a.cmd == "filter-index":
+        return build_filter_indexes()
     if a.cmd == "search":
         return search(a.query, topk=a.topk, deep=a.deep, mode=a.mode)
     return 1
