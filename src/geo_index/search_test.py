@@ -15,24 +15,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 import numpy as np
 
+from geo_index.assay_rules import has_single_cell_technology
+
 DEFAULT_PREFIX = Path("data/processed/embeddings")
 DEFAULT_DOCS = Path("data/processed/geo_series.jsonl")
 # bge-*-en-v1.5 retrieval: prepend this instruction to the QUERY only.
 BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
-
-# Single-cell technology markers — used only to annotate results so we can see
-# semantic recall at a glance (does an sc study surface without saying "single cell"?).
-SC_TECH = re.compile(
-    r"10x|chromium|drop-?seq|smart-?seq|split-?seq|cel-?seq|indrop|"
-    r"single[- ]cell|scrna|snrna|sci-?seq|microwell|10X Genomics",
-    re.I,
-)
 
 
 def _load_light_docs(docs_path: Path) -> dict[str, dict]:
@@ -47,7 +40,7 @@ def _load_light_docs(docs_path: Path) -> dict[str, dict]:
                 "type": r["type"],
                 "n_samples": r["n_samples"],
                 "organisms": r["organisms"],
-                "sc_hint": bool(SC_TECH.search(blob)),
+                "sc_hint": has_single_cell_technology(blob),
             }
     return out
 

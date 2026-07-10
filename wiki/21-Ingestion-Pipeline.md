@@ -43,6 +43,36 @@ Get all ~289k GSE series (metadata only) into `geo_series_raw`, idempotently and
 - **Refresh:** GEO grows ~continuously; re-run enumeration weekly, re-fetch only changed `update_date`. Out of scope for the spike but the idempotent design gets it for free.
 - **Don't** lean on [[10-GEO-Data-Model#GEOmetadb — tempting but stale|GEOmetadb]] as the source (stale since 2021) — but its SQLite schema is a fine reference for table shapes.
 
+### Current v1 index rebuild and resume contract
+
+The current Postgres materialization path is a full rebuild, not the future
+incremental upsert design. `pg_hybrid init` deliberately drops `series`, so a
+**(v1)** rebuild must run all four stages in order:
+
+```bash
+uv run python -m geo_index.pg_hybrid init
+uv run python -m geo_index.pg_hybrid load
+uv run geo-normalize run
+uv run python -m geo_index.pg_hybrid index
+```
+
+`geo-normalize run` uses the same shared assay detector as targeted refreshes,
+so a full ETL rerun automatically gets the hardened assay values. For an
+assay-rule-only release, do not reload raw rows or embeddings; update only the
+three persisted assay columns:
+
+```bash
+uv run geo-normalize assay-refresh
+```
+
+Both normalization commands commit deterministic `UPDATE`s in batches. They
+are idempotent and safe to rerun after interruption, but do not skip already
+committed IDs: resume by running the same command again from the beginning.
+If `load` fails before its final commit, rerun `load`; if normalization fails,
+rerun only the applicable normalization command. Do not rerun `init` unless the
+intent is to replace the table. A checkpointed incremental Postgres loader and
+orchestrator remain **(v2+)** work.
+
 ## Sources
 
 - E-utilities — https://www.ncbi.nlm.nih.gov/books/NBK25501/ · usage / rate limits — https://www.ncbi.nlm.nih.gov/books/NBK25497/

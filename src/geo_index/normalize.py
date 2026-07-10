@@ -38,6 +38,7 @@ Usage:
     uv run geo-normalize migrate          # add columns (idempotent)
     uv run geo-normalize run              # map + write back all rows
     uv run geo-normalize run --limit 5000
+    uv run geo-normalize assay-refresh    # update only persisted assay columns
     uv run geo-normalize report           # coverage stats over the table
     uv run geo-normalize demo             # show mapping on tricky real values
 """
@@ -47,6 +48,8 @@ import argparse
 import os
 import re
 from collections import defaultdict
+
+from .assay_rules import detect_fine_assays
 
 DSN = os.environ.get("GEO_PG_DSN", "postgresql://postgres:geo@localhost:5433/geo")
 
@@ -474,28 +477,6 @@ _ASSAY_CATEGORY = [
     (re.compile(r"expression profiling by rt-?pcr"), "expression (RT-PCR)"),
     (re.compile(r"^other$|;\s*other"), "other"),
 ]
-_ASSAY_FINE = [
-    (re.compile(r"10x|chromium|10 ?x genomics"), "10x Chromium"),
-    (re.compile(r"drop-?seq"), "Drop-seq"),
-    (re.compile(r"smart-?seq ?2|smartseq2"), "Smart-seq2"),
-    (re.compile(r"split-?seq"), "SPLiT-seq"),
-    (re.compile(r"cel-?seq"), "CEL-seq"),
-    (re.compile(r"\bscrna|single[ -]cell rna"), "scRNA-seq"),
-    (re.compile(r"\bsnrna|single[ -]nucleus"), "snRNA-seq"),
-    (re.compile(r"chip-?seq"), "ChIP-seq"),
-    (re.compile(r"cut ?& ?run|cut and run"), "CUT&RUN"),
-    (re.compile(r"cut ?& ?tag|cut and tag"), "CUT&Tag"),
-    (re.compile(r"atac-?seq"), "ATAC-seq"),
-    (re.compile(r"bisulfite|wgbs|\brrbs\b|methyl-?seq"), "bisulfite-seq"),
-    (re.compile(r"ribo-?seq|ribosome profiling"), "Ribo-seq"),
-    (re.compile(r"clip-?seq|hits-?clip|par-?clip|iclip"), "CLIP-seq"),
-    (re.compile(r"\bhi-?c\b"), "Hi-C"),
-    (re.compile(r"visium|slide-?seq|merfish|spatial transcriptom"), "spatial transcriptomics"),
-    (re.compile(r"nanopore"), "Nanopore"),
-    (re.compile(r"pacbio|\bsmrt\b"), "PacBio"),
-]
-
-
 def map_assay(type_text: str, free_text: str) -> tuple[list[str], list[str], str]:
     """→ (coarse_categories, fine_labels, status). status: detailed|category|absent."""
     categories: list[str] = []
@@ -504,12 +485,7 @@ def map_assay(type_text: str, free_text: str) -> tuple[list[str], list[str], str
         for pat, label in _ASSAY_CATEGORY:
             if pat.search(tt) and label not in categories:
                 categories.append(label)
-    fine: list[str] = []
-    if free_text:
-        ft = free_text.lower()
-        for pat, label in _ASSAY_FINE:
-            if pat.search(ft) and label not in fine:
-                fine.append(label)
+    fine = detect_fine_assays(free_text) if free_text else []
     if fine:
         return categories, fine, "detailed"
     if categories:
@@ -599,6 +575,23 @@ _STATUS_FIELDS = ["organism", "sex", "tissue", "cell_type", "cell_line",
                   "disease", "ethnicity", "dev_stage", "assay", "age"]
 
 
+def normalize_assay_fields(row: dict) -> dict[str, object]:
+    """Pure mapping of one series row to its persisted assay columns."""
+    free_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("title", "summary", "overall_design")
+    )
+    categories, labels, status = map_assay(
+        row.get("type") or "",
+        f"{row.get('type') or ''} {free_text}",
+    )
+    return {
+        "assay_categories": categories,
+        "assay_labels": labels,
+        "assay_status": status,
+    }
+
+
 def normalize_row(row: dict) -> dict:
     """Pure mapping of one series row → the normalized column values."""
     out: dict = {}
@@ -610,9 +603,7 @@ def normalize_row(row: dict) -> dict:
         ids, status, _ = _map_curated(fields.get(f, set()), table, unknown=unk)
         out[f"{f}_ids"], out[f"{f}_status"] = ids, status
     out["dev_stage_ids"], out["dev_stage_status"], _ = map_dev_stage(fields.get("dev_stage", set()))
-    free = " ".join(str(row.get(k) or "") for k in ("title", "summary", "overall_design"))
-    cats, labels, astatus = map_assay(row.get("type") or "", (row.get("type") or "") + " " + free)
-    out["assay_categories"], out["assay_labels"], out["assay_status"] = cats, labels, astatus
+    out.update(normalize_assay_fields(row))
     out["age_norm"], out["age_status"] = map_age(fields.get("age", set()))
     return out
 
@@ -627,7 +618,7 @@ _UPDATE_COLS = (
 
 
 def run(limit: int | None = None, batch: int = 5000) -> int:
-    """Map every field for every row and write the results back."""
+    """Map every field for every row; deterministic updates are safe to rerun."""
     import time
 
     migrate()
@@ -671,6 +662,69 @@ def run(limit: int | None = None, batch: int = 5000) -> int:
     for f in _STATUS_FIELDS:
         print(f"  {f:11} mapped {counts[f]:>8,} ({100*counts[f]/max(n,1):4.0f}%)", flush=True)
     return 0
+
+
+def refresh_assays(limit: int | None = None, batch: int = 5000) -> int:
+    """Idempotently recompute only the three persisted assay columns."""
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+
+    import time
+
+    migrate()
+    read = _connect()
+    try:
+        write = _connect()
+    except BaseException:
+        read.close()
+        raise
+    n = 0
+    started = time.time()
+    update_sql = (
+        "UPDATE series SET assay_categories=%s, assay_labels=%s, "
+        "assay_status=%s WHERE id=%s"
+    )
+    try:
+        with read.cursor(name="assay_refresh_scan") as scan, write.cursor() as cur:
+            scan.itersize = batch
+            sql = (
+                "SELECT id, title, summary, overall_design, type "
+                "FROM series ORDER BY id"
+            )
+            if limit is not None:
+                sql += f" LIMIT {int(limit)}"
+            scan.execute(sql)
+            pending: list[tuple[object, ...]] = []
+            for sid, title, summary, design, type_text in scan:
+                fields = normalize_assay_fields(
+                    {
+                        "title": title,
+                        "summary": summary,
+                        "overall_design": design,
+                        "type": type_text,
+                    }
+                )
+                pending.append(
+                    (
+                        fields["assay_categories"] or None,
+                        fields["assay_labels"] or None,
+                        fields["assay_status"],
+                        sid,
+                    )
+                )
+                n += 1
+                if len(pending) >= batch:
+                    cur.executemany(update_sql, pending)
+                    write.commit()
+                    pending.clear()
+            if pending:
+                cur.executemany(update_sql, pending)
+                write.commit()
+    finally:
+        read.close()
+        write.close()
+    print(f"refreshed assay fields for {n:,} rows in {time.time() - started:.0f}s")
+    return n
 
 
 def report() -> int:
@@ -740,12 +794,21 @@ def demo() -> int:
     return 0
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Tier-1/2 ontology normalization.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("migrate")
     rp = sub.add_parser("run")
     rp.add_argument("--limit", type=int, default=None)
+    arp = sub.add_parser("assay-refresh")
+    arp.add_argument("--limit", type=_non_negative_int, default=None)
     sub.add_parser("report")
     sub.add_parser("demo")
     a = p.parse_args(argv)
@@ -753,6 +816,9 @@ def main(argv: list[str] | None = None) -> int:
         return migrate()
     if a.cmd == "run":
         return run(limit=a.limit)
+    if a.cmd == "assay-refresh":
+        refresh_assays(limit=a.limit)
+        return 0
     if a.cmd == "report":
         return report()
     if a.cmd == "demo":

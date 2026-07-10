@@ -31,3 +31,8 @@ packages = ["src/geo_index"]
 testpaths = ["tests"]
 addopts = "-ra"
 markers = ["integration: requires the local GEO Postgres database"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

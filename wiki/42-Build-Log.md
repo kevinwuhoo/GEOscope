@@ -11,6 +11,45 @@ created: 2026-07-08
 A running record of what we've actually built, what we tried, and what the data
 told us — so assumptions in the design notes get corrected by evidence.
 
+## Status — 2026-07-10 (normalization and assay hardening)
+
+Track 1 from [[44-Normalization-Tests-and-Assay-Hardening-Plan]] is implemented:
+
+- Added a pytest foundation with baseline organism, sex, and status tests.
+- Moved fine-assay rules into `geo_index.assay_rules`; normalization and the
+  in-memory search hint now use the same detector.
+- Replaced bare `10x|chromium` matching with contextual 10x Genomics/Chromium
+  evidence. Microscopy magnification, chromium exposure/chloride/dosage, and
+  chromium isotope text no longer emit `10x Chromium`; explicit 10x Genomics,
+  Chromium Controller, and Chromium 3′ assay phrases still do.
+- Added `geo-normalize assay-refresh`, whose data updates are limited to
+  `assay_categories`, `assay_labels`, and `assay_status`.
+- Verified 18 focused assay tests and 21 total offline tests, plus
+  `geo-normalize demo`. The shared database was not refreshed during branch
+  implementation.
+
+### Rerun behavior
+
+The full **(v1)** Postgres rebuild sequence ends with `geo-normalize run`, so
+ETL reruns reapply the same hardened assay rules along with the other normalized
+fields. An assay-rule-only deployment uses `geo-normalize assay-refresh` and
+does not reload raw metadata or recompute embeddings. Both commands are
+deterministic, batch-committing, and idempotent: after interruption, rerun the
+same command from the beginning. See [[21-Ingestion-Pipeline#Current v1 index rebuild and resume contract]].
+
+### Better contextual-rule candidates to measure
+
+10x/Chromium remains the measured regression, but the broader lesson is that a
+technology-looking token is not sufficient evidence of an assay. Two useful
+**candidate hypotheses**, not yet behavior changes, are:
+
+- bare `bisulfite`: distinguish chemical treatment/exposure prose from
+  bisulfite sequencing evidence such as WGBS, RRBS, or `bisulfite-seq`;
+- bare `nanopore`: distinguish material/sensor studies from Oxford Nanopore or
+  ONT sequencing context.
+
+Measure positive and negative corpus examples before tightening either rule.
+
 ## Status — 2026-07-08 (hackathon spike, day 1)
 
 **A full end-to-end retrieval thread works in-memory**, on the whole corpus, at
