@@ -106,7 +106,7 @@ Coverage below is **of *reported* values** — `mapped ÷ (mapped + unmapped + u
 
 ## Spike scope
 
-Original plan: prove the cascade on 3 fields. **Outcome: tier-1/2 built for all 9** — which turned the "which is the hard third field?" question into a measured answer. For the **tier-3 spike, start with `tissue` (UBERON)**: highest-volume heavy-tailed field, a labeled key (unlike fine assay, which isn't in `type` and needs tier-4 extraction — already partly solved via keyword labels in finding 4). Run **text2term TF-IDF then SapBERT** over the ~53k unmapped tissue values and measure the lift over the 40% exact-lookup floor, against a hand-labeled sample, **counting `absent` separately**. → [[25-Embeddings-and-Cost#Eval]], [[40-Roadmap]]
+Original plan: prove the cascade on 3 fields. **Outcome: tier-1/2 built for all 9** — which turned the "which is the hard third field?" question into a measured answer. For the **tier-3 spike, start with `tissue` (UBERON)**: highest-volume heavy-tailed field, a labeled key (unlike fine assay, which isn't in `type` and needs tier-4 extraction — already partly solved via keyword labels in finding 4). The approved next step is a pinned UBERON/PO catalog, deterministic exact + lexical candidates, per-value evidence, bounded LLM validation, and a 100–200-value review set. Semantic term embeddings and species-specific vocabularies are decision-gated on the lexical eval rather than assumed up front. → [[43-Tissue-Candidate-Generation-Plan]], [[25-Embeddings-and-Cost#Eval]], [[40-Roadmap]]
 
 ## Sources
 

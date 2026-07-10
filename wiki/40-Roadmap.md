@@ -49,7 +49,8 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 
 ### Later / v2 (not the spike)
 - Sample-level (GSM) indexing — 8.6M docs; the real scale decision (add `pgvectorscale` / StreamingDiskANN; `pg_search` faceting is already in from v1). Also the *correctness* fix for within-sample multi-field filtering (the [[24-Faceted-Search|series-aggregation caveat]]), not just scale. → [[26-Datastore-Postgres#Scale headroom]]
-- More fields (tissue, disease, cell type, dev stage, ethnicity).
+- **Next normalization experiment:** ontology-derived deterministic candidates for `tissue`, with bounded LLM validation and a 100–200-value review set. → [[43-Tissue-Candidate-Generation-Plan]]
+- More complex fields after the tissue decision gate (disease, cell type, dev stage, ethnicity).
 - Server-side cross-encoder reranking (MedCPT / bge-reranker).
 - Incremental refresh cron (idempotent ingest already supports it).
 - Human UI (if ever needed beyond MCP).

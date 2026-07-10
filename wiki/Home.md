@@ -34,6 +34,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[40-Roadmap]] — the spike plan, phased milestones
 - [[41-Open-Questions]] — decisions still to make
 - [[42-Build-Log]] — **what we've built, tried, and measured** (living progress log)
+- [[43-Tissue-Candidate-Generation-Plan]] — next normalization experiment: deterministic candidates + bounded LLM validation
 - [[90-Glossary]] — every acronym in one place
 - [[99-Sources]] — all citations
 

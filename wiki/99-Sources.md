@@ -26,6 +26,7 @@ Citations gathered during the [[Home|research pass]] (2026-07). Grouped by topic
 - EFO — https://www.ebi.ac.uk/efo/ · about — https://www.ebi.ac.uk/efo/about.html
 - NCBITaxon — https://obofoundry.org/ontology/ncbitaxon.html
 - UBERON — https://obofoundry.org/ontology/uberon.html
+- Plant Ontology — https://obofoundry.org/ontology/po.html
 - Cell Ontology — https://obofoundry.org/ontology/cl.html
 - MONDO — https://obofoundry.org/ontology/mondo.html · DOID — https://obofoundry.org/ontology/doid.html
 - OBI — https://obofoundry.org/ontology/obi.html
