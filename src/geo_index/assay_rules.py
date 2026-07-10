@@ -7,7 +7,8 @@ _TEN_X_CHROMIUM = re.compile(
     r"\b(?:"
     r"10\s*x\s+genomics|"
     r"10x\s+chromium|"
-    r"chromium\s+(?:controller|single[- ]cell|next\s+gem|3[\'’′]?|5[\'’′]?|v[234]\b)"
+    r"chromium\s+(?:controller|single[- ]cell|next\s+gem|[35][\'’′]|"
+    r"v[234]\s+(?:chemistry|kits?|librar(?:y|ies)|reagents?))"
     r")",
     re.I,
 )

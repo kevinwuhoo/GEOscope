@@ -15,6 +15,9 @@ from geo_index.search_test import _load_light_docs
         "Images were acquired at 10X magnification.",
         "Effects of hexavalent chromium exposure in fish liver.",
         "Cells were treated with chromium chloride.",
+        "Mice received chromium 3 mg/kg daily.",
+        "Chromium 35 isotope uptake was measured.",
+        "Chromium v2 exposure cohort.",
     ],
 )
 def test_non_assay_10x_and_chromium_are_not_10x_genomics(text: str) -> None:
@@ -28,6 +31,8 @@ def test_non_assay_10x_and_chromium_are_not_10x_genomics(text: str) -> None:
         "10x Genomics Chromium Single Cell 3' Gene Expression",
         "Libraries were prepared on the Chromium Controller.",
         "10x Chromium 5' v2 chemistry",
+        "Chromium 3' gene expression libraries",
+        "Chromium v3 chemistry libraries",
     ],
 )
 def test_contextual_10x_genomics_phrases_are_detected(text: str) -> None:
