@@ -13,12 +13,14 @@ from __future__ import annotations
 import argparse
 import json
 import threading
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import pg_hybrid
 from .eutils import EutilsClient
+from .search_models import SearchFilters, SearchResponse
 
 _HTML = (Path(__file__).parent / "web_ui.html").read_text()
 
@@ -28,7 +30,51 @@ _ncbi = EutilsClient()
 _ncbi_lock = threading.Lock()
 
 
-def _our_search(query: str, mode: str, topk: int) -> list[dict]:
+_WEB_FILTERS = {
+    "organism_id": "organism_ids",
+    "sex_id": "sex_ids",
+    "assay_category": "assay_categories",
+    "assay_label": "assay_labels",
+}
+
+
+def _parse_search_request(
+    query_string: dict[str, list[str]],
+) -> tuple[str, str, int, SearchFilters]:
+    query = query_string.get("q", [""])[0].strip()
+    mode = query_string.get("mode", ["hybrid"])[0]
+    if mode not in {"hybrid", "dense", "bm25"}:
+        mode = "hybrid"
+    try:
+        topk = max(1, min(50, int(query_string.get("topk", ["15"])[0])))
+    except ValueError:
+        topk = 15
+    values = {
+        internal: query_string.get(external, [])
+        for external, internal in _WEB_FILTERS.items()
+    }
+    return query, mode, topk, SearchFilters.from_mapping(values)
+
+
+def _serialize_search(
+    response: SearchResponse, filters: SearchFilters
+) -> dict[str, object]:
+    return {
+        "ours": list(response.hits),
+        "filters": filters.as_dict(),
+        "facets": {
+            field: asdict(result)
+            for field, result in response.facets.items()
+        },
+    }
+
+
+def _our_search(
+    query: str,
+    mode: str,
+    topk: int,
+    filters: SearchFilters,
+) -> SearchResponse:
     global _model
     qv = None
     if mode != "bm25":
@@ -38,7 +84,14 @@ def _our_search(query: str, mode: str, topk: int) -> list[dict]:
             qv = pg_hybrid.embed_query(_model, query)
     conn = pg_hybrid._connect()
     try:
-        return pg_hybrid.search_rows(conn, query, qv=qv, mode=mode, topk=topk)
+        return pg_hybrid.search_with_facets(
+            conn,
+            query,
+            qv=qv,
+            mode=mode,
+            topk=topk,
+            filters=filters,
+        )
     finally:
         conn.close()
 
@@ -106,30 +159,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _HTML.encode(), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/search":
-            qs = parse_qs(parsed.query)
-            query = (qs.get("q", [""])[0]).strip()
-            mode = qs.get("mode", ["hybrid"])[0]
-            if mode not in ("hybrid", "dense", "bm25"):
-                mode = "hybrid"
+            qs = parse_qs(parsed.query, keep_blank_values=True)
             try:
-                topk = max(1, min(50, int(qs.get("topk", ["15"])[0])))
-            except ValueError:
-                topk = 15
+                query, mode, topk, filters = _parse_search_request(qs)
+            except ValueError as exc:
+                body = json.dumps({"error": str(exc)}).encode()
+                self._send(400, body, "application/json")
+                return
             if not query:
                 self._send(400, b'{"error":"empty query"}', "application/json")
                 return
-            ours = _our_search(query, mode, topk)
+            response = _our_search(query, mode, topk, filters)
+            ours = list(response.hits)
             membership = _geo_membership(query, [r["gse"] for r in ours])
             if membership is not None:
                 for r in ours:
                     # True/False if checked, None if this accession wasn't checked
                     r["in_geo"] = membership.get(r["gse"])
-            payload = {
-                "query": query,
-                "mode": mode,
-                "ours": ours,
-                "geo": _geo_keyword_search(query, topk),
-            }
+            payload = _serialize_search(response, filters)
+            payload.update(
+                {
+                    "query": query,
+                    "mode": mode,
+                    "geo": _geo_keyword_search(query, topk),
+                }
+            )
             self._send(200, json.dumps(payload).encode(), "application/json")
             return
         self._send(404, b"not found", "text/plain")
