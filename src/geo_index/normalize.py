@@ -48,6 +48,8 @@ import os
 import re
 from collections import defaultdict
 
+from .assay_rules import detect_fine_assays
+
 DSN = os.environ.get("GEO_PG_DSN", "postgresql://postgres:geo@localhost:5433/geo")
 
 # ---------------------------------------------------------------------------
@@ -474,28 +476,6 @@ _ASSAY_CATEGORY = [
     (re.compile(r"expression profiling by rt-?pcr"), "expression (RT-PCR)"),
     (re.compile(r"^other$|;\s*other"), "other"),
 ]
-_ASSAY_FINE = [
-    (re.compile(r"10x|chromium|10 ?x genomics"), "10x Chromium"),
-    (re.compile(r"drop-?seq"), "Drop-seq"),
-    (re.compile(r"smart-?seq ?2|smartseq2"), "Smart-seq2"),
-    (re.compile(r"split-?seq"), "SPLiT-seq"),
-    (re.compile(r"cel-?seq"), "CEL-seq"),
-    (re.compile(r"\bscrna|single[ -]cell rna"), "scRNA-seq"),
-    (re.compile(r"\bsnrna|single[ -]nucleus"), "snRNA-seq"),
-    (re.compile(r"chip-?seq"), "ChIP-seq"),
-    (re.compile(r"cut ?& ?run|cut and run"), "CUT&RUN"),
-    (re.compile(r"cut ?& ?tag|cut and tag"), "CUT&Tag"),
-    (re.compile(r"atac-?seq"), "ATAC-seq"),
-    (re.compile(r"bisulfite|wgbs|\brrbs\b|methyl-?seq"), "bisulfite-seq"),
-    (re.compile(r"ribo-?seq|ribosome profiling"), "Ribo-seq"),
-    (re.compile(r"clip-?seq|hits-?clip|par-?clip|iclip"), "CLIP-seq"),
-    (re.compile(r"\bhi-?c\b"), "Hi-C"),
-    (re.compile(r"visium|slide-?seq|merfish|spatial transcriptom"), "spatial transcriptomics"),
-    (re.compile(r"nanopore"), "Nanopore"),
-    (re.compile(r"pacbio|\bsmrt\b"), "PacBio"),
-]
-
-
 def map_assay(type_text: str, free_text: str) -> tuple[list[str], list[str], str]:
     """→ (coarse_categories, fine_labels, status). status: detailed|category|absent."""
     categories: list[str] = []
@@ -504,12 +484,7 @@ def map_assay(type_text: str, free_text: str) -> tuple[list[str], list[str], str
         for pat, label in _ASSAY_CATEGORY:
             if pat.search(tt) and label not in categories:
                 categories.append(label)
-    fine: list[str] = []
-    if free_text:
-        ft = free_text.lower()
-        for pat, label in _ASSAY_FINE:
-            if pat.search(ft) and label not in fine:
-                fine.append(label)
+    fine = detect_fine_assays(free_text) if free_text else []
     if fine:
         return categories, fine, "detailed"
     if categories:
