@@ -67,8 +67,13 @@ def _encode(
 
 def _replace_published_artifact(temp_dir: Path, final_dir: Path) -> None:
     backup = final_dir.parent / f".{final_dir.name}.backup"
+    marker = final_dir.parent / f".{final_dir.name}.replace.pending"
     if backup.exists():
         raise FileExistsError(f"stale artifact backup exists: {backup}")
+    with marker.open("w", encoding="utf-8") as handle:
+        handle.write('{"schema_version":1}\n')
+        handle.flush()
+        os.fsync(handle.fileno())
     os.rename(final_dir, backup)
     try:
         os.rename(temp_dir, final_dir)
@@ -76,22 +81,58 @@ def _replace_published_artifact(temp_dir: Path, final_dir: Path) -> None:
         os.rename(backup, final_dir)
         raise
     shutil.rmtree(backup)
+    marker.unlink()
 
 
 def _recover_interrupted_replacement(
     final_dir: Path,
     variant: EmbeddingVariant,
-) -> None:
-    """Restore or finish the only two crash states of directory replacement."""
+) -> bool:
+    """Finish a validated swap or preserve its durable replacement intent."""
     backup = final_dir.parent / f".{final_dir.name}.backup"
-    if not backup.exists():
-        return
+    temp = final_dir.parent / f".{final_dir.name}.tmp"
+    marker = final_dir.parent / f".{final_dir.name}.replace.pending"
+    pending = marker.exists()
+
+    if backup.exists() and final_dir.exists():
+        try:
+            validate_artifact(final_dir, variant)
+        except ValueError:
+            shutil.rmtree(final_dir)
+            validate_artifact(backup, variant)
+            os.rename(backup, final_dir)
+            return pending
+        shutil.rmtree(backup)
+        marker.unlink(missing_ok=True)
+        return False
+
+    if backup.exists() and not final_dir.exists():
+        if temp.exists():
+            try:
+                validate_artifact(temp, variant)
+            except ValueError:
+                shutil.rmtree(temp, ignore_errors=True)
+            else:
+                os.rename(temp, final_dir)
+                shutil.rmtree(backup)
+                marker.unlink(missing_ok=True)
+                return False
+        validate_artifact(backup, variant)
+        os.rename(backup, final_dir)
+        return pending
+
+    if final_dir.exists() and pending and temp.exists():
+        try:
+            validate_artifact(temp, variant)
+        except ValueError:
+            shutil.rmtree(temp, ignore_errors=True)
+            return True
+        _replace_published_artifact(temp, final_dir)
+        return False
+
     if final_dir.exists():
         validate_artifact(final_dir, variant)
-        shutil.rmtree(backup)
-        return
-    validate_artifact(backup, variant)
-    os.rename(backup, final_dir)
+    return pending
 
 
 def _build(
@@ -105,7 +146,8 @@ def _build(
     started = time.perf_counter()
     variant = get_variant(model_key)
     final_dir = artifact_dir(output_root, model_key)
-    _recover_interrupted_replacement(final_dir, variant)
+    recovery_requires_replace = _recover_interrupted_replacement(final_dir, variant)
+    force_replace = force_replace or recovery_requires_replace
     final_exists = final_dir.exists()
     if final_exists:
         existing = validate_artifact(final_dir, variant)
@@ -169,6 +211,7 @@ def _build(
             status = "replaced"
         else:
             publish_artifact(temp_dir, final_dir)
+            (output_root / f".{model_key}.replace.pending").unlink(missing_ok=True)
             status = "created"
     except BaseException:
         if variant.provider != "google":

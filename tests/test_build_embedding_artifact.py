@@ -328,6 +328,74 @@ def test_builder_recovers_backup_when_replacement_crashed_before_publish(
     assert not backup.exists()
 
 
+def test_builder_promotes_validated_temp_after_replacement_swap_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    final = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    ).artifact_path
+
+    replacement_output = tmp_path / "replacement-artifacts"
+    _factory(monkeypatch, FakeEncoder(384, value_offset=100))
+    replacement = build_embedding_artifact(
+        records,
+        replacement_output,
+        "bge_small_v15",
+        allow_paid_gemini=False,
+    ).artifact_path
+    temp = output / ".bge_small_v15.tmp"
+    replacement.rename(temp)
+    backup = output / ".bge_small_v15.backup"
+    final.rename(backup)
+    (output / ".bge_small_v15.replace.pending").write_text("pending\n")
+    monkeypatch.setattr(
+        builder,
+        "load_record_inventory",
+        lambda records_root: (_ for _ in ()).throw(
+            AssertionError("canonical inventory opened")
+        ),
+    )
+
+    result = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+
+    assert result.status == "skipped"
+    vectors = np.load(final / "vectors.npy")
+    assert np.all(vectors[0] == 102)
+    assert not temp.exists()
+    assert not backup.exists()
+    assert not (output / ".bge_small_v15.replace.pending").exists()
+
+
+def test_pending_marker_forces_replacement_rebuild_when_temp_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    final = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    ).artifact_path
+    marker = output / ".bge_small_v15.replace.pending"
+    marker.write_text("pending\n")
+    _factory(monkeypatch, FakeEncoder(384, value_offset=100))
+
+    result = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+
+    assert result.status == "replaced"
+    vectors = np.load(final / "vectors.npy")
+    assert np.all(vectors[0] == 102)
+    assert not marker.exists()
+
+
 def test_builder_removes_stale_backup_after_replacement_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
