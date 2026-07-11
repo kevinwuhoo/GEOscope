@@ -113,7 +113,6 @@ def test_valid_existing_artifact_skips_without_reading_or_copying_sources(
         (["GSE2"], np.zeros((1, 383), dtype=np.float32), "expected 384 dimensions"),
         (["GSE2"], np.zeros((1, 384), dtype=np.float64), "float32"),
         (["GSE2"], np.full((1, 384), np.nan, dtype=np.float32), "nonfinite"),
-        (["GSE10", "GSE2"], np.zeros((2, 384), dtype=np.float32), "numeric GSE order"),
         (["GSE2", "GSE2"], np.zeros((2, 384), dtype=np.float32), "duplicate GSE"),
     ],
 )
@@ -130,6 +129,43 @@ def test_invalid_legacy_inputs_publish_no_final_artifact(
         adopt_legacy_matrix(matrix_path, ids_path, output, "bge_small_v15")
 
     assert not (output / "bge_small_v15").exists()
+
+
+def test_adoption_reorders_internally_aligned_legacy_rows_without_recomputation(
+    tmp_path: Path,
+) -> None:
+    vectors = np.vstack(
+        [
+            np.full(384, 10, dtype=np.float32),
+            np.full(384, 2, dtype=np.float32),
+        ]
+    )
+    matrix_path, ids_path = _legacy(
+        tmp_path,
+        ids=["GSE10", "GSE2"],
+        vectors=vectors,
+    )
+    matrix_before = _sha256(matrix_path)
+    ids_before = _sha256(ids_path)
+
+    report = adopt_legacy_matrix(
+        matrix_path,
+        ids_path,
+        tmp_path / "canonical",
+        "bge_small_v15",
+    )
+
+    assert json.loads((report.artifact_path / "ids.json").read_text()) == [
+        "GSE2",
+        "GSE10",
+    ]
+    adopted = np.load(report.artifact_path / "vectors.npy")
+    assert np.all(adopted[0] == 2)
+    assert np.all(adopted[1] == 10)
+    metadata = json.loads((report.artifact_path / "metadata.json").read_text())
+    assert metadata["usage"]["source_rows_reordered"] is True
+    assert _sha256(matrix_path) == matrix_before
+    assert _sha256(ids_path) == ids_before
 
 
 def test_adoption_rejects_non_bge_and_never_relabels_pubmedbert(

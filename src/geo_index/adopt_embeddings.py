@@ -85,8 +85,8 @@ def _validate_legacy(
             raise ValueError(f"malformed legacy GSE {gse!r}")
         return int(gse[3:])
 
-    if ids != sorted(ids, key=gse_number):
-        raise ValueError("legacy ids are not in numeric GSE order")
+    for gse in ids:
+        gse_number(gse)
     if legacy_meta.get("dim") != 384:
         raise ValueError("legacy metadata dimension does not match BGE")
     if legacy_meta.get("count") != len(ids):
@@ -117,16 +117,33 @@ def adopt_legacy_matrix(
         )
 
     started = time.perf_counter()
-    _, ids, legacy_meta = _validate_legacy(matrix_path, ids_path)
+    vectors, ids, legacy_meta = _validate_legacy(matrix_path, ids_path)
+    row_order = sorted(range(len(ids)), key=lambda index: int(ids[index][3:]))
+    rows_reordered = row_order != list(range(len(ids)))
+    canonical_ids = [ids[index] for index in row_order]
     matrix_sha256 = _sha256(matrix_path)
     ids_sha256 = _sha256(ids_path)
     temp_dir = output_root / f".{model_key}.adopt.tmp"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(matrix_path, temp_dir / "vectors.npy")
+    canonical_matrix = temp_dir / "vectors.npy"
+    if rows_reordered:
+        destination = np.lib.format.open_memmap(
+            canonical_matrix,
+            mode="w+",
+            dtype=np.float32,
+            shape=vectors.shape,
+        )
+        for start in range(0, len(row_order), 10_000):
+            indices = row_order[start : start + 10_000]
+            destination[start : start + len(indices)] = vectors[indices]
+        destination.flush()
+        del destination
+    else:
+        shutil.copyfile(matrix_path, canonical_matrix)
     (temp_dir / "ids.json").write_text(
-        json.dumps(ids, separators=(",", ":")) + "\n",
+        json.dumps(canonical_ids, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
     metadata = {
@@ -152,6 +169,7 @@ def adopt_legacy_matrix(
             "adoption_source_ids": str(ids_path),
             "adoption_source_matrix_sha256": matrix_sha256,
             "adoption_source_ids_sha256": ids_sha256,
+            "source_rows_reordered": rows_reordered,
             "legacy_metadata": legacy_meta,
             "document_provenance": "legacy geo_series.jsonl embed_text",
         },
@@ -161,14 +179,15 @@ def adopt_legacy_matrix(
         encoding="utf-8",
     )
     validate_artifact(temp_dir, variant)
+    bytes_copied = canonical_matrix.stat().st_size
     publish_artifact(temp_dir, final_dir)
     return AdoptionReport(
         model_key,
         "adopted",
         final_dir,
-        len(ids),
+        len(canonical_ids),
         variant.dimensions,
-        matrix_path.stat().st_size,
+        bytes_copied,
     )
 
 
