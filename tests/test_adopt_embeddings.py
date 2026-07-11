@@ -77,7 +77,7 @@ def test_adoption_copies_aligned_bge_without_modifying_sources(tmp_path: Path) -
         get_variant("bge_small_v15"),
     )
     assert metadata.model_revision is None
-    assert metadata.usage["adoption_source_matrix_sha256"] == matrix_before
+    assert not any("sha256" in key for key in metadata.usage)
 
 
 def test_valid_existing_artifact_skips_without_reading_or_copying_sources(

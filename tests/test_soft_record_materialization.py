@@ -80,6 +80,20 @@ def test_discovery_sorts_jobs_by_numeric_gse(tmp_path: Path) -> None:
     ]
 
 
+def test_discovery_counts_only_valid_gse_input_names(tmp_path: Path) -> None:
+    soft_root = tmp_path / "soft"
+    records_root = tmp_path / "records"
+    _copy_fixture(soft_root, "GSE2")
+    invalid = soft_root / "misc" / "NOTGSE_family.soft.gz"
+    invalid.parent.mkdir(parents=True)
+    invalid.write_bytes(b"not a GEO input")
+
+    discovery = discover_records(soft_root, records_root)
+
+    assert discovery.discovered == 1
+    assert [job.gse for job in discovery.jobs] == ["GSE2"]
+
+
 def test_materialize_record_publishes_deterministic_json_atomically(
     tmp_path: Path,
 ) -> None:

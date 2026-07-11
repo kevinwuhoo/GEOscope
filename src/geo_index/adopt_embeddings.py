@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import time
@@ -31,14 +30,6 @@ class AdoptionReport:
     record_count: int
     dimensions: int
     bytes_copied: int
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_legacy_ids(path: Path) -> tuple[list[str], dict[str, object]]:
@@ -121,8 +112,6 @@ def adopt_legacy_matrix(
     row_order = sorted(range(len(ids)), key=lambda index: int(ids[index][3:]))
     rows_reordered = row_order != list(range(len(ids)))
     canonical_ids = [ids[index] for index in row_order]
-    matrix_sha256 = _sha256(matrix_path)
-    ids_sha256 = _sha256(ids_path)
     temp_dir = output_root / f".{model_key}.adopt.tmp"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
@@ -167,8 +156,6 @@ def adopt_legacy_matrix(
             "adopted": True,
             "adoption_source_matrix": str(matrix_path),
             "adoption_source_ids": str(ids_path),
-            "adoption_source_matrix_sha256": matrix_sha256,
-            "adoption_source_ids_sha256": ids_sha256,
             "source_rows_reordered": rows_reordered,
             "legacy_metadata": legacy_meta,
             "document_provenance": "legacy geo_series.jsonl embed_text",

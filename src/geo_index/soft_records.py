@@ -105,7 +105,7 @@ def discover_records(soft_root: Path, records_root: Path) -> DiscoveryResult:
         jobs.append(RecordJob(gse, source, destination, soft_root))
     jobs.sort(key=lambda job: _accession_key(job.gse))
     return DiscoveryResult(
-        discovered=len(sources),
+        discovered=len(seen),
         skipped=skipped,
         jobs=tuple(jobs),
     )
