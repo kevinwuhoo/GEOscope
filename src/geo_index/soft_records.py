@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import gzip
+import json
+import os
 import re
 from collections import Counter, OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +30,42 @@ class SoftParseError(ValueError):
 AttributeMap = OrderedDict[str, list[str]]
 
 
+@dataclass(frozen=True)
+class RecordJob:
+    gse: str
+    source: Path
+    destination: Path
+    soft_root: Path
+
+
+@dataclass(frozen=True)
+class DiscoveryResult:
+    discovered: int
+    skipped: int
+    jobs: tuple[RecordJob, ...]
+
+
+@dataclass(frozen=True)
+class MaterializeResult:
+    gse: str
+    destination: Path
+    created: bool
+
+
+@dataclass(frozen=True)
+class MaterializeFailure:
+    gse: str
+    source: Path
+    error: str
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    created_gses: tuple[str, ...]
+    skipped_gses: tuple[str, ...]
+    failures: tuple[MaterializeFailure, ...]
+
+
 def _accession_key(value: str) -> tuple[str, int]:
     match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)", value)
     if not match:
@@ -43,6 +82,89 @@ def record_path(records_root: Path, gse: str) -> Path:
     digits = match.group(1)
     bucket = f"GSE{digits[:-3]}nnn" if len(digits) > 3 else "GSEnnn"
     return records_root / bucket / f"{normalized}.json"
+
+
+def discover_records(soft_root: Path, records_root: Path) -> DiscoveryResult:
+    """Inventory inputs once and select jobs using destination existence only."""
+    sources = list(soft_root.rglob("*_family.soft.gz"))
+    jobs: list[RecordJob] = []
+    skipped = 0
+    seen: set[str] = set()
+    for source in sources:
+        match = SOFT_NAME_RE.fullmatch(source.name)
+        if not match:
+            continue
+        gse = match.group(1)
+        if gse in seen:
+            raise ValueError(f"duplicate SOFT input for {gse}")
+        seen.add(gse)
+        destination = record_path(records_root, gse)
+        if destination.exists():
+            skipped += 1
+            continue
+        jobs.append(RecordJob(gse, source, destination, soft_root))
+    jobs.sort(key=lambda job: _accession_key(job.gse))
+    return DiscoveryResult(
+        discovered=len(sources),
+        skipped=skipped,
+        jobs=tuple(jobs),
+    )
+
+
+def discover_missing(soft_root: Path, records_root: Path) -> list[RecordJob]:
+    """Return numeric-GSE-sorted jobs whose canonical destinations are absent."""
+    return list(discover_records(soft_root, records_root).jobs)
+
+
+def materialize_record(job: RecordJob) -> MaterializeResult:
+    """Parse and atomically publish one missing record."""
+    if job.destination.exists():
+        return MaterializeResult(job.gse, job.destination, created=False)
+
+    record = parse_soft_record(job.source, soft_root=job.soft_root)
+    if record["gse"] != job.gse:
+        raise SoftParseError(
+            f"parsed accession {record['gse']} does not match job {job.gse}"
+        )
+    job.destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = job.destination.with_suffix(job.destination.suffix + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(
+                record,
+                handle,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, job.destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return MaterializeResult(job.gse, job.destination, created=True)
+
+
+def materialize_batch(jobs: Sequence[RecordJob]) -> BatchResult:
+    """Materialize a bounded batch while retaining per-record failures."""
+    created: list[str] = []
+    skipped: list[str] = []
+    failures: list[MaterializeFailure] = []
+    for job in jobs:
+        try:
+            result = materialize_record(job)
+        except Exception as exc:  # noqa: BLE001 - batch isolation is intentional
+            failures.append(
+                MaterializeFailure(
+                    gse=job.gse,
+                    source=job.source,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            continue
+        (created if result.created else skipped).append(job.gse)
+    return BatchResult(tuple(created), tuple(skipped), tuple(failures))
 
 
 def _distinct_sorted(values: list[str]) -> list[str]:
