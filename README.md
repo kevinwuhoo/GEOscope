@@ -119,9 +119,12 @@ without changing its source files:
 uv run python -m geo_index.adopt_embeddings --model-key bge_small_v15
 ```
 
-Gemini corpus embeddings use the asynchronous Google batch/file API only. The
-command prints an estimate but cannot submit unless both `GEMINI_API_KEY` and
-`--allow-paid-gemini` are present:
+Gemini corpus embeddings use only bounded asynchronous Google batch/file API
+shards (1,000 requests and at most 100 MiB each). Per-shard state makes uploads,
+jobs, and downloads resumable. Documents use a conservative 8,000-byte UTF-8
+preflight below the 8,192-token model limit without synchronous token-count
+calls. The command prints an upper-bound estimate but cannot submit unless both
+`GEMINI_API_KEY` and `--allow-paid-gemini` are present:
 
 ```bash
 uv run python -m geo_index.build_embedding_artifact \

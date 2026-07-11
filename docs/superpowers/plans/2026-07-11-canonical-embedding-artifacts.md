@@ -147,7 +147,7 @@ git commit -m "feat: build local embedding artifacts from canonical records"
 - Modify: `src/geo_index/build_embedding_artifact.py`
 
 **Interfaces:**
-- Produces: deterministic request JSONL and `GeminiBatchState`
+- Produces: deterministic bounded request JSONL shards and schema-v2 per-shard state
 - Produces: token/cost estimate
 - Produces: `build_gemini_vectors(inventory, variant, temp_dir, *, allow_paid) -> ProviderResult`
 
@@ -162,8 +162,9 @@ depend on network or mutable SDK internals.
 Use a fake client that records file uploads, batch submissions, polls, and
 downloads. Assert the guard rejects before client construction, each request
 has a stable GSE custom ID and 3,072 output dimension, resume does not resubmit
-a stored successful job, response identity is exact, missing/duplicate rows
-fail, and no adapter path exposes or calls synchronous `embed_content`.
+a stored successful shard, response identity is exact, missing/duplicate rows
+fail, the conservative UTF-8 preflight stays below the model token limit, and
+no adapter path exposes or calls synchronous `embed_content` or `countTokens`.
 
 - [ ] **Step 3: Run Gemini tests and confirm RED**
 

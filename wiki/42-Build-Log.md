@@ -100,11 +100,13 @@ uses an explicit 8,192-token limit and adaptive token-budget batches; the final
 artifact reports 767 truncated records. This is a deliberate local hardware
 deviation, not silent truncation.
 
-Gemini `gemini-embedding-2` support is implemented as a resumable file-based
-batch pipeline with deterministic keyed JSONL, a pre-submit token/cost estimate,
-an explicit paid-work guard, persisted provider IDs, and aligned result
+Gemini `gemini-embedding-2` support is implemented as resumable bounded
+file-based batches with deterministic keyed JSONL shards, schema-v2 per-shard
+provider state, a conservative 8,000-byte UTF-8 preflight, a pre-submit
+upper-bound token/cost estimate, an explicit paid-work guard, and aligned result
 assembly. It was **not submitted** because no API key was provided. Tests use a
-fake provider; there is no synchronous paid fallback.
+fake provider and prove completed shards are not resubmitted; there is no
+synchronous embedding or token-count fallback.
 
 ## Status — 2026-07-10 (normalization and assay hardening)
 

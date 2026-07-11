@@ -118,6 +118,37 @@ def test_request_jsonl_is_deterministic_keyed_and_full_dimension(tmp_path: Path)
     assert first.truncation_count == 0
 
 
+def test_requests_are_deterministically_sharded_by_bounded_record_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+
+    first = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    first_bytes = [shard.request_path.read_bytes() for shard in first.shards]
+    second = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+
+    assert [shard.gses for shard in first.shards] == [("GSE2",), ("GSE10",)]
+    assert [shard.request_path.name for shard in first.shards] == [
+        "gemini_requests-00000.jsonl",
+        "gemini_requests-00001.jsonl",
+    ]
+    assert [shard.request_path.read_bytes() for shard in second.shards] == first_bytes
+
+
+def test_request_preflight_uses_token_safe_utf8_byte_bound(tmp_path: Path) -> None:
+    records = (
+        RecordRef("GSE2", "Two", "é" * 10_000, Path("GSE2.json")),
+    )
+
+    estimate = prepare_gemini_requests(records, VARIANT, tmp_path)
+    row = json.loads(estimate.request_path.read_text())
+    text = row["request"]["content"]["parts"][0]["text"]
+
+    assert len(text.encode("utf-8")) <= gemini.SAFE_INPUT_UTF8_BYTES
+    assert estimate.truncation_count == 1
+
+
 def test_paid_flag_guard_happens_before_key_or_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -211,7 +242,7 @@ def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
             allow_paid=True,
         )
     state = json.loads((tmp_path / "gemini_state.json").read_text())
-    assert state["job_name"] == "batches/job-1"
+    assert state["shards"][0]["job_name"] == "batches/job-1"
 
     resumed = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
     monkeypatch.setattr(gemini, "_create_client", lambda key: resumed)
@@ -226,6 +257,86 @@ def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
     assert resumed.batches.create_calls == []
     assert resumed.batches.get_calls == ["batches/job-1"]
     assert result.vectors.shape == (2, 3072)
+
+
+def test_resume_skips_completed_shards_and_continues_only_missing_shard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+
+    class ShardFiles:
+        def __init__(self, rows_by_output: dict[str, list[dict[str, object]]]) -> None:
+            self.rows_by_output = rows_by_output
+            self.upload_calls: list[str] = []
+            self.download_calls: list[str] = []
+
+        def upload(self, *, file, config):
+            self.upload_calls.append(file)
+            return SimpleNamespace(name=f"files/input-{len(self.upload_calls)}")
+
+        def download(self, *, file):
+            self.download_calls.append(file)
+            return (
+                "\n".join(json.dumps(row) for row in self.rows_by_output[file]) + "\n"
+            ).encode()
+
+    class ShardBatches:
+        def __init__(self, *, fail_job: str | None) -> None:
+            self.fail_job = fail_job
+            self.create_calls: list[dict[str, object]] = []
+            self.get_calls: list[str] = []
+
+        def create_embeddings(self, *, model, src, config):
+            self.create_calls.append({"model": model, "src": src, "config": config})
+            return SimpleNamespace(name=f"batches/job-{len(self.create_calls)}")
+
+        def get(self, *, name):
+            self.get_calls.append(name)
+            if name == self.fail_job:
+                raise RuntimeError("poll interrupted on shard two")
+            suffix = name.rsplit("-", 1)[1]
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name=f"files/output-{suffix}"),
+                error=None,
+            )
+
+    class ShardClient:
+        def __init__(self, *, fail_job: str | None) -> None:
+            self.files = ShardFiles(
+                {
+                    "files/output-1": [_response("GSE2", 2)],
+                    "files/output-2": [_response("GSE10", 10)],
+                }
+            )
+            self.batches = ShardBatches(fail_job=fail_job)
+
+        @property
+        def models(self):
+            raise AssertionError("synchronous models API must not be used")
+
+    interrupted = ShardClient(fail_job="batches/job-2")
+    monkeypatch.setattr(gemini, "_create_client", lambda key: interrupted)
+    with pytest.raises(RuntimeError, match="shard two"):
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    state = json.loads((tmp_path / "gemini_state.json").read_text())
+    assert state["shards"][0]["output_file_name"] == "files/output-1"
+    assert state["shards"][1]["job_name"] == "batches/job-2"
+
+    resumed = ShardClient(fail_job=None)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: resumed)
+    result = build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    assert resumed.files.upload_calls == []
+    assert resumed.batches.create_calls == []
+    assert resumed.batches.get_calls == ["batches/job-2"]
+    assert resumed.files.download_calls == ["files/output-2"]
+    assert np.all(result.vectors[0] == 2)
+    assert np.all(result.vectors[1] == 10)
 
 
 @pytest.mark.parametrize(

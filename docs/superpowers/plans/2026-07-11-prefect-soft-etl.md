@@ -252,7 +252,9 @@ def geo_soft_etl(...):
 
 Aggregate created GSEs and failures, call `build_missing_embeddings` with
 `replace_gses=frozenset(created)`, atomically write the report, and expose CLI
-flags for roots, batch size, workers, embedding store, model key, and paid flag.
+flags for the SOFT root, records root, batch size, and worker count. Keep the
+embedding store, model key, and paid-work policy fixed inside the locked flow
+signature for this prototype.
 Use `geo_soft_etl.with_options(task_runner=ThreadPoolTaskRunner(max_workers=n))`
 for the CLI worker override so the flow signature remains stable.
 
