@@ -59,6 +59,28 @@ def _fake_embedding_result(status: str = "created"):
     return SimpleNamespace(status=status, record_count=1, duration_seconds=0.01)
 
 
+def test_parse_task_logs_each_record_failure_for_prefect_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _job(tmp_path, 10)
+    failure = MaterializeFailure(job.gse, job.source, "SoftParseError: bad")
+    monkeypatch.setattr(
+        prefect_etl,
+        "materialize_batch",
+        lambda jobs: BatchResult((), (), (failure,)),
+    )
+    errors: list[tuple[object, ...]] = []
+    logger = SimpleNamespace(error=lambda *args: errors.append(args))
+    monkeypatch.setattr(prefect_etl, "get_run_logger", lambda: logger)
+
+    result = prefect_etl.parse_record_batch.fn((job,))
+
+    assert result.failures == (failure,)
+    assert len(errors) == 1
+    assert errors[0][1:] == (job.gse, str(job.source), failure.error)
+
+
 def test_flow_batches_501_jobs_as_250_250_1_and_resolves_every_future(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

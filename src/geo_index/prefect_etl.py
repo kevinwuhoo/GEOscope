@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-from prefect import flow, task
+from prefect import flow, get_run_logger, task
 from prefect.task_runners import ThreadPoolTaskRunner
 
 from .build_embedding_artifact import build_missing_embeddings
@@ -52,7 +52,16 @@ class EtlReport:
 @task(name="materialize-canonical-record-batch", retries=2, retry_delay_seconds=5)
 def parse_record_batch(jobs: tuple[RecordJob, ...]) -> BatchResult:
     """Materialize one bounded, retryable group of canonical records."""
-    return materialize_batch(jobs)
+    result = materialize_batch(jobs)
+    logger = get_run_logger()
+    for failure in result.failures:
+        logger.error(
+            "canonical record parse failed: gse=%s source=%s error=%s",
+            failure.gse,
+            str(failure.source),
+            failure.error,
+        )
+    return result
 
 
 def _chunks(values: Sequence[RecordJob], size: int):
