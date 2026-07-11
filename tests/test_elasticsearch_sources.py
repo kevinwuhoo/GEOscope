@@ -136,6 +136,27 @@ def test_load_artifact_memory_maps_aligned_float32_rows(tmp_path: Path) -> None:
     assert artifact.metadata["record_count"] == 2
 
 
+def test_load_artifact_scans_finite_values_in_bounded_row_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_artifact(
+        tmp_path,
+        ids=["GSE2", "GSE3", "GSE4", "GSE5", "GSE6"],
+    )
+    calls: list[tuple[int, ...]] = []
+    original = np.isfinite
+
+    def recording_isfinite(values: np.ndarray) -> np.ndarray:
+        calls.append(values.shape)
+        return original(values)
+
+    monkeypatch.setattr("geo_index.elasticsearch_sources._FINITE_SCAN_ROWS", 2)
+    monkeypatch.setattr("geo_index.elasticsearch_sources.np.isfinite", recording_isfinite)
+    load_artifact(path, VECTOR_FIELDS["bge_small_v15"])
+    assert calls == [(2, 384), (2, 384), (1, 384)]
+
+
 def test_load_artifact_rejects_wrong_dimensions_and_nonfinite_vectors(
     tmp_path: Path,
 ) -> None:
@@ -191,6 +212,27 @@ def test_documents_join_vector_rows_by_gse(tmp_path: Path) -> None:
     assert documents[0].source["embedding_bge_384"] == pytest.approx(
         [0.0] * 383 + [1.0]
     )
+
+
+def test_documents_stream_records_without_materializing_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records_root = tmp_path / "records"
+    _write_record(records_root, "GSE2")
+    _write_record(records_root, "GSE10")
+    monkeypatch.setattr(
+        "geo_index.elasticsearch_sources.load_records",
+        lambda _root: (_ for _ in ()).throw(AssertionError("materialized records")),
+    )
+    documents = list(
+        iter_index_documents(
+            records_root,
+            tmp_path / "artifacts",
+            model_keys=(),
+        )
+    )
+    assert [document.gse for document in documents] == ["GSE2", "GSE10"]
 
 
 def test_documents_allow_missing_artifact_and_partial_model_coverage(

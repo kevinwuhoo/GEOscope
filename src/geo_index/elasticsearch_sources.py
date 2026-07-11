@@ -66,6 +66,7 @@ _STRING_FIELDS = (
     "sex_status",
     "assay_status",
 )
+_FINITE_SCAN_ROWS = 4096
 
 
 def _gse_number(gse: str) -> int:
@@ -125,19 +126,24 @@ def _project_record(path: Path, payload: object) -> CanonicalRecord:
     return CanonicalRecord(payload_gse, source, path)
 
 
-def load_records(records_root: Path) -> tuple[CanonicalRecord, ...]:
-    """Load canonical JSON records in stable numeric-GSE order."""
+def iter_records(records_root: Path) -> Iterator[CanonicalRecord]:
+    """Stream canonical records after sorting only their lightweight paths."""
 
-    records: list[CanonicalRecord] = []
+    paths = list(records_root.rglob("*.json"))
+    paths.sort(key=lambda path: _gse_number(path.stem))
     seen: set[str] = set()
-    for path in records_root.rglob("*.json"):
+    for path in paths:
         record = _project_record(path, _load_json(path))
         if record.gse in seen:
             raise ValueError(f"duplicate canonical record {record.gse}")
         seen.add(record.gse)
-        records.append(record)
-    records.sort(key=lambda record: _gse_number(record.gse))
-    return tuple(records)
+        yield record
+
+
+def load_records(records_root: Path) -> tuple[CanonicalRecord, ...]:
+    """Load canonical JSON records in stable numeric-GSE order."""
+
+    return tuple(iter_records(records_root))
 
 
 @dataclass(frozen=True)
@@ -175,8 +181,9 @@ def load_artifact(path: Path, spec: VectorFieldSpec) -> EmbeddingArtifact:
         )
     if not vectors.flags.c_contiguous:
         raise ValueError("vectors.npy must be C-contiguous")
-    if not np.isfinite(vectors).all():
-        raise ValueError("vectors.npy contains nonfinite values")
+    for start in range(0, vectors.shape[0], _FINITE_SCAN_ROWS):
+        if not np.isfinite(vectors[start : start + _FINITE_SCAN_ROWS]).all():
+            raise ValueError("vectors.npy contains nonfinite values")
 
     raw_ids = _load_json(path / "ids.json")
     if not isinstance(raw_ids, list) or any(
@@ -232,13 +239,12 @@ def iter_index_documents(
             specs.append(VECTOR_FIELDS[model_key])
         except KeyError as exc:
             raise ValueError(f"unknown model key: {model_key}") from exc
-    records = load_records(records_root)
     artifacts = {
         spec.model_key: load_artifact(artifacts_root / spec.model_key, spec)
         for spec in specs
         if (artifacts_root / spec.model_key).exists()
     }
-    for record in records:
+    for record in iter_records(records_root):
         source = dict(record.source)
         for spec in specs:
             artifact = artifacts.get(spec.model_key)
