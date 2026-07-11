@@ -86,6 +86,49 @@ words if the desired series is not shown.
 > per-sample metadata. `acc.cgi view=brief` is the only source that is
 > metadata-complete, data-free, and available for new series.
 
+## Canonical SOFT records and embedding artifacts
+
+Materialize one complete canonical JSON record per stripped family SOFT file:
+
+```bash
+uv run geo-soft-etl
+```
+
+Existing records under `data/processed/series_records/<bucket>/` are terminal
+and skipped without reading their source. Delete one record explicitly to
+recompute it. The flow runs directly with a bounded local Prefect thread pool;
+the Prefect server/UI is optional.
+
+Build complete aligned matrix artifacts from the canonical record tree:
+
+```bash
+uv run python -m geo_index.build_embedding_artifact --model-key bge_small_v15
+uv run python -m geo_index.build_embedding_artifact --model-key medcpt_v1
+uv run python -m geo_index.build_embedding_artifact --model-key qwen3_06b_1024_v1
+```
+
+Each model publishes `vectors.npy`, `ids.json`, and `metadata.json` under
+`data/processed/embedding_artifacts/<model-key>/`. A valid existing directory
+skips all encoder work. Delete that one directory explicitly when the canonical
+record inventory changes and a complete rebuild is intended.
+
+The existing aligned BGE baseline can be copied into the canonical contract
+without changing its source files:
+
+```bash
+uv run python -m geo_index.adopt_embeddings --model-key bge_small_v15
+```
+
+Gemini corpus embeddings use the asynchronous Google batch/file API only. The
+command prints an estimate but cannot submit unless both `GEMINI_API_KEY` and
+`--allow-paid-gemini` are present:
+
+```bash
+uv run python -m geo_index.build_embedding_artifact \
+  --model-key gemini_embedding_2_3072_v1 \
+  --allow-paid-gemini
+```
+
 ## Rebuild the Postgres search database
 
 The **v1** search database is reproducible from the GEOmetadb SQLite file and
