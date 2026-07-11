@@ -111,7 +111,8 @@ def _recover_interrupted_replacement(
             try:
                 validate_artifact(temp, variant)
             except ValueError:
-                shutil.rmtree(temp, ignore_errors=True)
+                if variant.provider != "google":
+                    shutil.rmtree(temp, ignore_errors=True)
             else:
                 os.rename(temp, final_dir)
                 shutil.rmtree(backup)
@@ -125,7 +126,8 @@ def _recover_interrupted_replacement(
         try:
             validate_artifact(temp, variant)
         except ValueError:
-            shutil.rmtree(temp, ignore_errors=True)
+            if variant.provider != "google":
+                shutil.rmtree(temp, ignore_errors=True)
             return True
         _replace_published_artifact(temp, final_dir)
         return False

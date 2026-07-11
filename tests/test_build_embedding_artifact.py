@@ -396,6 +396,65 @@ def test_pending_marker_forces_replacement_rebuild_when_temp_is_unavailable(
     assert not marker.exists()
 
 
+def test_pending_gemini_replacement_preserves_provider_state_for_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+
+    def provider(records, offset: float) -> LocalProviderResult:
+        return FakeEncoder(3072, value_offset=offset).encode(records, batch_size=1)
+
+    monkeypatch.setattr(
+        builder,
+        "_encode",
+        lambda variant, inventory, temp_dir, **kwargs: provider(inventory, 0),
+    )
+    final = build_embedding_artifact(
+        records,
+        output,
+        "gemini_embedding_2_3072_v1",
+        allow_paid_gemini=False,
+    ).artifact_path
+    marker = output / ".gemini_embedding_2_3072_v1.replace.pending"
+    marker.write_text("pending\n")
+
+    def interrupt(variant, inventory, temp_dir, **kwargs):
+        (temp_dir / "gemini_state.json").write_text('{"job":"persist-me"}\n')
+        raise RuntimeError("provider interrupted")
+
+    monkeypatch.setattr(builder, "_encode", interrupt)
+    with pytest.raises(RuntimeError, match="provider interrupted"):
+        build_embedding_artifact(
+            records,
+            output,
+            "gemini_embedding_2_3072_v1",
+            allow_paid_gemini=False,
+        )
+    temp = output / ".gemini_embedding_2_3072_v1.tmp"
+    assert (temp / "gemini_state.json").exists()
+
+    def resume(variant, inventory, temp_dir, **kwargs):
+        assert json.loads((temp_dir / "gemini_state.json").read_text()) == {
+            "job": "persist-me"
+        }
+        return provider(inventory, 100)
+
+    monkeypatch.setattr(builder, "_encode", resume)
+    result = build_embedding_artifact(
+        records,
+        output,
+        "gemini_embedding_2_3072_v1",
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "replaced"
+    vectors = np.load(final / "vectors.npy")
+    assert np.all(vectors[0] == 102)
+    assert not marker.exists()
+
+
 def test_builder_removes_stale_backup_after_replacement_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
