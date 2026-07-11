@@ -75,6 +75,18 @@ class FacetResult:
 
 
 @dataclass(frozen=True)
+class SearchProvenance:
+    backend: str
+    mapping_revision: str
+    active_model_key: str
+    vector_field: str
+    dimensions: int
+    mode: Literal["bm25", "dense", "hybrid"]
+    settings: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SearchResponse:
     hits: tuple[SearchHit, ...]
     facets: dict[FacetField, FacetResult] = field(default_factory=dict)
+    provenance: SearchProvenance | None = None

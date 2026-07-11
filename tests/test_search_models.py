@@ -7,6 +7,8 @@ from geo_index.search_models import (
     FacetBucket,
     FacetResult,
     SearchFilters,
+    SearchProvenance,
+    SearchResponse,
 )
 
 
@@ -63,3 +65,21 @@ def test_filter_and_facet_models_are_frozen() -> None:
         bucket.count = 3  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         result.scope = "candidate_pool"  # type: ignore[misc]
+
+
+def test_search_response_defaults_to_no_provenance() -> None:
+    assert SearchResponse(hits=()).provenance is None
+
+
+def test_search_provenance_is_frozen() -> None:
+    provenance = SearchProvenance(
+        backend="elasticsearch",
+        mapping_revision="geo-series-v1",
+        active_model_key="bge_small_v15",
+        vector_field="embedding_bge_384",
+        dimensions=384,
+        mode="hybrid",
+        settings={"rank_window_size": 200},
+    )
+    with pytest.raises(FrozenInstanceError):
+        provenance.mode = "dense"  # type: ignore[misc]
