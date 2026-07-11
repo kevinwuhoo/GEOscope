@@ -187,6 +187,14 @@ def build_missing_embeddings(
     allow_paid_gemini: bool,
 ) -> EmbeddingBuildResult:
     """ETL integration facade with explicit rebuilt-GSE replacement semantics."""
+    if not replace_gses:
+        return _build(
+            records_root,
+            store_path,
+            model_key,
+            allow_paid_gemini=allow_paid_gemini,
+            force_replace=False,
+        )
     inventory = load_record_inventory(records_root)
     missing = sorted(set(replace_gses) - set(inventory.ids))
     if missing:

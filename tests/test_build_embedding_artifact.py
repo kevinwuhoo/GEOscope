@@ -128,6 +128,13 @@ def test_valid_existing_artifact_skips_encoder_construction(
         "create_local_encoder",
         lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
     )
+    monkeypatch.setattr(
+        builder,
+        "load_record_inventory",
+        lambda records_root: (_ for _ in ()).throw(
+            AssertionError("completed canonical records opened")
+        ),
+    )
 
     second = build_embedding_artifact(
         records,
@@ -242,6 +249,13 @@ def test_build_missing_embeddings_with_empty_replace_set_skips_encoder(
         builder.embedding_local,
         "create_local_encoder",
         lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
+    )
+    monkeypatch.setattr(
+        builder,
+        "load_record_inventory",
+        lambda records_root: (_ for _ in ()).throw(
+            AssertionError("completed canonical records opened")
+        ),
     )
 
     result = build_missing_embeddings(
