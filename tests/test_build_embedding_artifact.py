@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import geo_index.build_embedding_artifact as builder
+from geo_index.build_embedding_artifact import (
+    EmbeddingBuildResult,
+    build_embedding_artifact,
+    build_missing_embeddings,
+)
+from geo_index.embedding_artifacts import validate_artifact
+from geo_index.embedding_local import LocalProviderResult
+from geo_index.embedding_registry import get_variant
+
+
+def _write_record(root: Path, gse: str, title: str, text: str) -> None:
+    digits = gse[3:]
+    bucket = f"GSE{digits[:-3]}nnn" if len(digits) > 3 else "GSEnnn"
+    path = root / bucket / f"{gse}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"gse": gse, "title": title, "embed_text": text}) + "\n",
+        encoding="utf-8",
+    )
+
+
+class FakeEncoder:
+    def __init__(
+        self,
+        dimensions: int,
+        *,
+        value_offset: float = 0.0,
+        error: Exception | None = None,
+    ) -> None:
+        self.dimensions = dimensions
+        self.value_offset = value_offset
+        self.error = error
+        self.calls: list[tuple[tuple[str, ...], int]] = []
+
+    def encode(self, records, *, batch_size: int) -> LocalProviderResult:
+        self.calls.append((tuple(record.gse for record in records), batch_size))
+        if self.error is not None:
+            raise self.error
+        vectors = np.vstack(
+            [
+                np.full(
+                    self.dimensions,
+                    int(record.gse[3:]) + self.value_offset,
+                    dtype=np.float32,
+                )
+                for record in records
+            ]
+        )
+        return LocalProviderResult(
+            vectors=vectors,
+            model_revision="fake-revision",
+            sdk_version="fake-sdk-1",
+            truncation_count=0,
+            usage={"device": "fake", "batch_count": 1},
+        )
+
+
+def _factory(monkeypatch: pytest.MonkeyPatch, encoder: FakeEncoder) -> list[str]:
+    calls: list[str] = []
+
+    def create(variant):
+        calls.append(variant.model_key)
+        return encoder
+
+    monkeypatch.setattr(builder.embedding_local, "create_local_encoder", create)
+    return calls
+
+
+def _records(tmp_path: Path) -> Path:
+    records = tmp_path / "records"
+    _write_record(records, "GSE10", "Ten", "document ten")
+    _write_record(records, "GSE2", "Two", "document two")
+    return records
+
+
+def test_builder_encodes_numeric_order_once_and_aligns_ids_to_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    encoder = FakeEncoder(384)
+    factory_calls = _factory(monkeypatch, encoder)
+
+    result = build_embedding_artifact(
+        records,
+        output,
+        "bge_small_v15",
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "created"
+    assert result.record_count == 2
+    assert factory_calls == ["bge_small_v15"]
+    assert encoder.calls == [(('GSE2', 'GSE10'), 128)]
+    assert json.loads((result.artifact_path / "ids.json").read_text()) == [
+        "GSE2",
+        "GSE10",
+    ]
+    vectors = np.load(result.artifact_path / "vectors.npy")
+    assert vectors.dtype == np.float32
+    assert vectors.flags.c_contiguous
+    assert np.all(vectors[0] == 2)
+    assert np.all(vectors[1] == 10)
+    validate_artifact(result.artifact_path, get_variant("bge_small_v15"))
+
+
+def test_valid_existing_artifact_skips_encoder_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    first = FakeEncoder(384)
+    _factory(monkeypatch, first)
+    build_embedding_artifact(records, output, "bge_small_v15", allow_paid_gemini=False)
+    monkeypatch.setattr(
+        builder.embedding_local,
+        "create_local_encoder",
+        lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
+    )
+
+    second = build_embedding_artifact(
+        records,
+        output,
+        "bge_small_v15",
+        allow_paid_gemini=False,
+    )
+
+    assert second.status == "skipped"
+    assert second.record_count == 2
+
+
+def test_wrong_dimension_leaves_no_published_final_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(383))
+
+    with pytest.raises(ValueError, match="expected 384 dimensions"):
+        build_embedding_artifact(
+            records,
+            output,
+            "bge_small_v15",
+            allow_paid_gemini=False,
+        )
+
+    assert not (output / "bge_small_v15").exists()
+
+
+def test_provider_failure_leaves_no_published_final_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384, error=RuntimeError("provider failed")))
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        build_embedding_artifact(
+            records,
+            output,
+            "bge_small_v15",
+            allow_paid_gemini=False,
+        )
+
+    assert not (output / "bge_small_v15").exists()
+
+
+def test_builder_records_complete_provider_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+
+    result = build_embedding_artifact(
+        records,
+        output,
+        "bge_small_v15",
+        allow_paid_gemini=False,
+    )
+    metadata = json.loads((result.artifact_path / "metadata.json").read_text())
+
+    assert metadata["model_revision"] == "fake-revision"
+    assert metadata["sdk_version"] == "fake-sdk-1"
+    assert metadata["record_count"] == 2
+    assert metadata["usage"]["batch_count"] == 1
+    assert metadata["usage"]["device"] == "fake"
+    assert metadata["usage"]["provider_runtime_seconds"] >= 0
+    assert metadata["build_runtime_seconds"] >= 0
+    assert metadata["created_at"].endswith("+00:00")
+
+
+def test_build_missing_embeddings_replaces_complete_artifact_for_rebuilt_gse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    build_embedding_artifact(records, output, "bge_small_v15", allow_paid_gemini=False)
+    replacement = FakeEncoder(384, value_offset=100)
+    factory_calls = _factory(monkeypatch, replacement)
+
+    result = build_missing_embeddings(
+        records,
+        output,
+        "bge_small_v15",
+        replace_gses=frozenset({"GSE2"}),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "replaced"
+    assert factory_calls == ["bge_small_v15"]
+    vectors = np.load(output / "bge_small_v15" / "vectors.npy")
+    assert np.all(vectors[0] == 102)
+    assert not (output / ".bge_small_v15.backup").exists()
+
+
+def test_build_missing_embeddings_with_empty_replace_set_skips_encoder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    build_embedding_artifact(records, output, "bge_small_v15", allow_paid_gemini=False)
+    monkeypatch.setattr(
+        builder.embedding_local,
+        "create_local_encoder",
+        lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
+    )
+
+    result = build_missing_embeddings(
+        records,
+        output,
+        "bge_small_v15",
+        replace_gses=frozenset(),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "skipped"
+
+
+def test_replacement_provider_failure_preserves_previous_valid_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    original = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+    original_vectors = (original.artifact_path / "vectors.npy").read_bytes()
+    _factory(monkeypatch, FakeEncoder(384, error=RuntimeError("replacement failed")))
+
+    with pytest.raises(RuntimeError, match="replacement failed"):
+        build_missing_embeddings(
+            records,
+            output,
+            "bge_small_v15",
+            replace_gses={"GSE2"},
+            allow_paid_gemini=False,
+        )
+
+    assert (original.artifact_path / "vectors.npy").read_bytes() == original_vectors
+    validate_artifact(original.artifact_path, get_variant("bge_small_v15"))
+
+
+def test_result_is_a_frozen_public_value_object() -> None:
+    result = EmbeddingBuildResult(
+        model_key="bge_small_v15",
+        status="skipped",
+        artifact_path=Path("artifact"),
+        record_count=2,
+        duration_seconds=0.0,
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        result.status = "created"  # type: ignore[misc]

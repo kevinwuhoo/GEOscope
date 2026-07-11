@@ -27,6 +27,7 @@ REQUIRED_METADATA_FIELDS = frozenset(
         "document_format",
         "query_format",
         "normalization",
+        "pooling",
         "record_count",
         "created_at",
         "build_runtime_seconds",
@@ -76,6 +77,7 @@ class ArtifactMetadata:
     document_format: str
     query_format: str
     normalization: str
+    pooling: str
     record_count: int
     created_at: str
     build_runtime_seconds: float
@@ -152,6 +154,8 @@ def _load_metadata(path: Path, variant: EmbeddingVariant) -> ArtifactMetadata:
         raise ValueError("metadata query_format does not match registry")
     if raw["normalization"] != variant.normalization:
         raise ValueError("metadata normalization does not match registry")
+    if raw["pooling"] != variant.pooling:
+        raise ValueError("metadata pooling does not match registry")
     if raw["max_length"] != variant.max_length:
         raise ValueError("metadata max_length does not match registry")
     if not isinstance(raw["record_count"], int) or raw["record_count"] < 0:
@@ -181,6 +185,7 @@ def _load_metadata(path: Path, variant: EmbeddingVariant) -> ArtifactMetadata:
         document_format=raw["document_format"],
         query_format=raw["query_format"],
         normalization=raw["normalization"],
+        pooling=raw["pooling"],
         record_count=raw["record_count"],
         created_at=raw["created_at"],
         build_runtime_seconds=float(raw["build_runtime_seconds"]),

@@ -58,6 +58,7 @@ def _metadata(model_key: str, count: int) -> dict[str, object]:
         "document_format": variant.document_format,
         "query_format": variant.query_format,
         "normalization": variant.normalization,
+        "pooling": variant.pooling,
         "record_count": count,
         "created_at": "2026-07-11T00:00:00+00:00",
         "build_runtime_seconds": 1.25,
@@ -100,6 +101,9 @@ def test_registry_is_fixed_lightweight_and_dimensioned() -> None:
     assert get_variant("medcpt_v1").dimensions == 768
     assert get_variant("qwen3_06b_1024_v1").dimensions == 1024
     assert get_variant("gemini_embedding_2_3072_v1").dimensions == 3072
+    assert get_variant("bge_small_v15").pooling == "cls"
+    assert get_variant("medcpt_v1").pooling == "cls"
+    assert get_variant("qwen3_06b_1024_v1").pooling == "last-token"
 
 
 def test_registry_rejects_unknown_model_key() -> None:
@@ -242,6 +246,19 @@ def test_validate_artifact_rejects_incomplete_metadata(tmp_path: Path) -> None:
         metadata=metadata,
     )
     with pytest.raises(ValueError, match="missing metadata fields.*document_format"):
+        validate_artifact(path, get_variant("bge_small_v15"))
+
+
+def test_validate_artifact_requires_pooling_provenance(tmp_path: Path) -> None:
+    metadata = _metadata("bge_small_v15", 1)
+    del metadata["pooling"]
+    path = _write_artifact(
+        tmp_path / "bge_small_v15",
+        "bge_small_v15",
+        ["GSE2"],
+        metadata=metadata,
+    )
+    with pytest.raises(ValueError, match="missing metadata fields.*pooling"):
         validate_artifact(path, get_variant("bge_small_v15"))
 
 

@@ -31,7 +31,7 @@ _VARIANTS = {
         query_format="Represent this sentence for searching relevant passages: {query}",
         normalization="l2",
         max_length=512,
-        pooling="sentence-transformers-mean",
+        pooling="cls",
         default_batch_size=128,
     ),
     "medcpt_v1": EmbeddingVariant(
