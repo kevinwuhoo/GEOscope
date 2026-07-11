@@ -1,6 +1,6 @@
 ---
 title: Prefect SOFT ETL and Embedding Prototype Plan
-tags: [prefect, soft, etl, embeddings, json, sqlite, plan, v1]
+tags: [prefect, soft, etl, embeddings, json, numpy, plan, v1]
 status: approved-plan
 created: 2026-07-11
 updated: 2026-07-11
@@ -19,19 +19,20 @@ updated: 2026-07-11
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn every available stripped GEO family SOFT file into one canonical
-GSE JSON record, then compute each configured missing embedding exactly once and
-persist it locally for later Elasticsearch loading.
+GSE JSON record, and provide separate code that later builds one complete
+on-disk matrix artifact per embedding model from those JSON records.
 
 **Architecture:** A Prefect 3 flow inventories stripped SOFT files and derived
 record files. A derived file's existence means that GSE is complete and must not
 be opened or parsed again. Missing records are built in bounded batches with
-atomic writes; the flow then fills missing rows in one local SQLite embedding
-store. There are no dated snapshots, content-addressed versions, daily matrix
-deltas, or automatic source-update detection in the prototype.
+atomic writes. Separate model-specific builders later enumerate the completed
+JSON records in stable GSE order and publish one canonical NumPy matrix/ID/
+metadata directory per model. There are no dated snapshots, SQLite vector
+stores, content-addressed versions, or daily matrix deltas in the prototype.
 
 **Tech Stack:** Python 3.11+, Prefect 3 (`prefect>=3,<4`), stdlib gzip/JSON/XML-
-free SOFT parsing, NumPy float32 vectors, SQLite, existing local/Hugging Face
-encoders, Google GenAI for the explicitly approved Gemini batch run, pytest.
+free SOFT parsing, NumPy float32 matrices, existing local/Hugging Face encoders,
+Google GenAI batch API for Gemini document embeddings, pytest.
 
 ## Global constraints
 
@@ -47,14 +48,17 @@ encoders, Google GenAI for the explicitly approved Gemini batch run, pytest.
 - Do not compare source mtimes, compute source/content hashes, or detect upstream
   changes in v1.
 - Do not create snapshot directories or retain multiple record versions.
-- Persist embeddings in the one canonical local file
-  `data/processed/series_embeddings.sqlite`; do not put float arrays in JSON.
-- One row per `(gse, model_key)` is canonical. Adding a new model fills missing
-  rows; changing an existing model definition requires an explicit delete/rebuild.
+- Read embeddings only from completed canonical JSON records; do not couple model
+  code to Prefect, SOFT parsing, SQLite, PostgreSQL, or Elasticsearch.
+- Persist one canonical directory per model under
+  `data/processed/embedding_artifacts/<model_key>/`, containing `vectors.npy`,
+  `ids.json`, and `metadata.json`.
+- If a model artifact directory exists and validates, skip that whole model.
+  Delete it explicitly to rebuild after adding records or changing a model.
 - Preserve the existing BGE and PubMedBERT `.npy`/ID files; importing them must
   not overwrite or delete the originals.
-- Prefect coordinates work and records failures; filesystem/SQLite existence,
-  not Prefect result caching, defines idempotence.
+- Prefect coordinates SOFT parsing; filesystem existence, not Prefect result
+  caching, defines record idempotence.
 - Do not submit paid Gemini work unless the explicit paid-run flag is present.
 - Unit tests must use tiny synthetic SOFT fixtures and fake encoders. They must
   not download models, call Google, require Prefect Cloud, or start Elasticsearch.
@@ -77,9 +81,9 @@ For v1, existence is the state machine:
 |---|---|---|
 | SOFT exists, record missing | Never processed or explicitly invalidated | Parse and atomically write record |
 | SOFT exists, record exists | Complete | Skip without reading source or output |
-| Record exists, embedding row missing | Model not run for this GSE | Compute and insert vector |
-| Record rebuilt during this run | Explicit invalidation | Replace configured embeddings for this GSE |
-| Record and embedding rows exist | Complete | Do nothing |
+| Record tree exists, model artifact missing | Model has not been built | Build the complete model artifact from sorted JSON records |
+| Model artifact exists and validates | Model build complete | Skip without encoding |
+| Record added/deleted after model build | Artifact no longer matches canonical IDs | Explicitly delete and rebuild that model artifact |
 
 This deliberately does **not** notice that NCBI replaced a SOFT file after the
 record was built. The operator must delete the derived record when a refresh is
@@ -106,7 +110,14 @@ data/
       GSE271nnn/GSE271800_family.soft.gz
     series_records/                    # one canonical parsed record per GSE
       GSE271nnn/GSE271800.json
-    series_embeddings.sqlite           # all canonical model/GSE vectors
+    embedding_artifacts/               # one complete canonical directory/model
+      bge_small_v15/
+        vectors.npy
+        ids.json
+        metadata.json
+      medcpt_v1/
+      qwen3_06b_1024_v1/
+      gemini_embedding_2_3072_v1/
     soft_etl_report.json                # overwritten summary of the latest run
 
   processed/embeddings.npy             # existing BGE legacy artifact; preserved
@@ -117,8 +128,8 @@ data/
 
 The record is the shared metadata representation for embeddings and
 Elasticsearch. The embedder reads `gse`, `title`, and `embed_text`; the local ES
-loader reads the entire record and looks up vectors by `(gse, model_key)`. There
-is no separate embedding JSONL or Elasticsearch JSONL.
+loader reads the entire record and joins vectors through each artifact's ordered
+`ids.json`. There is no separate embedding JSONL or Elasticsearch JSONL.
 
 ## Canonical record schema
 
@@ -205,39 +216,34 @@ v1; delete the affected record(s) explicitly before rerunning. Keep
 `embed_text` based on the raw narrative fields so normalized-label injection
 remains a later controlled ablation rather than silently changing this bakeoff.
 
-## Canonical embedding store
+## Canonical embedding artifact
 
-Use SQLite because it gives simple incremental writes and primary-key
-idempotence without creating roughly one million small vector files.
+Each model writes exactly one final directory:
 
-```sql
-CREATE TABLE IF NOT EXISTS embedding_models (
-    model_key       TEXT PRIMARY KEY,
-    model_id        TEXT NOT NULL,
-    dimensions      INTEGER NOT NULL,
-    config_json     TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS series_embeddings (
-    gse             TEXT NOT NULL,
-    model_key       TEXT NOT NULL,
-    dimensions      INTEGER NOT NULL,
-    vector_f32      BLOB NOT NULL,
-    created_at      TEXT NOT NULL,
-    PRIMARY KEY (gse, model_key),
-    FOREIGN KEY (model_key) REFERENCES embedding_models(model_key)
-);
-
-CREATE INDEX IF NOT EXISTS series_embeddings_model_gse
-    ON series_embeddings(model_key, gse);
+```text
+data/processed/embedding_artifacts/<model_key>/
+  vectors.npy
+  ids.json
+  metadata.json
 ```
 
-Vectors are C-contiguous, little-endian float32 bytes. A read validates the BLOB
-length as `dimensions * 4` and rejects nonfinite values. Store the exact fixed
-model configuration from [[52-Embedding-Bakeoff-Runbook]] in canonicalized
-`config_json`. If a registered key already exists with different configuration,
-fail with instructions to explicitly delete that model's rows and registry entry;
-do not silently mix revisions under one key.
+`vectors.npy` is a finite C-contiguous float32 matrix. `ids.json` is the ordered
+GSE list matching its rows. `metadata.json` records the fixed model/provider ID,
+resolved revision where available, wrapper/prompt, dimensions, normalization,
+record count, build time, SDK/API version, and Gemini usage/job IDs when
+applicable.
+
+Build in a sibling temporary directory and publish the final directory only
+after shape, dimension, finite-value, and ID-count validation. If the final
+directory already exists and validates, skip the whole model. The prototype does
+not append rows: when the canonical record inventory changes, delete and rebuild
+the affected model artifact explicitly.
+
+Gemini document embeddings must use the Google batch API, not synchronous
+per-record requests. Persist request JSONL and provider job state only inside the
+temporary build directory; resume existing jobs rather than resubmitting them.
+After all results arrive, validate GSE identity and assemble the canonical
+3,072-dimensional matrix.
 
 ## Prefect flow
 
@@ -252,10 +258,7 @@ Use one flow with bounded batch tasks:
 def geo_soft_etl(
     soft_root: Path = Path("data/processed/soft_meta"),
     records_root: Path = Path("data/processed/series_records"),
-    embedding_db: Path = Path("data/processed/series_embeddings.sqlite"),
-    model_keys: tuple[str, ...] = ("bge_small_v15",),
     parse_batch_size: int = 250,
-    allow_paid_gemini: bool = False,
 ) -> EtlReport:
     ...
 ```
@@ -267,15 +270,9 @@ Flow-level orchestration:
 3. Remove every item whose destination already exists without opening it.
 4. Submit missing paths in 250-file batches to eight thread workers.
 5. Resolve every future and collect successfully created GSEs and failures.
-6. For each configured model, compute the union of:
-   - records missing a `(gse, model_key)` row; and
-   - GSEs rebuilt during this run, whose existing rows must be replaced.
-7. Run the appropriate provider adapter in model-efficient batches and commit
-   SQLite rows in bounded transactions.
-8. Atomically overwrite `soft_etl_report.json` with counts, failures, timings,
-   embedding coverage, and the selected model keys.
-9. Return nonzero from the CLI if any parse/embedding failures occurred, while
-   preserving every successfully completed output.
+6. Atomically overwrite `soft_etl_report.json` with counts, failures, and timings.
+7. Return nonzero from the CLI if parse failures occurred, while preserving every
+   successfully completed output.
 
 Prefect tasks are retryable and observable units, and `.submit()` uses the
 configured task runner for concurrency. Keep task submission at flow level and
@@ -292,11 +289,11 @@ Docker agents, or production orchestration.
 ## Implementation plan
 
 For parallel ownership, the Prefect/SOFT owner implements Tasks 1, 2, 5, and 7;
-the embedding owner implements Tasks 3, 4, and 6. They integrate only through
-the `build_missing_embeddings(...)` signature locked in Task 4. The third owner
+the embedding owner implements Tasks 3, 4, and 6. The embedding code consumes
+only the completed canonical JSON tree after the ETL run. The third owner
 implements local Elasticsearch from
 [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] and consumes the finished
-record/SQLite formats read-only. Copy-ready prompts are in
+record/matrix formats read-only. Copy-ready prompts are in
 [[55-Prefect-and-Local-Elasticsearch-Coworker-Prompts]].
 
 ### Task 1 — Pure SOFT record parser
@@ -355,58 +352,64 @@ record/SQLite formats read-only. Copy-ready prompts are in
 - [ ] Run `pytest -q tests/test_soft_record_materialization.py`; expect pass.
 - [ ] Commit `feat: materialize missing canonical series records`.
 
-### Task 3 — One canonical SQLite embedding store
+### Task 3 — Canonical matrix artifact contract
 
 **Files:**
 
-- Create: `src/geo_index/embedding_store.py`
-- Create: `tests/test_embedding_store.py`
+- Create: `src/geo_index/embedding_artifacts.py`
+- Create: `tests/test_embedding_artifacts.py`
 
 **Interfaces:**
 
-- `initialize_store(path: Path) -> None`
-- `register_model(path: Path, variant: EmbeddingVariant) -> None`
-- `missing_gses(path: Path, model_key: str, gses: Sequence[str]) -> list[str]`
-- `write_vectors(path: Path, model_key: str, rows: Sequence[VectorRow], *, replace: bool) -> int`
-- `read_vector(path: Path, model_key: str, gse: str) -> np.ndarray`
+- `artifact_dir(output_root: Path, model_key: str) -> Path`
+- `load_record_inventory(records_root: Path) -> RecordInventory`
+- `validate_artifact(path: Path, variant: EmbeddingVariant) -> ArtifactMetadata`
+- `publish_artifact(temp_dir: Path, final_dir: Path) -> None`
 
-- [ ] Write failing tests for schema creation, missing-row discovery, insert,
-  replacement, registry-config mismatch, wrong dimension, nonfinite values, and
-  truncated BLOB rejection.
-- [ ] Implement canonical JSON serialization for `config_json` and little-endian
-  float32 conversion.
-- [ ] Use bounded `executemany` transactions; do not share one SQLite connection
-  across Prefect worker threads.
-- [ ] Run `pytest -q tests/test_embedding_store.py`; expect pass.
-- [ ] Commit `feat: add canonical incremental embedding store`.
+- [ ] Write failing tests for stable numeric-GSE inventory, matrix/ID alignment,
+  wrong dimensions, nonfinite values, malformed metadata, incomplete temporary
+  output, and existing-valid-artifact detection.
+- [ ] Implement one canonical `vectors.npy`/`ids.json`/`metadata.json` directory
+  per fixed model key. Write only to a sibling temporary directory until every
+  validation passes, then publish with one directory rename.
+- [ ] Reject a final artifact whose IDs do not match its vector rows. The ES
+  loader may later join partial model coverage by ID, but the artifact itself
+  must be internally complete.
+- [ ] Run `pytest -q tests/test_embedding_artifacts.py`; expect pass.
+- [ ] Commit `feat: define canonical embedding matrix artifacts`.
 
-### Task 4 — Provider-neutral missing-embedding builder
+### Task 4 — Provider-neutral complete-artifact builder
 
 **Files:**
 
 - Create: `src/geo_index/embedding_registry.py`
 - Create: `src/geo_index/embedding_local.py`
 - Create: `src/geo_index/embedding_gemini.py`
-- Create: `src/geo_index/embed_missing.py`
-- Create: `tests/test_embed_missing.py`
+- Create: `src/geo_index/build_embedding_artifact.py`
+- Create: `tests/test_build_embedding_artifact.py`
 
 **Interfaces:**
 
 - `get_variant(model_key: str) -> EmbeddingVariant`
-- `build_missing_embeddings(records_root: Path, store_path: Path, model_key: str, *, replace_gses: AbstractSet[str], allow_paid_gemini: bool) -> EmbeddingBuildResult`
+- `build_embedding_artifact(records_root: Path, output_root: Path, model_key: str, *, allow_paid_gemini: bool) -> EmbeddingBuildResult`
 
 - [ ] Port only provider-neutral registry/adapter ideas from
   `codex/embedding-bakeoff-first-draft`; do not port PostgreSQL storage.
-- [ ] Write fake-encoder tests proving existing rows are skipped, missing rows
-  are inserted, rebuilt GSEs are replaced, model order is stable, and provider
-  failures leave successful batches committed and failed rows missing.
+- [ ] Write fake-encoder tests proving a valid existing artifact skips all
+  encoding, records are encoded in stable GSE order, final output is unpublished
+  after failure, and a temporary build can resume without duplicating completed
+  provider work.
 - [ ] Keep one local encoder instance alive for all batches of a model in a run.
 - [ ] Require `allow_paid_gemini=True` plus `GEMINI_API_KEY` before any Gemini
   submission; otherwise fail before network I/O.
+- [ ] For Gemini documents, generate deterministic batch-request JSONL, submit
+  through the Google batch API, persist provider job IDs/state in the temporary
+  directory, poll/resume those jobs, and assemble full 3,072-dimensional results.
+  Do not send one synchronous API request per GSE.
 - [ ] Preserve model-specific formatting and dimensions from
   [[52-Embedding-Bakeoff-Runbook]].
-- [ ] Run `pytest -q tests/test_embed_missing.py`; expect pass.
-- [ ] Commit `feat: build only missing canonical embeddings`.
+- [ ] Run `pytest -q tests/test_build_embedding_artifact.py`; expect pass.
+- [ ] Commit `feat: build canonical embedding artifacts from JSON records`.
 
 ### Task 5 — Prefect flow and CLI
 
@@ -424,18 +427,18 @@ record/SQLite formats read-only. Copy-ready prompts are in
 
 - [ ] Add `prefect>=3,<4`, regenerate the lock once, and coordinate this shared
   file with any concurrent branch.
-- [ ] Write tests with temporary roots and fake parser/encoder functions proving
-  existing-record skip, 250-job batching, partial-failure reporting, rebuilt-GSE
-  embedding replacement, and a no-work second run.
+- [ ] Write tests with temporary roots and fake parser functions proving
+  existing-record skip, 250-job batching, partial-failure reporting, explicit
+  record rebuild, and a no-work second run.
 - [ ] Implement `@task(retries=2, retry_delay_seconds=5)` batch parsing and a
   `ThreadPoolTaskRunner(max_workers=8)` flow. Resolve all submitted futures.
-- [ ] Add CLI flags for roots, model keys, batch size, worker count, and
-  `--allow-paid-gemini`; defaults must match the plan.
+- [ ] Add CLI flags for SOFT root, records root, batch size, and worker count;
+  defaults must match the plan.
 - [ ] Atomically write the latest-run report. Include discovered, skipped,
-  created, failed, embedded, embedding-skipped, and duration counts.
+  created, failed, and duration counts.
 - [ ] Run `pytest -q tests/test_prefect_etl.py`; expect pass.
 - [ ] Run `pytest -q`; expect the entire offline suite to pass.
-- [ ] Commit `feat: orchestrate SOFT ETL and embeddings with Prefect`.
+- [ ] Commit `feat: orchestrate idempotent SOFT record ETL with Prefect`.
 
 ### Task 6 — Adopt the existing BGE artifact without recomputation
 
@@ -447,20 +450,21 @@ record/SQLite formats read-only. Copy-ready prompts are in
 
 **Interfaces:**
 
-- `adopt_legacy_matrix(matrix_path: Path, ids_path: Path, store_path: Path, model_key: str) -> AdoptionReport`
+- `adopt_legacy_matrix(matrix_path: Path, ids_path: Path, output_root: Path, model_key: str) -> AdoptionReport`
 - CLI: `python -m geo_index.adopt_embeddings --model-key bge_small_v15 ...`
 
-- [ ] Write tests proving aligned IDs/vectors import, existing rows skip,
-  metadata model/dimension validation, source preservation, and rollback on
-  mismatched counts.
-- [ ] Import `data/processed/embeddings.npy` and its ID sidecar into the canonical
-  SQLite store. Keep the legacy files untouched.
-- [ ] Do not import `embeddings_pubmedbert.npy` as MedCPT. If retained in the
-  store, register it under an honest legacy key such as
+- [ ] Write tests proving aligned IDs/vectors adoption, existing artifact skip,
+  metadata model/dimension validation, source preservation, and no published
+  output on mismatched counts.
+- [ ] Copy the validated `data/processed/embeddings.npy` matrix and ordered IDs
+  into the canonical `bge_small_v15` artifact directory. Keep the legacy files
+  untouched.
+- [ ] Do not adopt `embeddings_pubmedbert.npy` as MedCPT. If retained as an
+  artifact, register it under an honest legacy key such as
   `pubmedbert_neuml_legacy_768`, excluded from the nine-system bakeoff.
 - [ ] Run the importer first with a small fixture, then on the real BGE artifact;
-  record inserted/skipped counts and database size in [[42-Build-Log]].
-- [ ] Commit `feat: adopt legacy BGE vectors into canonical store`.
+  record count and artifact size in [[42-Build-Log]].
+- [ ] Commit `feat: adopt legacy BGE as canonical matrix artifact`.
 
 ### Task 7 — Real-data slice and resumability gate
 
@@ -470,12 +474,14 @@ record/SQLite formats read-only. Copy-ready prompts are in
 
 - [ ] Start the optional local Prefect UI with `prefect server start` and set
   `PREFECT_API_URL=http://127.0.0.1:4200/api`, or run directly without the UI.
-- [ ] Run the flow against 500 missing SOFT inputs with BGE only and record
-  parse throughput, failures, record size, embedding skips/inserts, and memory.
-- [ ] Run the identical command again. Acceptance is zero source parses and zero
-  embedding computations for completed GSEs.
+- [ ] Run the flow against 500 missing SOFT inputs and record parse throughput,
+  failures, record size, and memory.
+- [ ] Run the identical ETL command again. Acceptance is zero source parses for
+  completed GSEs.
 - [ ] Delete one canonical record, rerun, and verify exactly that record is
-  rebuilt and its BGE row replaced.
+  rebuilt.
+- [ ] Run the BGE artifact builder against the completed test record tree, then
+  rerun it and verify the existing valid artifact causes zero encoder calls.
 - [ ] Run `geo-validate-soft --limit 5000` independently; the ETL flow does not
   replace source validation.
 - [ ] Run the full offline suite and record exact results.
@@ -485,14 +491,16 @@ record/SQLite formats read-only. Copy-ready prompts are in
 
 - Already-materialized records cause no source read or parser invocation.
 - A missing/deleted record is rebuilt atomically on the next run.
-- A no-work second run performs zero parsing and zero embedding calls.
-- Rebuilt GSEs replace their configured embedding rows; untouched GSEs do not.
-- Adding a model key fills only its missing rows.
-- One canonical record tree and one canonical embedding SQLite file exist; no
+- A no-work second ETL run performs zero parsing.
+- A valid existing model artifact causes zero encoder/API calls.
+- Each model publishes one complete matrix/ID/metadata directory from canonical
+  JSON records; no per-GSE vector store is introduced.
+- One canonical record tree and one canonical artifact directory per model exist; no
   snapshot/version/delta directories are created.
 - Existing BGE artifacts are adopted without recomputation or deletion.
-- Parse and embedding failures are visible in Prefect and the latest-run report,
-  while successful outputs remain reusable.
+- Parse failures are visible in Prefect and the latest-run report. Embedding
+  failures leave only resumable temporary state and never publish a partial
+  canonical artifact.
 - The output contract is sufficient for the separate local Elasticsearch loader.
 
 ## Prototype operations
@@ -500,14 +508,14 @@ record/SQLite formats read-only. Copy-ready prompts are in
 Manual run:
 
 ```bash
-uv run geo-soft-etl --model-key bge_small_v15
+uv run geo-soft-etl
 ```
 
 Explicitly rebuild one GSE:
 
 ```bash
 rm data/processed/series_records/GSE271nnn/GSE271800.json
-uv run geo-soft-etl --model-key bge_small_v15
+uv run geo-soft-etl
 ```
 
 The deletion is intentionally manual and destructive; operators must verify the
@@ -516,6 +524,20 @@ GSE path before running it. No wildcard rebuild command belongs in v1.
 After the manual full run is stable, a machine-local cron or Prefect `serve`
 schedule may invoke the same flow daily. Scheduling does not change idempotence:
 new source files create new records, existing records remain untouched.
+
+After the desired canonical JSON record set exists, build models separately:
+
+```bash
+uv run python -m geo_index.build_embedding_artifact --model-key bge_small_v15
+uv run python -m geo_index.build_embedding_artifact --model-key medcpt_v1
+uv run python -m geo_index.build_embedding_artifact --model-key qwen3_06b_1024_v1
+uv run python -m geo_index.build_embedding_artifact \
+  --model-key gemini_embedding_2_3072_v1 \
+  --allow-paid-gemini
+```
+
+The Gemini command prepares and submits batch jobs. It must never fall back to
+one synchronous document request per GSE.
 
 ## Current official Prefect references
 

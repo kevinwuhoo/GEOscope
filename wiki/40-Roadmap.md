@@ -40,8 +40,8 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
    disjunctive counts, and API exposure. Creating the four optional GIN indexes
    on the shared database remains an explicit database-change step.
 3. [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan|Prefect SOFT ETL]] — parse
-   only missing stripped SOFT outputs into canonical GSE JSON records, then fill
-   only missing canonical embedding rows.
+   only missing stripped SOFT outputs into canonical GSE JSON records; separate
+   builders later create one complete matrix artifact per model.
 4. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
    and hybrid results for 16 fixed queries and measure Recall@20, NDCG@10, and
    MRR@20 with reviewed qrels.
@@ -57,7 +57,7 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 
 Dependencies: Track 1 and Track 2 have landed in the Postgres baseline. Prefect
 ETL and local Elasticsearch can be implemented separately after agreeing on the
-canonical JSON/SQLite read contract. The embedding first draft contributes only
+   canonical JSON/matrix-artifact contract. The embedding first draft contributes only
 provider-neutral registry/encoder ideas. Model promotion still depends on the
 local ES adapter and reviewed qrels. None of these tracks waits for tissue mapping.
 

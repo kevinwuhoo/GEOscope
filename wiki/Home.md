@@ -65,9 +65,11 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 2. **Normalize** organism→NCBITaxon, sex→PATO, and assay→closed category/detail
    labels today. Tissue→UBERON is the next experiment; disease/cell type and
    hierarchy are v2+.
-3. **Embed** only missing `(GSE, model)` pairs into one canonical local SQLite
-   artifact, then index BM25, dense vectors, filters, and facets in one **local
-   Elasticsearch** container. The same scripts later point at a managed host.
+3. **Embed** the completed canonical JSON record set into one canonical NumPy
+   matrix/ID/metadata directory per model; Gemini corpus embeddings use its
+   lower-cost batch API. Then index BM25, dense vectors, filters, and facets in
+   one **local Elasticsearch** container. The same scripts later point at a
+   managed host.
 4. **Serve** hybrid search + facet counts + get-by-accession as an
    **invite-only remote MCP server**.
 5. The **LLM client** (Claude, etc.) does query understanding, synonym expansion, and — because it's just calling tools — the summary and conversational answers for free.

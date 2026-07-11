@@ -14,7 +14,7 @@ updated: 2026-07-11
 [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 
 These three owners can work in parallel after agreeing on two small interfaces:
-the canonical record schema and the embedding builder/store API. The Prefect
+the canonical record schema and the embedding matrix-artifact contract. The Prefect
 owner parses and orchestrates, the embedding owner encodes and persists vectors,
 and the Elasticsearch owner only loads/searches canonical outputs.
 
@@ -26,7 +26,7 @@ Please own the Prefect SOFT-to-canonical-record ETL pipeline for this repository
 Read these files in order:
 1. wiki/53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan.md
 2. wiki/21-Ingestion-Pipeline.md
-3. wiki/52-Embedding-Bakeoff-Runbook.md only for the embedding integration API
+3. wiki/52-Embedding-Bakeoff-Runbook.md only for the downstream JSON-record handoff
 4. wiki/54-Incremental-Corpus-Future-State.md only to understand what is
    explicitly deferred
 
@@ -55,22 +55,10 @@ use Prefect Cloud, add production scheduling, or make the local Prefect server a
 hard requirement. The flow must also run directly as a normal CLI. The local
 server/UI is optional observability.
 
-The completed flow calls this exact embedding-owner interface after all parse
-futures resolve:
-
-build_missing_embeddings(
-    records_root: Path,
-    store_path: Path,
-    model_key: str,
-    *,
-    replace_gses: AbstractSet[str],
-    allow_paid_gemini: bool,
-) -> EmbeddingBuildResult
-
-Pass the GSEs created during this run as replace_gses so explicitly deleted and
-rebuilt records receive replacement vectors. While the embedding branch is not
-landed, test this call with a fake and keep orchestration independent of encoder
-internals. Do not implement the real embedding store or model adapters yourself.
+The ETL flow ends after atomically writing canonical JSON records and its latest
+run report. Do not invoke embedding code from Prefect in this prototype. The
+embedding coworker will independently read the completed JSON record tree after
+this flow has produced the desired corpus.
 
 Do not implement Elasticsearch code, snapshots, content hashes, vector delta
 shards, source update detection, or versioned artifacts. Those belong to other
@@ -79,19 +67,18 @@ or future work.
 Before handoff report:
 - commits and files changed
 - exact focused/full test results
-- record schema and SQLite schema
+- canonical record schema
 - discovered/skipped/created/failed record counts
-- proof that created GSEs are passed to the embedding integration as replace_gses
 - second-run proof showing zero source parsing for completed work
 - one-record deletion/rebuild proof
 - remaining blockers or deviations
 ```
 
-## Prompt B — canonical embedding store and model execution
+## Prompt B — canonical embedding artifacts and model execution
 
 ```text
-Please own canonical embedding persistence and model execution for this
-repository.
+Please own the code that builds canonical embedding artifacts from the JSON
+records produced by coworker #1.
 
 Read these files in order:
 1. wiki/52-Embedding-Bakeoff-Runbook.md
@@ -107,70 +94,98 @@ Prefect owner; do not independently overwrite their dependency changes.
 
 Own these modules and their tests:
 - src/geo_index/embedding_registry.py
-- src/geo_index/embedding_store.py
+- src/geo_index/embedding_artifacts.py
 - src/geo_index/embedding_local.py
 - src/geo_index/embedding_gemini.py
-- src/geo_index/embed_missing.py
+- src/geo_index/build_embedding_artifact.py
 - src/geo_index/adopt_embeddings.py
 
-Persist all new vectors in one canonical local file:
+Write the code now, using synthetic JSON fixtures and fake encoders. Do not wait
+for the real canonical JSON record tree to finish before implementing and
+testing it. Run full real-model builds only after coworker #1 has produced the
+desired JSON record set under:
 
-data/processed/series_embeddings.sqlite
+data/processed/series_records/<GSE bucket>/<GSE>.json
 
-Implement the exact schema and validation in wiki/53. There is one canonical
-model configuration per model_key and one row per (gse, model_key). Existing
-rows are skipped. GSEs passed in replace_gses are recomputed and replaced even
-when a row already exists. Registry configuration mismatches fail explicitly;
-do not retain multiple revisions or silently mix them under one key.
+Produce one canonical directory per model:
+
+data/processed/embedding_artifacts/<model_key>/
+  vectors.npy
+  ids.json
+  metadata.json
 
 Expose this exact Prefect-neutral function:
 
-build_missing_embeddings(
+build_embedding_artifact(
     records_root: Path,
-    store_path: Path,
+    output_root: Path,
     model_key: str,
     *,
-    replace_gses: AbstractSet[str],
     allow_paid_gemini: bool,
 ) -> EmbeddingBuildResult
 
-Do not import Prefect or Elasticsearch in embedding modules. Read canonical GSE
-JSON records, keep one local encoder instance alive for all batches of a model,
-write little-endian finite float32 vectors in bounded SQLite transactions, and
-leave successfully completed rows reusable after a partial failure.
+Do not import Prefect or Elasticsearch. Enumerate canonical GSE JSON records in
+stable numeric-GSE order, keep one local encoder instance alive for all batches,
+and write a finite float32 matrix with an exactly aligned ordered ID list.
+
+Build in a temporary sibling directory. Publish the final model directory only
+after matrix shape, dimension, finite-value, ID alignment, and metadata
+validation succeed. If a valid final artifact already exists, skip the entire
+model and perform zero encoder/API calls. Do not append new GSEs to an existing
+matrix in this prototype; explicitly delete and rebuild that model artifact if
+the canonical record inventory changes.
 
 Implement the fixed BGE, MedCPT, Qwen, and Gemini variants from wiki/52. Gemini
 uses full 3,072 dimensions and must require both allow_paid_gemini=True and
-GEMINI_API_KEY before any network request. Print and record a missing-row token
-and cost estimate before submission. Preserve provider job IDs, retry only
-failed/missing GSEs, and validate response identity before writing rows.
+GEMINI_API_KEY before any network request.
 
-Preserve the existing BGE and PubMedBERT NPY/ID files. Import the aligned BGE
-matrix into SQLite without recomputation or deletion. Do not call the old
-PubMedBERT artifact MedCPT; if imported at all, use an honest excluded legacy
-key.
+Gemini document embeddings MUST use the Google batch API to receive batch
+pricing. Do not send one synchronous embedding request per GSE. The Gemini
+workflow must:
 
-Unit tests must use fake encoders and a temporary SQLite file. They must prove:
-- primary-key idempotence and missing-row discovery
-- replace_gses replacement behavior
-- registry mismatch rejection
-- dimension, BLOB-length, and finite-value validation
-- partial failure/resume behavior
+1. enumerate the sorted canonical JSON records;
+2. generate deterministic batch-request JSONL using the frozen document wrapper;
+3. print and record the estimated token count and batch cost;
+4. require explicit paid-run approval before submission;
+5. submit batch jobs and persist all provider file/job IDs in temporary state;
+6. poll and resume existing jobs without resubmitting successful work;
+7. download results and validate every response-to-GSE identity;
+8. assemble the full 3,072-dimensional vectors.npy in ids.json order;
+9. record actual usage, truncation, job IDs, SDK/API version, and cost estimate
+   in metadata.json;
+10. atomically publish the final artifact only after complete validation.
+
+Synchronous Gemini embedding calls are reserved for the small live query set
+after model selection, not corpus document generation.
+
+Preserve the existing BGE and PubMedBERT NPY/ID files. Adopt the aligned BGE
+matrix by copying it into the canonical BGE artifact directory without
+recomputation or deletion. Do not call the old PubMedBERT artifact MedCPT; if
+adopted at all, use an honest excluded legacy key.
+
+Unit tests must use synthetic canonical JSON and fake encoders. They must prove:
+- stable numeric-GSE ordering and exact ID/matrix alignment
+- valid-existing-artifact skip behavior
+- dimension, row-count, and finite-value validation
+- partial failure leaves no published final directory
+- temporary Gemini state resumes without duplicate submission
 - paid Gemini guard before network I/O
+- Gemini uses batch submission rather than per-document synchronous calls
 - legacy BGE alignment/import without modifying source files
 
 Do not implement Prefect orchestration, SOFT parsing, Elasticsearch loading,
-snapshot directories, versioned matrices, or content-hash delta storage.
+SQLite storage, snapshot directories, versioned matrices, or content-hash delta
+storage.
 
 Before handoff report:
 - commits and files changed
 - exact focused/full test results
-- registry and SQLite schemas
-- inserted/skipped/replaced counts by model
+- registry and canonical artifact schemas
+- matrix shape, ID count, and validation result by model
 - BGE adoption status
 - MedCPT/Qwen/Gemini build status and measured runtime/storage
 - Gemini job IDs, usage, and estimated charge if paid work ran
-- proof that a second call performs zero encoding for completed rows
+- proof that a second call performs zero encoding for a completed artifact
 - remaining blockers or deviations
 ```
 
@@ -206,11 +221,13 @@ safe upserts and never create duplicates.
 
 The loader consumes only:
 - data/processed/series_records/<bucket>/<GSE>.json
-- data/processed/series_embeddings.sqlite
+- data/processed/embedding_artifacts/<model_key>/vectors.npy
+- data/processed/embedding_artifacts/<model_key>/ids.json
+- data/processed/embedding_artifacts/<model_key>/metadata.json
 - the fixed embedding model registry
 
 It must not parse SOFT, import Prefect, download models, call Gemini, mutate the
-SQLite store, or depend on the old NPY matrices directly.
+embedding artifacts, or depend on the old legacy NPY matrices directly.
 
 Implement explicit mappings for BM25 text, exact GSE lookup, normalized keyword
 arrays, dates/numeric fields, and the four dense-vector dimensions. Implement

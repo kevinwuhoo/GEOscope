@@ -109,10 +109,11 @@ for every daily metadata increment.
 The future migration can preserve existing work:
 
 1. Hash the one canonical record tree from [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]].
-2. Hash each record's `embed_text` and register existing SQLite vector rows under
-   their model configuration.
+2. Hash each record's `embed_text` and register rows from the existing canonical
+   model matrix artifacts under their model configuration.
 3. Emit the first snapshot manifest referencing those hashes.
-4. Export each model's SQLite vectors into a base matrix without recomputation.
+4. Adopt each canonical model matrix as the first base matrix without
+   recomputation.
 5. Replace existence-only discovery with source identity/change detection.
 6. Add delta comparison and versioned-index/alias release commands.
 

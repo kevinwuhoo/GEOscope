@@ -48,8 +48,9 @@ The prototype flow:
    `data/processed/series_records/<bucket>/<GSE>.json` exists, without reopening
    its source;
 3. parses only missing outputs and publishes each JSON atomically;
-4. embeds missing `(gse, model_key)` pairs into one local SQLite file;
-5. exposes those canonical artifacts to the separate local Elasticsearch loader.
+4. exposes the completed canonical JSON tree to separate model builders that
+   create one complete NumPy matrix/ID/metadata artifact per model;
+5. exposes records and model artifacts to the separate local Elasticsearch loader.
 
 Deleting one derived record is the explicit v1 invalidation mechanism. The next
 run rebuilds it and replaces that GSE's configured embeddings. This intentionally

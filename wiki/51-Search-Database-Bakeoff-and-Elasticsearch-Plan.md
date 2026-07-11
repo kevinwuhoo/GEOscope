@@ -29,7 +29,7 @@ coordinates with [[52-Embedding-Bakeoff-Runbook]] and [[47-MCP-Server-Plan]]
 
 Use **one local Elasticsearch 9.4.2 container** as the only running
 search/database service for the prototype. Load canonical per-GSE JSON records
-and vectors from the local SQLite embedding store into a fixed `geo-series`
+and vectors from canonical model matrix artifacts into a fixed `geo-series`
 index, using GSE as the Elasticsearch document `_id` so repeated loads are safe
 upserts.
 
@@ -109,7 +109,7 @@ Prefect ETL (existence-based, atomic per-GSE writes)
              |
              +--> data/processed/series_records/<bucket>/<GSE>.json
              |
-             +--> data/processed/series_embeddings.sqlite
+             +--> data/processed/embedding_artifacts/<model_key>/
              |
              v
 local Elasticsearch 9.4.2 index: geo-series
@@ -120,19 +120,20 @@ local Elasticsearch 9.4.2 index: geo-series
 SearchService --> FastMCP --> invited users
 ```
 
-Only Elasticsearch is a live search dependency. The record tree and SQLite
-embedding file are local artifacts, not another online service.
+Only Elasticsearch is a live search dependency. The record tree and NumPy
+embedding artifacts are local files, not another online service.
 
 ## Prototype input contract
 
 The ES loader consumes only:
 
 - canonical JSON files under `data/processed/series_records/`;
-- canonical vector rows in `data/processed/series_embeddings.sqlite`;
+- canonical `vectors.npy`/`ids.json`/`metadata.json` directories under
+  `data/processed/embedding_artifacts/`;
 - a fixed code registry mapping safe model keys to dimensions and ES fields.
 
 It rejects malformed records, unknown model keys, nonfinite vectors, wrong
-dimensions, and SQLite BLOB lengths other than `dimensions * 4`. It does not own
+dimensions, and matrix/ID count mismatches. It does not own
 SOFT parsing or embedding calls. Re-running the loader uses `gse` as `_id` and
 therefore replaces the same document rather than creating a duplicate.
 
@@ -244,7 +245,8 @@ Versioned indices and alias rollback are the future endpoint in
 - [ ] Treat [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]] as a separate
   prerequisite and do not add SOFT parsing, Prefect, or encoder code to the ES
   modules.
-- [ ] Add read-only iterators for canonical JSON records and SQLite vector rows.
+- [ ] Add read-only iterators for canonical JSON records and model matrix/ID
+  artifacts.
 - [ ] Test malformed JSON, missing GSE, unknown model keys, wrong dimensions,
   nonfinite values, and missing embeddings without requiring Elasticsearch.
 - [ ] Keep the Postgres path during parity testing; do not delete it early.

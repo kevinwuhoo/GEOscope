@@ -16,9 +16,9 @@ updated: 2026-07-11
 > cost controls, and the nine-system evaluation on this page remain current.
 > Persistence is simplified by
 > [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]: one canonical record tree
-> and one canonical `series_embeddings.sqlite`, filled only for missing
-> `(gse, model_key)` rows. Do not build snapshot directories, per-run manifests,
-> or versioned matrices now. The richer reuse/version design is deferred to
+> and one complete NumPy matrix/ID/metadata directory per model. Do not build a
+> SQLite vector store, snapshot directories, or versioned matrices now. The
+> richer reuse/version design is deferred to
 > [[54-Incremental-Corpus-Future-State]].
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
@@ -49,7 +49,7 @@ generated.
 
 The `codex/embedding-bakeoff-first-draft` branch contains useful registry,
 encoder, and evaluation ideas. It is PostgreSQL/manifest-oriented and should not
-be merged as-is. Port only provider-neutral pieces into the Prefect/SQLite path.
+be merged as-is. Port only provider-neutral pieces into JSON→matrix builders.
 
 ## Why Gemini is the hosted candidate
 
@@ -81,7 +81,7 @@ small query/evaluation usage. Record the API's returned usage; do not treat this
 estimate as an invoice.
 
 The canonical SOFT record tree may contain more GSEs by submission time. The
-Prefect flow must recompute the estimate from its actual missing-row inventory
+embedding builder must recompute the estimate from its actual JSON record inventory
 before requesting paid-run approval.
 
 Standard synchronous pricing is higher, so use the batch API for document
@@ -162,42 +162,45 @@ Record model ID, API version, wrapper version, output dimension, and returned
 token/truncation usage in the canonical registry and latest-run report. A stable
 hosted model ID is not enough configuration by itself.
 
-## Canonical SQLite contract
+## Canonical matrix-artifact contract
 
-All new embeddings are rows in:
+Each model produces exactly:
 
 ```text
-data/processed/series_embeddings.sqlite
+data/processed/embedding_artifacts/<model_key>/
+  vectors.npy
+  ids.json
+  metadata.json
 ```
 
-`embedding_models` holds one canonical configuration per model key;
-`series_embeddings` holds one float32 vector per `(gse, model_key)`. Existing
-rows are skipped. If a canonical record was deleted and rebuilt during the
-current Prefect run, replace that GSE's configured rows. A model registry
-configuration mismatch is a hard error requiring an explicit delete/rebuild;
-the prototype does not preserve two revisions under one key.
+The builder enumerates completed JSON records in stable GSE order and publishes
+the directory atomically only after all rows validate. A valid existing model
+directory skips the entire model. The prototype does not append new GSEs to an
+existing matrix: after the record inventory changes, explicitly delete and
+rebuild the affected model artifact.
 
 The existing BGE and PubMedBERT `.npy` artifacts remain on disk and are not
-overwritten. Import BGE into SQLite after verifying shape/ID alignment. Do not
+overwritten. Adopt BGE into its canonical directory after verifying shape/ID
+alignment. Do not
 identify the PubMedBERT artifact as MedCPT.
 
 ## Build sequence
 
-### Stage 0 — Port provider-neutral infrastructure into Prefect/SQLite
+### Stage 0 — Port provider-neutral JSON→matrix infrastructure
 
 - [ ] Port/adapt only the registry and encoder concepts from
   `codex/embedding-bakeoff-first-draft` into:
   `src/geo_index/embedding_registry.py`,
-  `src/geo_index/embedding_store.py`, and
-  `src/geo_index/embed_missing.py`.
+  `src/geo_index/embedding_artifacts.py`, and
+  `src/geo_index/build_embedding_artifact.py`.
 - [ ] Separate local and hosted adapters in
   `src/geo_index/embedding_local.py` and
   `src/geo_index/embedding_gemini.py`.
 - [ ] Make registry import lightweight: no PyTorch load, network call, or SDK
   client creation during import.
-- [ ] Test primary-key idempotence, missing-row discovery, replacement of
-  explicitly rebuilt GSEs, wrong dimensions, nonfinite values, provider
-  failures, and retry behavior with fakes.
+- [ ] Test existing-artifact idempotence, stable JSON-record ordering, wrong
+  dimensions, nonfinite values, atomic publication, provider failures, and
+  temporary-build resume behavior with fakes.
 - [ ] Dry-run all commands without a Gemini API key and verify that no paid call
   can occur accidentally.
 
@@ -205,16 +208,17 @@ identify the PubMedBERT artifact as MedCPT.
 
 - [ ] Verify the existing matrix shape (`222,961 × 384`), dtype, finite values,
   ordered GSE alignment, and exact document composition.
-- [ ] Import aligned BGE rows into canonical SQLite storage without changing the
-  original files. If the original model revision cannot be proven, mark it
-  unknown rather than inventing it.
+- [ ] Copy the aligned BGE matrix/IDs into the canonical BGE artifact directory
+  without changing the original files. If the original model revision cannot be
+  proven, mark it unknown rather than inventing it.
 - [ ] If ordered alignment cannot be proven, rebuild BGE instead of adopting it.
 
 ### Stage 2 — Generate MedCPT
 
 - [ ] Pin both article and query encoder revisions.
 - [ ] Encode title/body pairs with the published pooling/token policy.
-- [ ] Fill only missing 768-dimensional float32 SQLite rows in bounded commits.
+- [ ] Build one complete 768-dimensional float32 matrix from canonical JSON
+  records and publish it atomically.
 - [ ] Smoke-test query/document compatibility before the full run.
 - [ ] Do not relabel the old PubMedBERT matrix as MedCPT.
 
@@ -223,12 +227,13 @@ identify the PubMedBERT artifact as MedCPT.
 - [ ] Pin Qwen3 Embedding 0.6B to a resolved commit.
 - [ ] Use the full 1,024-dimensional output; no document prompt and the frozen
   published query prompt.
-- [ ] Fill only missing 1,024-dimensional float32 SQLite rows in bounded commits.
+- [ ] Build one complete 1,024-dimensional float32 matrix from canonical JSON
+  records and publish it atomically.
 - [ ] Record actual max sequence length, truncation, runtime, and peak memory.
 
 ### Stage 4 — Submit and assemble Gemini batch embeddings
 
-- [ ] Require `GEMINI_API_KEY`, an explicit paid-run flag, expected missing-row
+- [ ] Require `GEMINI_API_KEY`, an explicit paid-run flag, expected JSON-record
   count, and a printed token/cost estimate.
 - [ ] Build deterministic JSONL batch requests containing stable row/GSE IDs,
   the document wrapper, model ID, and `output_dimensionality=3072`.
@@ -236,20 +241,24 @@ identify the PubMedBERT artifact as MedCPT.
   job IDs to the latest-run report before polling.
 - [ ] Submit through the current official Google GenAI SDK/batch API; record every
   provider job and file identifier.
+- [ ] Do not issue one synchronous embedding request per document. Synchronous
+  Gemini calls are reserved for the small live query set after model selection.
 - [ ] Poll/resume without resubmitting successful jobs. Retain provider errors by
   row ID and retry only failed/missing rows.
 - [ ] Download results, validate response-to-GSE identity, normalize only if the
-  chosen cosine pipeline requires it, and insert canonical SQLite rows.
+  chosen cosine pipeline requires it, assemble `vectors.npy` in `ids.json`
+  order, and atomically publish the final artifact directory.
 - [ ] Verify 3,072 dimensions, finite values, expected coverage, actual token
   usage, and actual charge estimate.
 
 ### Stage 5 — Load the one local Elasticsearch index
 
-- [ ] Load canonical records and all available vector rows into local
+- [ ] Load canonical records and all available model artifacts into local
   `geo-series` using [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]].
 - [ ] Use explicit quality-first vector mappings; for Gemini start with
   `int8_hnsw` and retain Elasticsearch's original float vectors for rescoring.
-- [ ] Reject wrong-dimensional/nonfinite rows and report coverage per model.
+- [ ] Reject wrong-dimensional/nonfinite artifacts and report joined ID coverage
+  per model.
 - [ ] Validate vector-field coverage and exact query embeddings for each variant
   before running the nine-system evaluation.
 
@@ -314,7 +323,7 @@ provenance. Never silently label a BM25-only response as hybrid.
 
 - One canonical model registry defines all four document/query pipelines.
 - BGE adoption is evidence-based or it is rebuilt.
-- MedCPT, Qwen, and Gemini SQLite rows have recorded coverage and correct
+- MedCPT, Qwen, and Gemini matrix artifacts have recorded coverage and correct
   dimensions.
 - Gemini's actual usage, truncation, batch IDs, and estimated charge are recorded.
 - The local `geo-series` index contains all four searchable vector fields for
