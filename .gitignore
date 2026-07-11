@@ -10,6 +10,7 @@ __pycache__/
 
 # Env / secrets
 .env
+.env.elasticsearch
 
 # Obsidian — share vault config, but not per-machine workspace state
 .obsidian/workspace.json
