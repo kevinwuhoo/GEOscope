@@ -58,8 +58,8 @@ def _resolved_revision(model_id: str) -> str:
     return revision
 
 
-def _count_truncations(tokenizer, inputs: Sequence[object], max_length: int) -> int:
-    count = 0
+def _token_lengths(tokenizer, inputs: Sequence[object]) -> list[int]:
+    lengths: list[int] = []
     for batch in _chunks(inputs, 256):
         encoded = tokenizer(
             list(batch),
@@ -68,11 +68,15 @@ def _count_truncations(tokenizer, inputs: Sequence[object], max_length: int) -> 
             truncation=False,
             return_length=True,
         )
-        lengths = encoded.get("length")
-        if lengths is None:
-            lengths = [len(input_ids) for input_ids in encoded["input_ids"]]
-        count += sum(int(length) > max_length for length in lengths)
-    return count
+        batch_lengths = encoded.get("length")
+        if batch_lengths is None:
+            batch_lengths = [len(input_ids) for input_ids in encoded["input_ids"]]
+        lengths.extend(int(length) for length in batch_lengths)
+    return lengths
+
+
+def _count_truncations(tokenizer, inputs: Sequence[object], max_length: int) -> int:
+    return sum(length > max_length for length in _token_lengths(tokenizer, inputs))
 
 
 class _SentenceTransformerEncoder:
@@ -101,28 +105,70 @@ class _SentenceTransformerEncoder:
         batch_size: int,
     ) -> LocalProviderResult:
         texts = [record.embed_text for record in records]
-        truncation_count = _count_truncations(
-            self.tokenizer,
-            texts,
-            self.variant.max_length,
+        token_lengths = _token_lengths(self.tokenizer, texts)
+        truncation_count = sum(
+            length > self.variant.max_length for length in token_lengths
         )
-        vectors = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=True,
-        )
+        batch_count: int
+        batch_policy: dict[str, int] | None = None
+        if self.variant.model_key.startswith("qwen3_"):
+            policies = (
+                (512, batch_size),
+                (2048, min(batch_size, 4)),
+                (self.variant.max_length, 1),
+            )
+            grouped_indices: list[list[int]] = [[] for _ in policies]
+            for index, length in enumerate(token_lengths):
+                for bucket, (maximum, _) in enumerate(policies):
+                    if length <= maximum or bucket == len(policies) - 1:
+                        grouped_indices[bucket].append(index)
+                        break
+            vectors = np.empty(
+                (len(records), self.variant.dimensions),
+                dtype=np.float32,
+            )
+            batch_count = 0
+            for bucket in reversed(range(len(policies))):
+                indices = grouped_indices[bucket]
+                policy_batch_size = policies[bucket][1]
+                if not indices:
+                    continue
+                encoded = self.model.encode(
+                    [texts[index] for index in indices],
+                    batch_size=policy_batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=True,
+                )
+                vectors[indices] = np.asarray(encoded, dtype=np.float32)
+                batch_count += math.ceil(len(indices) / policy_batch_size)
+            batch_policy = {
+                "max_512_tokens": policies[0][1],
+                "max_2048_tokens": policies[1][1],
+                f"max_{self.variant.max_length}_tokens": policies[2][1],
+            }
+        else:
+            vectors = self.model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=True,
+            )
+            batch_count = math.ceil(len(records) / batch_size)
+        usage: dict[str, object] = {
+            "device": self.device,
+            "batch_size": batch_size,
+            "batch_count": batch_count,
+        }
+        if batch_policy is not None:
+            usage["batch_policy"] = batch_policy
         return LocalProviderResult(
             vectors=np.asarray(vectors, dtype=np.float32),
             model_revision=self.revision,
             sdk_version=f"sentence-transformers/{version('sentence-transformers')}",
             truncation_count=truncation_count,
-            usage={
-                "device": self.device,
-                "batch_size": batch_size,
-                "batch_count": math.ceil(len(records) / batch_size),
-            },
+            usage=usage,
         )
 
 

@@ -59,7 +59,7 @@ _VARIANTS = {
             "answer the query\nQuery: {query}"
         ),
         normalization="l2",
-        max_length=32768,
+        max_length=8192,
         pooling="last-token",
         default_batch_size=16,
     ),
