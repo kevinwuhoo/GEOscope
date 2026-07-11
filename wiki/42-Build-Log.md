@@ -11,6 +11,101 @@ created: 2026-07-08
 A running record of what we've actually built, what we tried, and what the data
 told us — so assumptions in the design notes get corrected by evidence.
 
+## Status — 2026-07-11 (canonical SOFT records and embedding artifacts)
+
+Tasks 1–7 from [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]] are
+implemented on `prefect-soft-canonical-embeddings`. The canonical corpus was
+frozen at **249,736 GSE records** for the embedding bakeoff. No Elasticsearch
+code was added.
+
+### Canonical SOFT ETL
+
+`geo-soft-etl` streams metadata-only family SOFT, preserves complete repeated
+series/platform/sample attribute maps, computes deterministic GSE aggregates,
+applies the existing organism/sex/assay normalizers, and atomically publishes
+one JSON object per GSE. `embed_text` contains only raw narrative and aggregate
+fields; normalized-label injection remains a separate experiment.
+
+The full materialization was completed in three growth-aware passes:
+
+| Pass | Discovered | Skipped | Created | Failed | Parse batches |
+|---|---:|---:|---:|---:|---:|
+| Initial full run | 248,748 | 0 | 248,748 | 0 | 995 |
+| Catch-up | 249,543 | 248,748 | 795 | 0 | 4 |
+| Final frozen snapshot | 249,736 | 249,543 | 193 | 0 | 1 |
+
+The initial full run took 1,334.622 seconds (186.4 records/second) with about
+3.29 GB maximum RSS. The flow passed all **248,748** GSEs created in that run as
+`replace_gses` to the embedding-owner interface. The final catch-up passed
+exactly its **193** newly created GSEs.
+
+Existence-only behavior was separately proved on a fixed 500-input slice:
+
+- initial run: 498 created and 2 failed in about 1.82 seconds (about 274 created
+  records/second, about 247 MB maximum RSS); the failures exposed retained
+  series-table syntax and published no final records;
+- after the parser fix, a resume skipped 498 and created the remaining 2 in
+  0.038 seconds with no failures;
+- immediate second run: 500 skipped, 0 created, 0 parse batches;
+- the second run replaced `gzip.open` with an assertion, proving completed
+  destinations did not cause a source read;
+- the embedding facade's empty-replacement path was tested with canonical
+  inventory loading forbidden, proving a valid completed run does not open its
+  canonical JSON outputs either;
+- deleting only `GSE1124.json` caused exactly one source parse and one rebuild,
+  with `replace_gses == {"GSE1124"}`;
+- malformed-input tests leave neither a final record nor a temporary file.
+
+The fixed slice's 500 canonical JSON files total 69,611,844 bytes: 139,223.688
+bytes mean, 56,443 median, 5,087 minimum, and 5,284,885 maximum.
+
+The Prefect 3 flow submits bounded parse batches to a
+`ThreadPoolTaskRunner`, resolves every future, and then calls the exact
+`build_missing_embeddings(...)` owner interface. Direct CLI runs use Prefect's
+temporary local server automatically; a persistent server or Cloud account is
+not required.
+
+### Canonical embedding artifacts
+
+Each model writes an atomic directory containing `vectors.npy` (finite,
+C-contiguous float32), numeric-GSE-sorted `ids.json`, and revision/runtime/
+truncation metadata. The frozen record count and row order are shared across
+models.
+
+| Model key | Rows | Dimensions | Build runtime | Truncated records | Result |
+|---|---:|---:|---:|---:|---|
+| `bge_small_v15` | 249,736 | 384 | 1,714.988 s | 73,465 | complete |
+| `medcpt_v1` | 249,736 | 768 | 5,829.511 s | 46,180 | complete |
+| `qwen3_06b_1024_v1` | 249,736 | 1,024 | 27,902.758 s | 767 | complete |
+
+The Qwen build took 27,919.09 seconds wall-clock including process startup and
+cleanup, with 4,989,288,448 bytes maximum RSS. Its 30,003 adaptive batches used
+sizes 16/4/2/1 for the ≤512/≤2,048/≤4,096/≤8,192-token buckets.
+
+All three final artifacts passed the complete finite/dtype/contiguity/schema
+validator. Their `ids.json` files are identical (249,736 rows, `GSE1124`
+through `GSE338020` in numeric order). A second build call for each model used
+an intentionally nonexistent records root and returned `skipped` in
+0.097/0.129/0.158 seconds, proving valid artifacts are checked before canonical
+records are opened.
+
+The pre-existing 222,961-row BGE matrix was also tested through the adoption
+path. Its legacy IDs were internally aligned but not in numeric GSE order, so
+adoption now reorders matrix rows and IDs together in bounded chunks. The
+canonical BGE artifact above was then rebuilt against the larger frozen corpus.
+
+Qwen's first full-corpus attempt at a 32,768-token limit failed with a measured
+Metal out-of-memory error on the longest record. The production registry now
+uses an explicit 8,192-token limit and adaptive token-budget batches; the final
+artifact reports 767 truncated records. This is a deliberate local hardware
+deviation, not silent truncation.
+
+Gemini `gemini-embedding-2` support is implemented as a resumable file-based
+batch pipeline with deterministic keyed JSONL, a pre-submit token/cost estimate,
+an explicit paid-work guard, persisted provider IDs, and aligned result
+assembly. It was **not submitted** because no API key was provided. Tests use a
+fake provider; there is no synchronous paid fallback.
+
 ## Status — 2026-07-10 (normalization and assay hardening)
 
 Track 1 from [[44-Normalization-Tests-and-Assay-Hardening-Plan]] is implemented:
