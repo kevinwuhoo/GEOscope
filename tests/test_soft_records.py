@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import shutil
 from pathlib import Path
 
@@ -287,3 +288,29 @@ def test_duplicate_sample_accessions_are_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(SoftParseError, match="duplicate sample accession GSM1"):
         parse_soft_record(source, soft_root=tmp_path)
+
+
+def test_retained_series_data_table_is_ignored_without_losing_later_metadata(
+    tmp_path: Path,
+) -> None:
+    source = _write_soft(
+        tmp_path / "GSE1_family.soft.gz",
+        "^SERIES = GSE1\n"
+        "!Series_geo_accession = GSE1\n"
+        "!Series_title = table-bearing study\n"
+        "!Series_sample_id = GSM1\n"
+        "!series_table_begin = Comparison values\n"
+        "ID_REF\tlog fold change\n"
+        "probe-1\t2.5\n"
+        "!series_table_end\n"
+        "^SAMPLE = GSM1\n"
+        "!Sample_geo_accession = GSM1\n"
+        "!Sample_title = sample after table\n",
+    )
+
+    record = parse_soft_record(source, soft_root=tmp_path)
+
+    assert record["n_samples"] == 1
+    assert record["samples"][0]["title"] == "sample after table"
+    assert "series_table_begin" not in record["series_attributes"]
+    assert "probe-1" not in json.dumps(record)

@@ -345,10 +345,18 @@ def parse_soft_record(source: Path, *, soft_root: Path) -> dict[str, object]:
     samples: list[tuple[str, AttributeMap]] = []
     current_type: str | None = None
     current_attributes: AttributeMap | None = None
+    in_series_table = False
 
     with gzip.open(source, "rt", encoding="utf-8", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
             line = raw_line.rstrip("\r\n")
+            if in_series_table:
+                if line == "!series_table_end":
+                    in_series_table = False
+                continue
+            if re.fullmatch(r"!series_table_begin(?: = .*)?", line):
+                in_series_table = True
+                continue
             if line.startswith("^"):
                 record_type, separator, accession = line[1:].partition(" = ")
                 if not separator:
