@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -164,6 +165,7 @@ def test_wrong_dimension_leaves_no_published_final_directory(
         )
 
     assert not (output / "bge_small_v15").exists()
+    assert not (output / ".bge_small_v15.tmp").exists()
 
 
 def test_provider_failure_leaves_no_published_final_directory(
@@ -183,6 +185,7 @@ def test_provider_failure_leaves_no_published_final_directory(
         )
 
     assert not (output / "bge_small_v15").exists()
+    assert not (output / ".bge_small_v15.tmp").exists()
 
 
 def test_builder_records_complete_provider_metadata(
@@ -292,7 +295,66 @@ def test_replacement_provider_failure_preserves_previous_valid_artifact(
         )
 
     assert (original.artifact_path / "vectors.npy").read_bytes() == original_vectors
+    assert not (output / ".bge_small_v15.tmp").exists()
     validate_artifact(original.artifact_path, get_variant("bge_small_v15"))
+
+
+def test_builder_recovers_backup_when_replacement_crashed_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    original = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+    backup = output / ".bge_small_v15.backup"
+    original.artifact_path.rename(backup)
+    monkeypatch.setattr(
+        builder,
+        "load_record_inventory",
+        lambda records_root: (_ for _ in ()).throw(
+            AssertionError("canonical inventory opened")
+        ),
+    )
+
+    result = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+
+    assert result.status == "skipped"
+    assert original.artifact_path.exists()
+    assert not backup.exists()
+
+
+def test_builder_removes_stale_backup_after_replacement_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    artifact = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    ).artifact_path
+    backup = output / ".bge_small_v15.backup"
+    shutil.copytree(artifact, backup)
+    monkeypatch.setattr(
+        builder,
+        "load_record_inventory",
+        lambda records_root: (_ for _ in ()).throw(
+            AssertionError("canonical inventory opened")
+        ),
+    )
+
+    result = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    )
+
+    assert result.status == "skipped"
+    assert artifact.exists()
+    assert not backup.exists()
 
 
 def test_result_is_a_frozen_public_value_object() -> None:

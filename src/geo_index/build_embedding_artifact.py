@@ -78,6 +78,22 @@ def _replace_published_artifact(temp_dir: Path, final_dir: Path) -> None:
     shutil.rmtree(backup)
 
 
+def _recover_interrupted_replacement(
+    final_dir: Path,
+    variant: EmbeddingVariant,
+) -> None:
+    """Restore or finish the only two crash states of directory replacement."""
+    backup = final_dir.parent / f".{final_dir.name}.backup"
+    if not backup.exists():
+        return
+    if final_dir.exists():
+        validate_artifact(final_dir, variant)
+        shutil.rmtree(backup)
+        return
+    validate_artifact(backup, variant)
+    os.rename(backup, final_dir)
+
+
 def _build(
     records_root: Path,
     output_root: Path,
@@ -89,6 +105,7 @@ def _build(
     started = time.perf_counter()
     variant = get_variant(model_key)
     final_dir = artifact_dir(output_root, model_key)
+    _recover_interrupted_replacement(final_dir, variant)
     final_exists = final_dir.exists()
     if final_exists:
         existing = validate_artifact(final_dir, variant)
@@ -110,48 +127,53 @@ def _build(
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    provider_started = time.perf_counter()
-    provider = _encode(
-        variant,
-        inventory.records,
-        temp_dir,
-        allow_paid_gemini=allow_paid_gemini,
-    )
-    vectors = np.ascontiguousarray(provider.vectors, dtype=np.float32)
-    np.save(temp_dir / "vectors.npy", vectors, allow_pickle=False)
-    _write_json(temp_dir / "ids.json", list(inventory.ids))
-    duration = time.perf_counter() - started
-    metadata = {
-        "schema_version": 1,
-        "model_key": variant.model_key,
-        "provider": variant.provider,
-        "model_id": variant.document_model_id,
-        "model_revision": provider.model_revision,
-        "dimensions": variant.dimensions,
-        "document_format": variant.document_format,
-        "query_format": variant.query_format,
-        "normalization": variant.normalization,
-        "pooling": variant.pooling,
-        "record_count": len(inventory),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "build_runtime_seconds": duration,
-        "sdk_version": provider.sdk_version,
-        "max_length": variant.max_length,
-        "truncation_count": provider.truncation_count,
-        "usage": {
-            **provider.usage,
-            "provider_runtime_seconds": time.perf_counter() - provider_started,
-        },
-    }
-    _write_json(temp_dir / "metadata.json", metadata)
-    validate_artifact(temp_dir, variant)
+    try:
+        provider_started = time.perf_counter()
+        provider = _encode(
+            variant,
+            inventory.records,
+            temp_dir,
+            allow_paid_gemini=allow_paid_gemini,
+        )
+        vectors = np.ascontiguousarray(provider.vectors, dtype=np.float32)
+        np.save(temp_dir / "vectors.npy", vectors, allow_pickle=False)
+        _write_json(temp_dir / "ids.json", list(inventory.ids))
+        duration = time.perf_counter() - started
+        metadata = {
+            "schema_version": 1,
+            "model_key": variant.model_key,
+            "provider": variant.provider,
+            "model_id": variant.document_model_id,
+            "model_revision": provider.model_revision,
+            "dimensions": variant.dimensions,
+            "document_format": variant.document_format,
+            "query_format": variant.query_format,
+            "normalization": variant.normalization,
+            "pooling": variant.pooling,
+            "record_count": len(inventory),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "build_runtime_seconds": duration,
+            "sdk_version": provider.sdk_version,
+            "max_length": variant.max_length,
+            "truncation_count": provider.truncation_count,
+            "usage": {
+                **provider.usage,
+                "provider_runtime_seconds": time.perf_counter() - provider_started,
+            },
+        }
+        _write_json(temp_dir / "metadata.json", metadata)
+        validate_artifact(temp_dir, variant)
 
-    if final_exists:
-        _replace_published_artifact(temp_dir, final_dir)
-        status = "replaced"
-    else:
-        publish_artifact(temp_dir, final_dir)
-        status = "created"
+        if final_exists:
+            _replace_published_artifact(temp_dir, final_dir)
+            status = "replaced"
+        else:
+            publish_artifact(temp_dir, final_dir)
+            status = "created"
+    except BaseException:
+        if variant.provider != "google":
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
     return EmbeddingBuildResult(
         model_key=model_key,
         status=status,
