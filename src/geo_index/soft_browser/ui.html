@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GEO SOFT browser</title>
+<style>
+  :root { color-scheme: light; --ink:#18212f; --muted:#667085; --line:#d8dee8;
+    --panel:#fff; --side:#f7f9fc; --accent:#2868c7; --active:#e5f0ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:#edf1f7; color:var(--ink);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .app { height:100vh; display:grid; grid-template-columns:minmax(290px,36%) 1fr; }
+  aside { min-width:0; overflow:auto; padding:22px 18px; background:var(--side);
+    border-right:1px solid var(--line); }
+  h1 { margin:0; font-size:18px; letter-spacing:-.2px; }
+  .hint { margin:5px 0 18px; color:var(--muted); font-size:12px; }
+  form { display:grid; gap:10px; }
+  input[type="search"] { width:100%; padding:10px 11px; color:var(--ink); background:#fff;
+    border:1px solid #bcc7d7; border-radius:7px; font:inherit; }
+  input[type="search"]:focus { outline:2px solid #aecaff; border-color:var(--accent); }
+  .toggle { display:flex; align-items:center; gap:7px; color:#445062; cursor:pointer; }
+  input[type="checkbox"] { width:15px; height:15px; accent-color:var(--accent); }
+  button { width:max-content; padding:8px 14px; border:1px solid var(--accent); border-radius:7px;
+    background:var(--accent); color:#fff; font:600 13px/1 inherit; cursor:pointer; }
+  button:hover { background:#1e58ac; } button:disabled { cursor:not-allowed; opacity:.6; }
+  #search-state { min-height:18px; margin:16px 2px 8px; color:var(--muted); font-size:12px; }
+  .result { width:100%; margin:0 0 8px; padding:11px; text-align:left; color:var(--ink);
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+  .result:hover,.result:focus { background:var(--active); border-color:#8bb5ed; }
+  .gse { display:block; margin-bottom:5px; color:#164e98; font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .snippet { display:block; overflow:hidden; color:#536174; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+  main { min-width:0; min-height:0; display:grid; grid-template-rows:auto 1fr; background:#fff; }
+  .viewer-head { display:flex; align-items:center; gap:14px; min-height:65px; padding:14px 20px;
+    border-bottom:1px solid var(--line); }
+  #selected { margin-right:auto; color:var(--muted); font:13px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  iframe { width:100%; height:100%; border:0; background:#fff; }
+  @media (max-width:760px) { .app { height:auto; min-height:100vh; grid-template-columns:1fr; grid-template-rows:auto minmax(70vh,1fr); }
+    aside { border-right:0; border-bottom:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>GEO SOFT browser</h1>
+    <p class="hint">Search compressed family SOFT files with ripgrep.</p>
+    <form id="search-form">
+      <input id="query" type="search" autocomplete="off" placeholder="Find words in SOFT files" autofocus>
+      <label class="toggle"><input id="search-raw" type="checkbox"> Search raw files</label>
+      <button type="submit">Search</button>
+    </form>
+    <div id="search-state"></div>
+    <div id="results" aria-live="polite"></div>
+  </aside>
+  <main>
+    <div class="viewer-head">
+      <span id="selected">Select a GSE to view its metadata SOFT file.</span>
+      <label class="toggle"><input id="show-raw" type="checkbox" disabled> Show original raw file</label>
+    </div>
+    <iframe id="viewer" title="Selected SOFT file"></iframe>
+  </main>
+</div>
+<script>
+const $ = selector => document.querySelector(selector);
+const form = $("#search-form"), query = $("#query"), searchRaw = $("#search-raw");
+const results = $("#results"), state = $("#search-state"), showRaw = $("#show-raw");
+const viewer = $("#viewer"), selected = $("#selected");
+let chosen = "";
+
+function viewerUrl() {
+  return `/api/file?gse=${encodeURIComponent(chosen)}&raw=${showRaw.checked ? "1" : "0"}`;
+}
+
+function openFile(gse) {
+  chosen = gse;
+  showRaw.disabled = false;
+  showRaw.checked = false;
+  selected.textContent = `${gse} — stripped metadata`;
+  viewer.src = viewerUrl();
+}
+
+function render(items) {
+  results.replaceChildren();
+  if (!items.length) { state.textContent = "No matching SOFT files."; return; }
+  state.textContent = `${items.length} matching ${items.length === 1 ? "file" : "files"}`;
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.className = "result"; button.type = "button";
+    const gse = document.createElement("span"); gse.className = "gse"; gse.textContent = item.gse;
+    button.append(gse);
+    for (const text of item.snippets) {
+      const snippet = document.createElement("span"); snippet.className = "snippet"; snippet.textContent = text;
+      button.append(snippet);
+    }
+    button.addEventListener("click", () => openFile(item.gse));
+    results.append(button);
+  }
+}
+
+async function search() {
+  const value = query.value.trim();
+  if (!value) { state.textContent = "Enter words to search."; results.replaceChildren(); return; }
+  state.textContent = "Searching…"; results.replaceChildren();
+  const params = new URLSearchParams({q: value, raw: searchRaw.checked ? "1" : "0"});
+  try {
+    const response = await fetch(`/api/search?${params}`);
+    if (!response.ok) throw new Error(await response.text());
+    render(await response.json());
+  } catch (error) { state.textContent = `Search failed: ${error.message}`; }
+}
+
+form.addEventListener("submit", event => { event.preventDefault(); search(); });
+searchRaw.addEventListener("change", () => { if (query.value.trim()) search(); });
+showRaw.addEventListener("change", () => {
+  if (!chosen) return;
+  selected.textContent = `${chosen} — ${showRaw.checked ? "original raw SOFT" : "stripped metadata"}`;
+  viewer.src = viewerUrl();
+});
+</script>
+</body>
+</html>

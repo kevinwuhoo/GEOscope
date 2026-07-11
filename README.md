@@ -58,6 +58,22 @@ uv run geo-fetch-soft                 # everything in the catalog
 Output: `data/raw/soft/GSE<nnn>nnn/GSE<n>.soft.gz`. Idempotent — existing files
 are skipped; failures are logged to `data/raw/soft/_failures.log` for re-run.
 
+## Browse local SOFT files
+
+Open a lightweight local browser over the downloaded `.soft.gz` files:
+
+```bash
+uv run geo-soft-browser
+```
+
+It listens on [http://127.0.0.1:8001](http://127.0.0.1:8001) by default.
+Searches use stripped metadata under `data/processed/soft_meta`; use the
+left-side **Search raw files** checkbox to search the original files under
+`data/raw/soft`. Selecting a GSE opens its metadata SOFT, and the right-side
+**Show original raw file** checkbox switches the viewer to its full raw family
+file. Pass `--port`, `--raw-dir`, or `--metadata-dir` to use another local
+snapshot.
+
 > **Why not FTP family files / esummary JSON?** The FTP `*_family.soft.gz`
 > bundles the full expression matrix (~9 MB+ per series, TB-scale for the
 > corpus) and 404s for freshly-released series. The esummary JSON omits all

@@ -19,6 +19,7 @@ geo-build-series-docs = "geo_index.build_series_docs:main"
 geo-embed = "geo_index.build_embeddings:main"
 geo-search = "geo_index.search_test:main"
 geo-normalize = "geo_index.normalize:main"
+geo-soft-browser = "geo_index.soft_browser.server:main"
 
 [build-system]
 requires = ["hatchling"]
