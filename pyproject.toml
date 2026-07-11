@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Metadata index + search service over NCBI GEO (v1 spike)"
 requires-python = ">=3.11"
 dependencies = [
+    "google-genai>=2.9.0",
     "httpx>=0.27",
+    "numpy>=2,<3",
     "pgvector>=0.5.0",
+    "prefect>=3,<4",
     "psycopg[binary]>=3.3.4",
     "sentence-transformers>=5.6.0",
 ]
@@ -20,6 +23,7 @@ geo-embed = "geo_index.build_embeddings:main"
 geo-search = "geo_index.search_test:main"
 geo-normalize = "geo_index.normalize:main"
 geo-soft-browser = "geo_index.soft_browser.server:main"
+geo-soft-etl = "geo_index.prefect_etl:main"
 
 [build-system]
 requires = ["hatchling"]
