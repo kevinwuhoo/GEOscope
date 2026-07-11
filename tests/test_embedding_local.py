@@ -49,7 +49,8 @@ def test_qwen_uses_bounded_adaptive_batches_and_restores_record_order() -> None:
     result = encoder.encode(records, batch_size=16)
 
     assert encoder.model.calls == [
-        (["text1", "text3"], 1),
+        (["text3"], 1),
+        (["text1"], 2),
         (["text2"], 4),
         (["text0"], 16),
     ]
@@ -59,6 +60,7 @@ def test_qwen_uses_bounded_adaptive_batches_and_restores_record_order() -> None:
     assert result.usage["batch_policy"] == {
         "max_512_tokens": 16,
         "max_2048_tokens": 4,
+        "max_4096_tokens": 2,
         "max_8192_tokens": 1,
     }
     assert np.isfinite(result.vectors).all()

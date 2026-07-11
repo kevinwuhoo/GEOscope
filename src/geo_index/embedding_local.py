@@ -115,6 +115,7 @@ class _SentenceTransformerEncoder:
             policies = (
                 (512, batch_size),
                 (2048, min(batch_size, 4)),
+                (4096, min(batch_size, 2)),
                 (self.variant.max_length, 1),
             )
             grouped_indices: list[list[int]] = [[] for _ in policies]
@@ -143,9 +144,8 @@ class _SentenceTransformerEncoder:
                 vectors[indices] = np.asarray(encoded, dtype=np.float32)
                 batch_count += math.ceil(len(indices) / policy_batch_size)
             batch_policy = {
-                "max_512_tokens": policies[0][1],
-                "max_2048_tokens": policies[1][1],
-                f"max_{self.variant.max_length}_tokens": policies[2][1],
+                f"max_{maximum}_tokens": policy_batch_size
+                for maximum, policy_batch_size in policies
             }
         else:
             vectors = self.model.encode(
