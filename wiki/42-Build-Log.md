@@ -108,6 +108,13 @@ assembly. It was **not submitted** because no API key was provided. Tests use a
 fake provider and prove completed shards are not resubmitted; there is no
 synchronous embedding or token-count fallback.
 
+A no-key, no-paid-flag preparation over all 249,736 canonical records produced
+250 shards (249×1,000 requests plus 736), totaling 498,458,769 bytes; the largest
+shard was 2,374,577 bytes, below the 100 MiB bound. The conservative estimate
+was at most 471,805,889 tokens / $47.1806, with 2,129 documents preflight-
+truncated. Preparation took 194.83 seconds and 4,984,848,384 bytes maximum RSS,
+then stopped at the authorization guard before client construction.
+
 ## Status — 2026-07-10 (normalization and assay hardening)
 
 Track 1 from [[44-Normalization-Tests-and-Assay-Hardening-Plan]] is implemented:
