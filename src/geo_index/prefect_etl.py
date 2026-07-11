@@ -122,7 +122,7 @@ def geo_soft_etl(
     try:
         embedding_result = build_missing_embeddings(
             records_root,
-            DEFAULT_EMBEDDING_STORE,
+            records_root.parent / "embedding_artifacts",
             DEFAULT_EMBEDDING_MODEL_KEY,
             replace_gses=frozenset(created_gses),
             allow_paid_gemini=False,

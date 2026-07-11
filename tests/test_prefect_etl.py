@@ -145,7 +145,7 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     assert embedding_calls == [
         {
             "records_root": tmp_path / "records",
-            "store_path": prefect_etl.DEFAULT_EMBEDDING_STORE,
+            "store_path": tmp_path / "embedding_artifacts",
             "model_key": "bge_small_v15",
             "replace_gses": frozenset({"GSE2", "GSE20"}),
             "allow_paid_gemini": False,
