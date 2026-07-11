@@ -25,14 +25,14 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 
 ### The design
 - [[20-Architecture-Overview]] — the whole system, end to end
-- [[21-Ingestion-Pipeline]] — chosen bulk snapshot, rebuild order, and deferred top-up path
+- [[21-Ingestion-Pipeline]] — GEOmetadb baseline plus the new stripped-SOFT canonical-record path
 - [[22-Ontology-Normalization]] — field→ontology map, the mapping cascade, RAG vs. IDs
 - [[23-Search-and-Retrieval]] — hybrid retrieval, query expansion, reranking
 - [[24-Faceted-Search]] — facet model, ontology-backed hierarchical facets
 - [[25-Embeddings-and-Cost]] — model options, measured runtime/storage, and the eval plan
 - [[28-Embedding-Granularity]] — per-field vs whole-document embedding (field→mechanism routing)
 - [[26-Datastore-Postgres]] — implemented pgvector + ParadeDB baseline (historical deployment choice)
-- [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — database bakeoff and the new managed Elasticsearch-only plan
+- [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — database bakeoff and the local-first Elasticsearch-only plan
 - [[27-MCP-Interface]] — the MCP server, its tools, and "the LLM is the RAG loop"
 
 ### Context & execution
@@ -50,20 +50,24 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[50-Coworker-Handoff-Prompts]] — copy-ready prompts for the remote MCP and embedding owners
 - [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — Postgres/Qdrant/Elastic bakeoff notes and migration plan
 - [[52-Embedding-Bakeoff-Runbook]] — BGE/MedCPT/Qwen/Gemini build, load, evaluation, and promotion runbook
+- [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]] — current simple plan: missing SOFT→record→embedding exactly once
+- [[54-Incremental-Corpus-Future-State]] — deferred content-hash, snapshot, vector-delta, and alias endpoint
+- [[55-Prefect-and-Local-Elasticsearch-Coworker-Prompts]] — current copy-ready ETL/embedding and local-ES handoffs
 - [[90-Glossary]] — every acronym in one place
 - [[99-Sources]] — all citations
 
 ## The 30-second version
 
-1. **Ingest** the chosen 222,961-series GEOmetadb snapshot; retain metadata-only
-   SOFT tooling for a later post-2024 top-up.
+1. **Ingest** stripped family SOFT with a local Prefect flow. One canonical JSON
+   record per GSE is complete when it exists; later runs process only missing or
+   explicitly deleted outputs. The 222,961-series GEOmetadb corpus remains the
+   measured baseline during migration.
 2. **Normalize** organism→NCBITaxon, sex→PATO, and assay→closed category/detail
    labels today. Tissue→UBERON is the next experiment; disease/cell type and
    hierarchy are v2+.
-3. **Embed** the frozen narrative document with the bakeoff variants and index
-   BM25, dense vectors, filters, and facets in **one managed Elasticsearch**
-   deployment. Versioned JSONL/vector manifests are rebuild artifacts, not a
-   second online database.
+3. **Embed** only missing `(GSE, model)` pairs into one canonical local SQLite
+   artifact, then index BM25, dense vectors, filters, and facets in one **local
+   Elasticsearch** container. The same scripts later point at a managed host.
 4. **Serve** hybrid search + facet counts + get-by-accession as an
    **invite-only remote MCP server**.
 5. The **LLM client** (Claude, etc.) does query understanding, synonym expansion, and — because it's just calling tools — the summary and conversational answers for free.

@@ -14,6 +14,14 @@ the chosen source is the 222,961-GSE GEOmetadb snapshot already materialized as
 `data/processed/geo_series.jsonl`. A metadata-only top-up from its 2024-02-29
 cutoff to current GEO is a later freshness release.
 
+> **Pipeline update (2026-07-11):** The GEOmetadb JSONL remains the implemented
+> search/embedding baseline. The new current ingestion task uses the much larger
+> downloaded stripped-family-SOFT collection directly and writes one canonical
+> JSON record per GSE through Prefect. See
+> [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]. The prototype keeps one
+> canonical version and uses output existence as completion; daily manifests and
+> source-change detection are deferred to [[54-Incremental-Corpus-Future-State]].
+
 ## Current v1 path
 
 1. Read `data/external/GEOmetadb.sqlite`.
@@ -26,6 +34,26 @@ cutoff to current GEO is a later freshness release.
 
 This decision and its measured source tradeoff are recorded in
 [[42-Build-Log#What we tried (and what we chose)]].
+
+## Current SOFT → canonical-record path
+
+The crawler and table stripper already produce metadata-only family SOFT files
+under `data/processed/soft_meta/`. At the 2026-07-11 checkpoint there were
+244,186 such files (about 1.6 GB), enough to start ETL before the crawl finishes.
+
+The prototype flow:
+
+1. inventories stripped SOFT files once per run;
+2. skips any GSE whose canonical
+   `data/processed/series_records/<bucket>/<GSE>.json` exists, without reopening
+   its source;
+3. parses only missing outputs and publishes each JSON atomically;
+4. embeds missing `(gse, model_key)` pairs into one local SQLite file;
+5. exposes those canonical artifacts to the separate local Elasticsearch loader.
+
+Deleting one derived record is the explicit v1 invalidation mechanism. The next
+run rebuilds it and replaces that GSE's configured embeddings. This intentionally
+does not detect an updated upstream SOFT file automatically.
 
 ## Deferred living-corpus path (v2+)
 

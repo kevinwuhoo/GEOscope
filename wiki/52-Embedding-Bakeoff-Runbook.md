@@ -3,7 +3,7 @@ title: Embedding Bake-off Runbook
 tags: [embeddings, gemini, medcpt, qwen, bge, elasticsearch, evaluation, plan, v1]
 status: approved-plan
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 
 # 52 · Embedding Bake-off Runbook
@@ -11,6 +11,15 @@ updated: 2026-07-10
 ← [[Home]] · replaces the active execution plan in
 [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] · uses
 [[46-Retrieval-Evaluation-Plan]] and [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
+
+> **Prototype storage update (2026-07-11):** Model choices, prompts, dimensions,
+> cost controls, and the nine-system evaluation on this page remain current.
+> Persistence is simplified by
+> [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]: one canonical record tree
+> and one canonical `series_embeddings.sqlite`, filled only for missing
+> `(gse, model_key)` rows. Do not build snapshot directories, per-run manifests,
+> or versioned matrices now. The richer reuse/version design is deferred to
+> [[54-Incremental-Corpus-Future-State]].
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` or
@@ -38,10 +47,9 @@ old `embeddings_pubmedbert.npy` is not accepted as MedCPT because it lacks the
 required model and input provenance. MedCPT, Qwen, and Gemini still need to be
 generated.
 
-The `codex/embedding-bakeoff-first-draft` branch contains a useful first draft of
-the registry, artifact integrity, and evaluation seam. It is PostgreSQL-specific
-and should not be merged as-is. Port the provider-neutral pieces and replace its
-database-column loader with the Elasticsearch build described here.
+The `codex/embedding-bakeoff-first-draft` branch contains useful registry,
+encoder, and evaluation ideas. It is PostgreSQL/manifest-oriented and should not
+be merged as-is. Port only provider-neutral pieces into the Prefect/SQLite path.
 
 ## Why Gemini is the hosted candidate
 
@@ -65,12 +73,16 @@ that it will win on GEO.
 
 ## Cost expectation
 
-The frozen corpus contains 222,961 documents, approximately 569 million
-characters and 79.7 million whitespace-delimited words. A conservative planning
+The existing GEOmetadb baseline contains 222,961 documents, approximately 569
+million characters and 79.7 million whitespace-delimited words. A conservative planning
 range is roughly 105–150 million input tokens. At the documented Gemini batch
 rate of $0.10 per million tokens, the corpus job should be about **$10–15**, plus
 small query/evaluation usage. Record the API's returned usage; do not treat this
 estimate as an invoice.
+
+The canonical SOFT record tree may contain more GSEs by submission time. The
+Prefect flow must recompute the estimate from its actual missing-row inventory
+before requesting paid-run approval.
 
 Standard synchronous pricing is higher, so use the batch API for document
 embeddings and synchronous calls for the small fixed query set. Paid-tier Gemini
@@ -99,17 +111,23 @@ filters, candidate depths, RRF profile, and final tie policy. The query and
 document formatting may differ only where the model's published retrieval
 contract requires it.
 
-## Frozen corpus and document contract
+## Canonical corpus and document contract
 
-Before generating another vector, freeze and record:
+The prototype does not create dated corpus snapshots. Each model reads the one
+canonical record tree. For a fair official comparison, the evaluator records
+the sorted GSE intersection having all four model rows at the moment the run is
+created; new records processed later are excluded from that recorded evaluation
+run rather than forcing existing vectors to be recomputed.
 
-- source JSONL SHA-256;
-- ordered-GSE SHA-256 and row count (`222,961` for the current snapshot);
-- document-template version;
-- normalization/enrichment version;
+Before generating another vector, fix in code and record in the canonical model
+registry:
+
+- document-schema and `embed_text` template version;
 - exact included fields and separators;
 - empty/missing-field behavior;
-- maximum input/truncation behavior for each model.
+- maximum input/truncation behavior for each model;
+- model/provider ID, revision where available, wrapper, dimension, and
+  normalization policy.
 
 Use one GSE-level narrative document per row. Do not inject new normalized labels
 into only some model inputs. If normalized-label injection is worth testing, run
@@ -140,53 +158,46 @@ document: title: {title} | text: {content}
 query:    task: search result | query: {content}
 ```
 
-Record model ID, API version, build timestamp, wrapper version, output dimension,
-input hashes, and returned token/truncation usage. A stable hosted model ID is not
-enough provenance by itself.
+Record model ID, API version, wrapper version, output dimension, and returned
+token/truncation usage in the canonical registry and latest-run report. A stable
+hosted model ID is not enough configuration by itself.
 
-## Artifact and manifest contract
+## Canonical SQLite contract
 
-Each model build produces:
+All new embeddings are rows in:
 
 ```text
-data/embeddings/<variant>/
-  vectors.f32.npy
-  ordered_gse.txt
-  manifest.json
-  build_state.json       # only while incomplete
-  failures.jsonl         # only if any rows need retry
+data/processed/series_embeddings.sqlite
 ```
 
-The finalized manifest includes:
+`embedding_models` holds one canonical configuration per model key;
+`series_embeddings` holds one float32 vector per `(gse, model_key)`. Existing
+rows are skipped. If a canonical record was deleted and rebuilt during the
+current Prefect run, replace that GSE's configured rows. A model registry
+configuration mismatch is a hard error requiring an explicit delete/rebuild;
+the prototype does not preserve two revisions under one key.
 
-- variant key, model/provider ID, resolved local revision where applicable;
-- SDK/API version and embedding wrapper/prompt version;
-- dimension, dtype, normalization policy, pooling, token limits;
-- corpus SHA, ordered-GSE SHA, document-template version, row count;
-- vector file SHA and nonfinite-vector count;
-- batch/request identifiers and returned usage for hosted builds;
-- started/completed timestamps and build code revision.
-
-Finalize atomically only after every row is present, ordered, finite, and the
-correct dimension. The loader accepts finalized manifests only. Never infer
-readiness from a file merely existing.
+The existing BGE and PubMedBERT `.npy` artifacts remain on disk and are not
+overwritten. Import BGE into SQLite after verifying shape/ID alignment. Do not
+identify the PubMedBERT artifact as MedCPT.
 
 ## Build sequence
 
-### Stage 0 — Port provider-neutral infrastructure
+### Stage 0 — Port provider-neutral infrastructure into Prefect/SQLite
 
-- [ ] Port/adapt the registry and artifact-integrity concepts from
+- [ ] Port/adapt only the registry and encoder concepts from
   `codex/embedding-bakeoff-first-draft` into:
   `src/geo_index/embedding_registry.py`,
-  `src/geo_index/embedding_artifacts.py`, and
-  `src/geo_index/build_embeddings.py`.
+  `src/geo_index/embedding_store.py`, and
+  `src/geo_index/embed_missing.py`.
 - [ ] Separate local and hosted adapters in
   `src/geo_index/embedding_local.py` and
   `src/geo_index/embedding_gemini.py`.
 - [ ] Make registry import lightweight: no PyTorch load, network call, or SDK
   client creation during import.
-- [ ] Test hash identity, atomic finalization, resume, wrong dimensions,
-  nonfinite values, provider failures, and retry ordering with fakes.
+- [ ] Test primary-key idempotence, missing-row discovery, replacement of
+  explicitly rebuilt GSEs, wrong dimensions, nonfinite values, provider
+  failures, and retry behavior with fakes.
 - [ ] Dry-run all commands without a Gemini API key and verify that no paid call
   can occur accidentally.
 
@@ -194,15 +205,16 @@ readiness from a file merely existing.
 
 - [ ] Verify the existing matrix shape (`222,961 × 384`), dtype, finite values,
   ordered GSE alignment, and exact document composition.
-- [ ] Create an honest adoption manifest. If the original model revision or
-  input provenance cannot be proven, mark it unknown rather than inventing it.
+- [ ] Import aligned BGE rows into canonical SQLite storage without changing the
+  original files. If the original model revision cannot be proven, mark it
+  unknown rather than inventing it.
 - [ ] If ordered alignment cannot be proven, rebuild BGE instead of adopting it.
 
 ### Stage 2 — Generate MedCPT
 
 - [ ] Pin both article and query encoder revisions.
 - [ ] Encode title/body pairs with the published pooling/token policy.
-- [ ] Persist a resumable 768-dimensional float32 matrix and final manifest.
+- [ ] Fill only missing 768-dimensional float32 SQLite rows in bounded commits.
 - [ ] Smoke-test query/document compatibility before the full run.
 - [ ] Do not relabel the old PubMedBERT matrix as MedCPT.
 
@@ -211,37 +223,35 @@ readiness from a file merely existing.
 - [ ] Pin Qwen3 Embedding 0.6B to a resolved commit.
 - [ ] Use the full 1,024-dimensional output; no document prompt and the frozen
   published query prompt.
-- [ ] Persist a resumable float32 matrix and final manifest.
+- [ ] Fill only missing 1,024-dimensional float32 SQLite rows in bounded commits.
 - [ ] Record actual max sequence length, truncation, runtime, and peak memory.
 
 ### Stage 4 — Submit and assemble Gemini batch embeddings
 
-- [ ] Require `GEMINI_API_KEY`, an explicit paid-run flag, expected input SHA,
-  expected row count, output directory, and a printed token/cost estimate.
+- [ ] Require `GEMINI_API_KEY`, an explicit paid-run flag, expected missing-row
+  count, and a printed token/cost estimate.
 - [ ] Build deterministic JSONL batch requests containing stable row/GSE IDs,
   the document wrapper, model ID, and `output_dimensionality=3072`.
-- [ ] Split files/jobs only at deterministic row boundaries and write a submission
-  manifest before upload.
+- [ ] Split files/jobs only at deterministic GSE boundaries and write provider
+  job IDs to the latest-run report before polling.
 - [ ] Submit through the current official Google GenAI SDK/batch API; record every
   provider job and file identifier.
 - [ ] Poll/resume without resubmitting successful jobs. Retain provider errors by
   row ID and retry only failed/missing rows.
-- [ ] Download results, validate response-to-row identity, assemble in frozen GSE
-  order, normalize only if the chosen cosine pipeline requires it, and finalize
-  the manifest.
-- [ ] Verify shape (`222,961 × 3,072`), finite values, complete coverage, hashes,
-  actual token usage, and actual charge estimate.
+- [ ] Download results, validate response-to-GSE identity, normalize only if the
+  chosen cosine pipeline requires it, and insert canonical SQLite rows.
+- [ ] Verify 3,072 dimensions, finite values, expected coverage, actual token
+  usage, and actual charge estimate.
 
-### Stage 5 — Build the versioned Elasticsearch index
+### Stage 5 — Load the one local Elasticsearch index
 
-- [ ] Load all four ready vectors with the normalized documents into one new
-  versioned index using [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]].
+- [ ] Load canonical records and all available vector rows into local
+  `geo-series` using [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]].
 - [ ] Use explicit quality-first vector mappings; for Gemini start with
   `int8_hnsw` and retain Elasticsearch's original float vectors for rescoring.
-- [ ] Reject the entire index build if any active manifest fails alignment or
-  coverage checks.
+- [ ] Reject wrong-dimensional/nonfinite rows and report coverage per model.
 - [ ] Validate vector-field coverage and exact query embeddings for each variant
-  before the alias can move.
+  before running the nine-system evaluation.
 
 ### Stage 6 — Freeze ANN and fusion profiles
 
@@ -293,7 +303,7 @@ Gemini query embedding. The remote service therefore gains:
 - `GEMINI_API_KEY` or equivalent managed credential;
 - network egress and provider availability dependency;
 - a bounded embedding timeout and clear failure behavior;
-- deployment readiness tied to the exact Gemini manifest/wrapper;
+- deployment readiness tied to the exact canonical Gemini registry/wrapper;
 - tiny but nonzero per-query cost.
 
 BM25 remains available if the hosted query encoder is unavailable only if the
@@ -302,18 +312,19 @@ provenance. Never silently label a BM25-only response as hybrid.
 
 ## Acceptance criteria
 
-- Four finalized manifests share identical corpus, ordered-GSE, count, and
-  document-template identities.
+- One canonical model registry defines all four document/query pipelines.
 - BGE adoption is evidence-based or it is rebuilt.
-- MedCPT, Qwen, and Gemini matrices have complete coverage and correct dimensions.
+- MedCPT, Qwen, and Gemini SQLite rows have recorded coverage and correct
+  dimensions.
 - Gemini's actual usage, truncation, batch IDs, and estimated charge are recorded.
-- The versioned Elasticsearch index contains all four searchable vector fields.
+- The local `geo-series` index contains all four searchable vector fields for
+  GSEs included in the official comparison.
 - ANN profiles are justified by exact-recall measurements.
 - The nine-system pool has reviewed qrels for newly surfaced documents.
 - The report includes relevance by slice plus latency, storage, truncation, and
   cost; no model is promoted automatically.
-- The chosen active pipeline is recorded in the alias/index build and MCP
-  retrieval provenance.
+- The chosen active pipeline is recorded in the fixed index mapping revision and
+  MCP retrieval provenance.
 
 ## Primary references
 

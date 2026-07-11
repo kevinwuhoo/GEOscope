@@ -11,16 +11,18 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 
 ## Recommended v1 scope
 
-- **Corpus:** all 222,961 GSEs in the chosen GEOmetadb snapshot are already
-  indexed. A metadata-only top-up from its 2024-02-29 cutoff to current GEO is a
-  later freshness task, not a slice-vs-full decision.
+- **Corpus:** the 222,961-GSE GEOmetadb snapshot remains the measured baseline.
+  The crawler has already accumulated more than 244k stripped family SOFT files;
+  the current task turns those into one canonical per-GSE record tree through
+  existence-based Prefect ETL.
 - **Unit:** **series (GSE)**, not samples. Aggregate sample fields up to the series.
 - **Fields normalized:** `sex` (PATO IDs), `organism` (NCBITaxon IDs), and
   **`assay`** (controlled category/detail labels; EFO grounding is deferred).
   Tissue is the next bounded experiment, not a prerequisite for this tranche.
-- **Search:** one managed Elasticsearch deployment for BM25, dense vectors,
+- **Search:** one local Elasticsearch 9.4.2 container for BM25, dense vectors,
   filters, facets, and native RRF. The working Postgres/ParadeDB implementation
-  remains the parity baseline. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
+  remains the parity baseline; the same scripts later point at a managed host. →
+  [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - **Facets:** organism, sex, assay category, and assay detail first. Tissue and
   hierarchy follow the tissue decision gate.
 - **Serve:** invite-only remote MCP server
@@ -37,34 +39,38 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
    **implemented in code**, including filtered BM25/dense/hybrid retrieval,
    disjunctive counts, and API exposure. Creating the four optional GIN indexes
    on the shared database remains an explicit database-change step.
-3. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
+3. [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan|Prefect SOFT ETL]] — parse
+   only missing stripped SOFT outputs into canonical GSE JSON records, then fill
+   only missing canonical embedding rows.
+4. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
    and hybrid results for 16 fixed queries and measure Recall@20, NDCG@10, and
    MRR@20 with reviewed qrels.
-4. [[47-MCP-Server-Plan|Private remote MCP server]] — expose search, exact GSE
+5. [[47-MCP-Server-Plan|Private remote MCP server]] — expose search, exact GSE
    lookup, and facet discovery over authenticated Streamable HTTP after Track 2's
    contract is stable.
-5. [[52-Embedding-Bakeoff-Runbook|Alternate embedding bake-off]] — compare BM25
+6. [[52-Embedding-Bakeoff-Runbook|Alternate embedding bake-off]] — compare BM25
    with BGE, MedCPT, Qwen, and full-dimension Gemini dense/hybrid pipelines using
    provider-neutral artifacts and reviewed GEO qrels.
-6. [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan|Elasticsearch cutover]] —
-   separate normalization from database mutation, build a versioned index, prove
-   Postgres parity, then atomically move the live alias.
+7. [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan|Local Elasticsearch]] —
+   load canonical records/vectors with GSE-keyed upserts and prove Postgres
+   retrieval/facet parity. No cloud provisioning or alias lifecycle yet.
 
-Dependencies: Track 1 and Track 2 have landed in the Postgres baseline. Track 3
-qrels can proceed immediately. The remote MCP and embedding first-draft branches
-are useful inputs, but their Postgres composition/load layers must be adapted to
-the Elastic search contract before merge. Embedding generation can proceed from
-provider-neutral artifacts in parallel with that adapter; promotion still
-depends on reviewed qrels. None of these tracks needs to wait for tissue mapping.
+Dependencies: Track 1 and Track 2 have landed in the Postgres baseline. Prefect
+ETL and local Elasticsearch can be implemented separately after agreeing on the
+canonical JSON/SQLite read contract. The embedding first draft contributes only
+provider-neutral registry/encoder ideas. Model promotion still depends on the
+local ES adapter and reviewed qrels. None of these tracks waits for tissue mapping.
 
 ## Phased plan
 
 ### Phase 0 — Foundations (½–1 wk)
 - [x] Postgres baseline up (ParadeDB with pgvector + pg_search); 222,961 series loaded.
-- [ ] Build and validate the managed Elasticsearch-only replacement before
+- [ ] Build and validate the local Elasticsearch-only replacement before
   switching the application default. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - [x] Ingestion skeleton hitting `esearch`/`esummary` (JSON) → `geo-fetch-summaries`.
 - [x] Land the corpus — **chose GEOmetadb bulk over a crawl**: 222,961 series into `data/processed/geo_series.jsonl`. → [[42-Build-Log]]
+- [ ] Materialize downloaded stripped SOFT into canonical per-GSE records and
+  canonical embedding storage. → [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]
 - [ ] **Build the eval set** (seed queries + pooled judgments). →
   [[46-Retrieval-Evaluation-Plan]]
 
@@ -105,10 +111,13 @@ depends on reviewed qrels. None of these tracks needs to wait for tissue mapping
   authenticated Streamable HTTP. →
   [[47-MCP-Server-Plan]]
 - [ ] Drive it from Claude: expansion → search → drill-in → summary.
-- [ ] Top up post-2024 GEO records only after the fixed-corpus eval/model choice,
-  then rebuild and sanity-check counts as a distinct freshness release.
+- [ ] Load newly materialized SOFT records into local Elasticsearch with
+  idempotent GSE-keyed upserts; do not add cloud provisioning to the demo.
 
 ### Later / v2 (not the spike)
+- Content-hashed records, immutable daily manifests, reusable vector deltas,
+  source-change detection, and versioned ES alias releases. →
+  [[54-Incremental-Corpus-Future-State]]
 - Sample-level (GSM) indexing — 8.6M docs; the real scale decision (consider
   `pgvectorscale` / StreamingDiskANN and benchmark `pdb.agg` against current SQL
   facets). It is also the *correctness* fix for within-sample multi-field
