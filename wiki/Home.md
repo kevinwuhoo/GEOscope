@@ -31,7 +31,8 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[24-Faceted-Search]] — facet model, ontology-backed hierarchical facets
 - [[25-Embeddings-and-Cost]] — model options, measured runtime/storage, and the eval plan
 - [[28-Embedding-Granularity]] — per-field vs whole-document embedding (field→mechanism routing)
-- [[26-Datastore-Postgres]] — pgvector + ParadeDB `pg_search` BM25 + SQL facets, why one Postgres
+- [[26-Datastore-Postgres]] — implemented pgvector + ParadeDB baseline (historical deployment choice)
+- [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — database bakeoff and the new managed Elasticsearch-only plan
 - [[27-MCP-Interface]] — the MCP server, its tools, and "the LLM is the RAG loop"
 
 ### Context & execution
@@ -47,6 +48,8 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[48-Alternate-Embedding-Bakeoff]] — approved proposal: one temporary column per model
 - [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] — resumable builds, loading, evaluation, and active-model integration
 - [[50-Coworker-Handoff-Prompts]] — copy-ready prompts for the remote MCP and embedding owners
+- [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — Postgres/Qdrant/Elastic bakeoff notes and migration plan
+- [[52-Embedding-Bakeoff-Runbook]] — BGE/MedCPT/Qwen/Gemini build, load, evaluation, and promotion runbook
 - [[90-Glossary]] — every acronym in one place
 - [[99-Sources]] — all citations
 
@@ -57,9 +60,10 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 2. **Normalize** organism→NCBITaxon, sex→PATO, and assay→closed category/detail
    labels today. Tissue→UBERON is the next experiment; disease/cell type and
    hierarchy are v2+.
-3. **Embed** the frozen narrative document once per series and index it in **one
-   Postgres** (`pgvector` for dense, `pg_search`/BM25 for lexical, four flat
-   normalized arrays for current filters/facets).
+3. **Embed** the frozen narrative document with the bakeoff variants and index
+   BM25, dense vectors, filters, and facets in **one managed Elasticsearch**
+   deployment. Versioned JSONL/vector manifests are rebuild artifacts, not a
+   second online database.
 4. **Serve** hybrid search + facet counts + get-by-accession as an
    **invite-only remote MCP server**.
 5. The **LLM client** (Claude, etc.) does query understanding, synonym expansion, and — because it's just calling tools — the summary and conversational answers for free.

@@ -18,8 +18,9 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 - **Fields normalized:** `sex` (PATO IDs), `organism` (NCBITaxon IDs), and
   **`assay`** (controlled category/detail labels; EFO grounding is deferred).
   Tissue is the next bounded experiment, not a prerequisite for this tranche.
-- **Search:** hybrid (pgvector + pg_search BM25 + RRF); the LLM client owns v1
-  synonym/query expansion. Deterministic ontology expansion is v2+.
+- **Search:** one managed Elasticsearch deployment for BM25, dense vectors,
+  filters, facets, and native RRF. The working Postgres/ParadeDB implementation
+  remains the parity baseline. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - **Facets:** organism, sex, assay category, and assay detail first. Tissue and
   hierarchy follow the tissue decision gate.
 - **Serve:** invite-only remote MCP server
@@ -42,20 +43,26 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 4. [[47-MCP-Server-Plan|Private remote MCP server]] — expose search, exact GSE
    lookup, and facet discovery over authenticated Streamable HTTP after Track 2's
    contract is stable.
-5. [[48-Alternate-Embedding-Bakeoff|Alternate embedding bake-off]] — preserve the
-   current BGE column, add MedCPT and Qwen columns, and compare all three through
-   [[49-Alternate-Embedding-Bakeoff-Implementation-Plan|a reproducible build/load/eval plan]].
+5. [[52-Embedding-Bakeoff-Runbook|Alternate embedding bake-off]] — compare BM25
+   with BGE, MedCPT, Qwen, and full-dimension Gemini dense/hybrid pipelines using
+   provider-neutral artifacts and reviewed GEO qrels.
+6. [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan|Elasticsearch cutover]] —
+   separate normalization from database mutation, build a versioned index, prove
+   Postgres parity, then atomically move the live alias.
 
-Dependencies: Track 1 and Track 2 have landed in code, so Track 3 and Track 4
-can proceed independently. The persisted assay refresh affects assay-label
-quality but does not block their scaffolding. Alternate-embedding infrastructure can be built in parallel, but
-promotion depends on Track 3's reviewed qrels. None of these tracks needs to wait
-for tissue mapping.
+Dependencies: Track 1 and Track 2 have landed in the Postgres baseline. Track 3
+qrels can proceed immediately. The remote MCP and embedding first-draft branches
+are useful inputs, but their Postgres composition/load layers must be adapted to
+the Elastic search contract before merge. Embedding generation can proceed from
+provider-neutral artifacts in parallel with that adapter; promotion still
+depends on reviewed qrels. None of these tracks needs to wait for tissue mapping.
 
 ## Phased plan
 
 ### Phase 0 — Foundations (½–1 wk)
-- [x] Postgres up (ParadeDB with pgvector + pg_search); 222,961 series loaded.
+- [x] Postgres baseline up (ParadeDB with pgvector + pg_search); 222,961 series loaded.
+- [ ] Build and validate the managed Elasticsearch-only replacement before
+  switching the application default. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - [x] Ingestion skeleton hitting `esearch`/`esummary` (JSON) → `geo-fetch-summaries`.
 - [x] Land the corpus — **chose GEOmetadb bulk over a crawl**: 222,961 series into `data/processed/geo_series.jsonl`. → [[42-Build-Log]]
 - [ ] **Build the eval set** (seed queries + pooled judgments). →
@@ -72,9 +79,9 @@ for tissue mapping.
   keyword story is the main win. → [[46-Retrieval-Evaluation-Plan]]
 - [ ] Run the measured baseline before choosing another embedding model. →
   [[46-Retrieval-Evaluation-Plan]]
-- [ ] Build the side-by-side MedCPT/Qwen candidates, re-pool, and choose from
-  measured evidence. → [[48-Alternate-Embedding-Bakeoff]],
-  [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
+- [ ] Build the side-by-side MedCPT/Qwen/Gemini candidates, re-pool all nine
+  retrieval systems, and choose from measured evidence. →
+  [[52-Embedding-Bakeoff-Runbook]]
 
 ### Phase 2 — Normalization + facets (1–2 wks)
 - [x] Populate `sex`, `organism`, and `assay` columns for the full database. →

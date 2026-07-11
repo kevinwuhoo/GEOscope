@@ -7,6 +7,13 @@ tags: [postgres, pgvector, paradedb, schema]
 
 ← [[Home]] · serves [[23-Search-and-Retrieval]], [[24-Faceted-Search]]
 
+> **Status update (2026-07-10):** This page documents the implemented and
+> measured Postgres baseline. After a single-service database bakeoff, the
+> prototype deployment direction moved to managed Elasticsearch; see
+> [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]. Keep this baseline for
+> parity measurements and reproducibility, but do not extend its temporary
+> per-model columns as the active architecture.
+
 ## Decision
 
 > **One Postgres does dense vector + BM25 + structured filters + facets**, via `pgvector` + **ParadeDB `pg_search`**. No separate vector DB or Elasticsearch to keep in sync.

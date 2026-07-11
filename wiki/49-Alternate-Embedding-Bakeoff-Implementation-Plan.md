@@ -10,6 +10,14 @@ created: 2026-07-10
 ← [[Home]] · implements [[48-Alternate-Embedding-Bakeoff]] · extends
 [[46-Retrieval-Evaluation-Plan]] · integrates with [[47-MCP-Server-Plan]]
 
+> **Superseded for execution (2026-07-10):** A first draft of Tasks 1–4 exists on
+> `codex/embedding-bakeoff-first-draft`, but this plan's PostgreSQL column/index
+> target is no longer current. Port its provider-neutral registry and artifact
+> integrity work into [[52-Embedding-Bakeoff-Runbook]] and load versioned
+> Elasticsearch indices per
+> [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]. Do not merge the branch
+> as-is.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use

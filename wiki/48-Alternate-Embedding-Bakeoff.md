@@ -11,6 +11,12 @@ created: 2026-07-10
 [[46-Retrieval-Evaluation-Plan]] · implemented by
 [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
 
+> **Status update (2026-07-10):** This page records the original three-local-
+> model/Postgres-column design. The active bakeoff now adds full-dimension
+> `gemini-embedding-2` and stores all variants in a versioned Elasticsearch
+> index. Follow [[52-Embedding-Bakeoff-Runbook]] for execution; keep this page as
+> design history.
+
 ## Decision
 
 For this **(v1)** prototype, store one whole-document embedding column per model
