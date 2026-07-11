@@ -3,13 +3,21 @@ title: Search Database Bake-off and Elasticsearch Plan
 tags: [elasticsearch, qdrant, postgres, search, facets, vectors, plan, v1]
 status: approved-design
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 
 # 51 · Search Database Bake-off and Elasticsearch Plan
 
 ← [[Home]] · supersedes the deployment choice in [[26-Datastore-Postgres]] ·
 coordinates with [[52-Embedding-Bakeoff-Runbook]] and [[47-MCP-Server-Plan]]
+
+> **Prototype scope update (2026-07-11):** Elasticsearch remains selected, but
+> the first implementation is one **local** single-node Elasticsearch 9.4.2
+> container and one canonical `geo-series` index. SOFT ETL and embedding
+> persistence are the separate Prefect plan in
+> [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]. Do not implement cloud
+> provisioning, daily snapshots, versioned build directories, or alias rollback
+> in this tranche; those are preserved in [[54-Incremental-Corpus-Future-State]].
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:writing-plans` before turning this design into implementation
@@ -19,15 +27,16 @@ coordinates with [[52-Embedding-Bakeoff-Runbook]] and [[47-MCP-Server-Plan]]
 
 ## Decision
 
-Use **one managed Elasticsearch deployment** as the only running search/database
-service for the prototype. Store the rebuildable source of truth as versioned
-JSONL, embedding matrices, and manifests; build an immutable Elasticsearch index;
-validate it; and atomically move the `geo-series-current` alias.
+Use **one local Elasticsearch 9.4.2 container** as the only running
+search/database service for the prototype. Load canonical per-GSE JSON records
+and vectors from canonical model matrix artifacts into a fixed `geo-series`
+index, using GSE as the Elasticsearch document `_id` so repeated loads are safe
+upserts.
 
-Use an Elastic Cloud tier that includes Elasticsearch's native reciprocal-rank
-fusion (RRF). The paid tier costs more than hand-implementing fusion, but the
-explicit priority for this prototype is technical simplicity rather than the
-lowest infrastructure bill.
+Keep clients configured only by `ELASTICSEARCH_URL` and credentials. Later, buy
+a managed Elastic deployment and point the same scripts at it. Cloud
+provisioning, networking, and production access control are outside the current
+task. A local trial license may be used to exercise native RRF.
 
 This replaces the current deployment direction of PostgreSQL + ParadeDB +
 pgvector. The PostgreSQL implementation remains a valuable working baseline and
@@ -42,7 +51,7 @@ The prototype now needs all of these in one understandable system:
 - hybrid fusion and filtered kNN;
 - exact-match lookup by GSE accession;
 - multi-valued normalized filters and useful facet counts;
-- versioned, reproducible rebuilds without in-place partial state;
+- restartable/idempotent loading into one canonical local index;
 - a small read-only search boundary suitable for the remote MCP server.
 
 PostgreSQL can implement the complete feature set, but 3,072-dimensional HNSW
@@ -81,11 +90,10 @@ The working Postgres system proves the product concept and is still useful for
 comparative evaluation. It is not wrong. The change is a prototype optimization:
 
 - Elastic accepts all planned vector dimensions directly;
-- managed Elastic removes extension packaging and upgrade questions;
-- BM25, kNN, filters, aggregations, fusion, and alias swaps share one supported
+- the same standard client works against local Docker and a later managed host;
+- BM25, kNN, filters, aggregations, and fusion share one supported
   search abstraction;
-- immutable snapshot rebuilds match the corpus better than transactional row
-  mutation.
+- GSE-keyed upserts match the prototype's append-mostly corpus.
 
 If the product later adds user annotations, live relational writes, or other
 transactional state, revisit a relational system of record. Do not force those
@@ -94,53 +102,40 @@ future requirements into this metadata-search spike.
 ## Target architecture
 
 ```text
-GEOmetadb / raw source artifacts
+stripped metadata SOFT files
              |
              v
-data/processed/geo_series.jsonl
+Prefect ETL (existence-based, atomic per-GSE writes)
+             |
+             +--> data/processed/series_records/<bucket>/<GSE>.json
+             |
+             +--> data/processed/embedding_artifacts/<model_key>/
              |
              v
-pure normalization + enrichment
+local Elasticsearch 9.4.2 index: geo-series
              |
-             +--> normalized JSONL + normalization report
-             |
-             v
-provider-neutral embedding builders
-             |
-             +--> vectors + manifests + ordered-GSE hashes
-             |
-             v
-versioned Elasticsearch index (geo-series-YYYYMMDD-buildNN)
-             |
-             +--> validation and retrieval smoke tests
-             |
-             v
-atomic alias swap: geo-series-current
+             +--> idempotent GSE-keyed bulk upserts + validation
              |
              v
 SearchService --> FastMCP --> invited users
 ```
 
-Only Elasticsearch is a live database/search dependency. JSONL, NumPy matrices,
-and manifests are durable build artifacts, not a second online database.
+Only Elasticsearch is a live search dependency. The record tree and NumPy
+embedding artifacts are local files, not another online service.
 
-## Canonical artifact contract
+## Prototype input contract
 
-Every index build must be reproducible from immutable inputs. A build directory
-contains:
+The ES loader consumes only:
 
-- normalized series JSONL in stable GSE order;
-- normalization report and normalizer version;
-- one manifest per embedding variant;
-- ordered-GSE SHA-256 and document-input SHA-256;
-- vector dimension, dtype, row count, and matrix SHA-256;
-- source snapshot identity and build timestamp;
-- Elasticsearch mapping/settings hash;
-- final index name and validation report.
+- canonical JSON files under `data/processed/series_records/`;
+- canonical `vectors.npy`/`ids.json`/`metadata.json` directories under
+  `data/processed/embedding_artifacts/`;
+- a fixed code registry mapping safe model keys to dimensions and ES fields.
 
-The loader rejects mismatched row counts, ordered-ID hashes, nonfinite vectors,
-wrong dimensions, incomplete manifests, or unknown model keys. A failed build
-never changes the live alias.
+It rejects malformed records, unknown model keys, nonfinite vectors, wrong
+dimensions, and matrix/ID count mismatches. It does not own
+SOFT parsing or embedding calls. Re-running the loader uses `gse` as `_id` and
+therefore replaces the same document rather than creating a duplicate.
 
 ## Elasticsearch index design
 
@@ -151,7 +146,7 @@ Use one document per GSE. Initial mapping:
 | `gse` | `keyword` | exact lookup and stable tie-break |
 | `title` | `text` plus `keyword` subfield | BM25 and display |
 | `summary`, `overall_design` | `text` | display and optional lexical fields |
-| `embed_text` | `text` | frozen lexical/document-composition input |
+| `embed_text` | `text` | canonical lexical/document-composition input |
 | `organism_ids`, `sex_ids` | multi-valued `keyword` | filters and facets |
 | `assay_categories`, `assay_labels` | multi-valued `keyword` | filters and facets |
 | future tissue/disease/cell-type IDs | multi-valued `keyword` | added only after their normalization gates |
@@ -185,7 +180,7 @@ Keep the current public modes and Pydantic response types:
 
 The active model remains deployment configuration. Search and MCP callers do not
 select arbitrary vector fields or models. Responses include a stable retrieval
-version containing the index build and active embedding manifest identity.
+version containing the fixed mapping revision and active model configuration.
 
 For the bakeoff, use the same candidate depths and filters for comparable runs.
 Measure native RRF against the existing application RRF once, then freeze the
@@ -211,56 +206,61 @@ keyword arrays. Native `filter`/`terms` aggregations may replace the client-side
 count only where tests prove identical semantics. Keep a frozen alphabetical
 secondary order for equal counts.
 
-## Rebuild and alias lifecycle
+## Local index lifecycle
 
-1. Create a new immutable index name; never bulk-load into
-   `geo-series-current`.
-2. Apply reviewed settings and explicit mappings.
-3. Stream normalized documents and all ready vector variants with the bulk API.
-4. Refresh once after the load, then validate document count, required-field
+1. Start the pinned local single-node container bound to `127.0.0.1:9200` with
+   persistent Docker storage.
+2. Create `geo-series` with reviewed explicit settings/mappings if absent.
+3. Stream canonical records and available vectors with the bulk API, using
+   `gse` as `_id` and `index` actions for safe replacement.
+4. Refresh once after the batch, then validate document count, required-field
    coverage, vector coverage, representative filters, exact lookup, and fixed
    retrieval smoke queries.
-5. Write the validation report into the build artifacts.
-6. Atomically remove the alias from the old index and add it to the new index in
-   one aliases request.
-7. Retain at least the immediately previous index for rollback during the spike.
+5. Re-running the command upserts records and leaves unrelated documents intact.
+6. A full destructive local rebuild is a separate explicit command used only for
+   mapping changes or test recovery.
 
-Rollback is an alias swap, not an in-place data repair.
+Versioned indices and alias rollback are the future endpoint in
+[[54-Incremental-Corpus-Future-State]], not prototype acceptance criteria.
 
 ## Security and operations
 
-- Use managed Elastic Cloud for the prototype.
-- Give the loader a write-capable credential scoped to build indices and alias
-  management; do not give it to the MCP service.
-- Give the MCP/search service a read-only credential scoped to
-  `geo-series-current`.
-- Keep credentials in environment/secret management and never in artifacts.
+- Pin local Docker to Elasticsearch 9.4.2; never use `latest`.
+- Bind port 9200 to localhost only and persist data in a named Docker volume.
+- Keep the local password/API key in an ignored `.env`, never in artifacts.
+- Give the loader write access to `geo-series`; use a read-only credential for
+  the search/MCP service when that integration is exercised.
 - Pin the Elasticsearch client compatibility range and record the server version
-  in every build report.
+  in the loader report.
 - Set bounded timeouts and result sizes; do not expose raw Elasticsearch queries
   through MCP.
 - Do not log study text, bearer tokens, credentials, or full user queries.
+- Do not add Elastic Cloud provisioning. Later managed deployment changes only
+  URL/credentials and may add an alias/release policy.
 
 ## Implementation plan
 
-### Task 1 — Split normalization from database mutation
+### Task 1 — Consume the Prefect ETL boundary
 
-- [ ] Add `src/geo_index/normalize_artifacts.py` to stream the canonical input,
-  call the existing pure `normalize_row`, and atomically write normalized JSONL
-  plus a report.
-- [ ] Add unit tests for stable ordering, deterministic output, atomic failure,
-  and normalization counts.
-- [ ] Keep the Postgres normalization commands during migration; label them
-  baseline-only rather than deleting them early.
-- [ ] Verification: `pytest -q tests/test_normalize_artifacts.py tests/test_normalize.py`.
+- [ ] Treat [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]] as a separate
+  prerequisite and do not add SOFT parsing, Prefect, or encoder code to the ES
+  modules.
+- [ ] Add read-only iterators for canonical JSON records and model matrix/ID
+  artifacts.
+- [ ] Test malformed JSON, missing GSE, unknown model keys, wrong dimensions,
+  nonfinite values, and missing embeddings without requiring Elasticsearch.
+- [ ] Keep the Postgres path during parity testing; do not delete it early.
 
-### Task 2 — Define and load versioned Elastic indices
+### Task 2 — Define and load the one local Elastic index
 
+- [ ] Add `docker-compose.elasticsearch.yml` pinned to Elasticsearch 9.4.2 with
+  localhost-only port binding, a persistent volume, and a health check.
 - [ ] Add `src/geo_index/elasticsearch_index.py` containing reviewed settings,
-  mappings, index-name validation, bulk serialization, validation, and alias swap.
+  mappings, bulk-upsert serialization, validation, and an explicit local-reset
+  command.
 - [ ] Reject dynamic field names and unknown embedding variants.
-- [ ] Add fake-client unit tests for mapping dimensions, partial bulk failures,
-  manifest/hash mismatches, validation failure, and atomic alias requests.
+- [ ] Add fake-client unit tests for mapping dimensions, GSE `_id`, partial bulk
+  failures, retries, validation failure, and a no-duplicate second load.
 - [ ] Add an opt-in live test behind `GEO_TEST_ELASTIC=1`.
 
 ### Task 3 — Implement the backend-neutral search adapter
@@ -280,12 +280,13 @@ Rollback is an alias swap, not an in-place data repair.
   the `codex/remote-mcp-first-draft` branch, but replace its PostgreSQL search
   service with the Elastic adapter.
 - [ ] Keep exactly `search_datasets`, `get_dataset`, and `facet_values` in v1.
-- [ ] Add startup readiness checks for the current alias, active vector field,
-  manifest identity, and query encoder.
+- [ ] Add startup readiness checks for the `geo-series` index, active vector
+  field, fixed registry configuration, and query encoder.
 
 ### Task 5 — Cut over only after comparative verification
 
-- [ ] Load the same frozen corpus into a candidate Elastic index.
+- [ ] Load the canonical record tree and available embedding rows into local
+  `geo-series`.
 - [ ] Run exact lookup, filter/facet parity tests, and the fixed retrieval eval
   against both Postgres and Elasticsearch.
 - [ ] Record relevance, ANN recall, p50/p95 latency, index size, and build time.
@@ -295,16 +296,16 @@ Rollback is an alias swap, not an in-place data repair.
 
 ## Acceptance criteria
 
-- One managed Elasticsearch deployment is the only online datastore/search
+- One local Elasticsearch 9.4.2 container is the only online datastore/search
   dependency.
-- A clean build from canonical artifacts creates a new versioned index without
-  mutating the live alias.
-- Validation failure cannot change `geo-series-current`.
+- Re-running the loader upserts by GSE and creates no duplicate documents.
+- ETL/embedding generation remains outside the Elasticsearch modules.
 - All four planned embedding dimensions load and can be selected by fixed code
   registry.
 - BM25, dense, hybrid, exact lookup, normalized filters, and disjunctive facets
   satisfy contract tests.
-- Retrieval and MCP responses identify the index and embedding build used.
+- Retrieval and MCP responses identify the fixed mapping revision and active
+  model configuration.
 - The fixed evaluation records Postgres-vs-Elastic parity before cutover.
 
 ## Revisit triggers
@@ -314,7 +315,7 @@ Reopen the datastore decision if any of these become real requirements:
 - transactional user data or annotations;
 - frequent partial updates where immutable rebuilds are too expensive;
 - sample-level indexing at a scale that changes latency/cost materially;
-- managed Elastic cost dominates the prototype budget;
+- later managed Elastic cost dominates the prototype budget;
 - native RRF licensing or hosted constraints become unacceptable;
 - measured Qdrant-only operation is materially simpler for the actual workload.
 
@@ -329,6 +330,7 @@ Reopen the datastore decision if any of these become real requirements:
 - [Elasticsearch terms aggregation](https://www.elastic.co/docs/reference/aggregations/search-aggregations-bucket-terms-aggregation)
 - [Elasticsearch filter aggregation](https://www.elastic.co/docs/reference/aggregations/search-aggregations-bucket-filter-aggregation)
 - [Elasticsearch aliases](https://www.elastic.co/guide/en/elasticsearch/reference/current/aliases.html)
+- [Local single-node Elasticsearch Docker](https://www.elastic.co/docs/deploy-manage/deploy/self-managed/install-elasticsearch-docker-basic)
 - [Qdrant hybrid queries](https://qdrant.tech/documentation/search/hybrid-queries/)
 - [Qdrant full-text search](https://qdrant.tech/documentation/search/text-search/full-text-search/)
 - [Qdrant payload and facets](https://qdrant.tech/documentation/concepts/payload/)

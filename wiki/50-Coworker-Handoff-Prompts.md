@@ -12,6 +12,12 @@ updated: 2026-07-10
 [[48-Alternate-Embedding-Bakeoff]] · embedding implementation:
 [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]]
 
+> **Superseded for ETL/embedding/search work (2026-07-11):** These prompts record
+> the earlier PostgreSQL-column and remote-MCP handoff. Use
+> [[55-Prefect-and-Local-Elasticsearch-Coworker-Prompts]] for the current Prefect
+> canonical-record/embedding task and separate local-Elasticsearch task. Keep
+> this page as history for the remote MCP design.
+
 These two tracks can start in parallel. The MCP owner builds against the current
 BGE default. The embedding owner starts Task 1 immediately; after its registry
 lands, Task 2 and the isolated Task 3 storage core can overlap. Task 4 consumes
