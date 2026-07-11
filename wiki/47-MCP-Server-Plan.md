@@ -13,6 +13,13 @@ updated: 2026-07-10
 is extended by [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] to expose
 active-variant provenance without exposing a model selector
 
+> **Datastore update (2026-07-10):** The authentication, transport, three-tool
+> contract, and bounded wire models remain the intended design. Its PostgreSQL
+> `SearchService` implementation steps are superseded by the Elasticsearch
+> adapter in [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]. Reuse the
+> remote MCP first draft selectively; do not merge its Postgres composition root
+> as-is.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use
