@@ -65,7 +65,7 @@ const $ = selector => document.querySelector(selector);
 const form = $("#search-form"), query = $("#query"), searchRaw = $("#search-raw");
 const results = $("#results"), state = $("#search-state"), showRaw = $("#show-raw");
 const viewer = $("#viewer"), selected = $("#selected");
-let chosen = "";
+let chosen = "", activeSearch;
 
 function viewerUrl() {
   return `/api/file?gse=${encodeURIComponent(chosen)}&raw=${showRaw.checked ? "1" : "0"}`;
@@ -79,10 +79,11 @@ function openFile(gse) {
   viewer.src = viewerUrl();
 }
 
-function render(items) {
+function render(items, truncated) {
   results.replaceChildren();
   if (!items.length) { state.textContent = "No matching SOFT files."; return; }
-  state.textContent = `${items.length} matching ${items.length === 1 ? "file" : "files"}`;
+  const count = `${items.length} matching ${items.length === 1 ? "file" : "files"}`;
+  state.textContent = truncated ? `Showing first ${count}. Refine the search for more.` : count;
   for (const item of items) {
     const button = document.createElement("button");
     button.className = "result"; button.type = "button";
@@ -98,15 +99,27 @@ function render(items) {
 }
 
 async function search() {
+  activeSearch?.abort();
+  activeSearch = undefined;
   const value = query.value.trim();
   if (!value) { state.textContent = "Enter words to search."; results.replaceChildren(); return; }
+  const request = new AbortController();
+  activeSearch = request;
   state.textContent = "Searching…"; results.replaceChildren();
   const params = new URLSearchParams({q: value, raw: searchRaw.checked ? "1" : "0"});
   try {
-    const response = await fetch(`/api/search?${params}`);
+    const response = await fetch(`/api/search?${params}`, {signal: request.signal});
     if (!response.ok) throw new Error(await response.text());
-    render(await response.json());
-  } catch (error) { state.textContent = `Search failed: ${error.message}`; }
+    const payload = await response.json();
+    if (activeSearch !== request) return;
+    render(payload.results, payload.truncated);
+  } catch (error) {
+    if (error.name !== "AbortError" && activeSearch === request) {
+      state.textContent = `Search failed: ${error.message}`;
+    }
+  } finally {
+    if (activeSearch === request) activeSearch = undefined;
+  }
 }
 
 form.addEventListener("submit", event => { event.preventDefault(); search(); });

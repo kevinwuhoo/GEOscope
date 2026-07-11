@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
 from urllib.parse import parse_qs, urlparse
 
 from geo_index.fetch_soft import soft_path
@@ -14,6 +15,8 @@ from geo_index.fetch_soft import soft_path
 _ACCESSION = re.compile(r"GSE\d+\Z")
 _FAMILY_FILE = re.compile(r"(GSE\d+)_family\.soft\.gz\Z")
 _MAX_SNIPPETS = 2
+_MAX_RESULTS = 200
+_SEARCH_TIMEOUT_SECONDS = 30
 _HTML = (Path(__file__).with_name("ui.html")).read_text()
 
 
@@ -55,15 +58,22 @@ def parse_rg_matches(output: str, query: str) -> list[dict[str, object]]:
     return [{"gse": gse, "snippets": snippets} for gse, snippets in results.items()]
 
 
-def search_files(root: Path, query: str) -> list[dict[str, object]]:
+def search_files(
+    root: Path,
+    query: str,
+    *,
+    max_results: int = _MAX_RESULTS,
+) -> dict[str, object]:
     """Search compressed family SOFT files below ``root`` with ripgrep."""
     query = query.strip()
     if not query:
         raise ValueError("search query is empty")
+    if max_results < 1:
+        raise ValueError("max_results must be positive")
     if not root.is_dir():
-        return []
+        return {"results": [], "truncated": False}
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             [
                 "rg",
                 "--json",
@@ -79,19 +89,61 @@ def search_files(root: Path, query: str) -> list[dict[str, object]]:
                 ".",
             ],
             cwd=root,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            timeout=30,
-            check=False,
         )
     except FileNotFoundError as exc:
         raise RuntimeError("ripgrep (rg) is not installed") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("search timed out") from exc
-    if completed.returncode not in {0, 1}:
-        raise RuntimeError(completed.stderr.strip() or "ripgrep search failed")
-    return parse_rg_matches(completed.stdout, query)
+
+    timed_out = threading.Event()
+
+    def stop_timed_out_search() -> None:
+        if process.poll() is None:
+            timed_out.set()
+            process.kill()
+
+    timer = threading.Timer(_SEARCH_TIMEOUT_SECONDS, stop_timed_out_search)
+    timer.daemon = True
+    timer.start()
+    results: dict[str, list[str]] = {}
+    truncated = False
+    assert process.stdout is not None
+    try:
+        for line in process.stdout:
+            parsed = parse_rg_matches(line, query)
+            if not parsed:
+                continue
+            result = parsed[0]
+            accession = str(result["gse"])
+            if accession not in results and len(results) >= max_results:
+                truncated = True
+                process.terminate()
+                break
+            snippets = results.setdefault(accession, [])
+            for snippet in result["snippets"]:
+                if len(snippets) < _MAX_SNIPPETS:
+                    snippets.append(str(snippet))
+    finally:
+        timer.cancel()
+        process.stdout.close()
+        process.wait()
+
+    assert process.stderr is not None
+    error = process.stderr.read().strip()
+    process.stderr.close()
+    if timed_out.is_set():
+        raise RuntimeError("search timed out")
+    if not truncated and process.returncode not in {0, 1}:
+        raise RuntimeError(error or "ripgrep search failed")
+    return {
+        "results": [
+            {"gse": accession, "snippets": snippets}
+            for accession, snippets in results.items()
+        ],
+        "truncated": truncated,
+    }
 
 
 def make_server(

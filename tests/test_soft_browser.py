@@ -12,7 +12,7 @@ import pytest
 
 
 def _write_gz(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         fh.write(text)
 
@@ -98,12 +98,29 @@ def test_search_files_finds_literal_text_in_compressed_family_files(
         "!Series_title = Kidney inflammation response\n",
     )
 
-    assert browser.search_files(tmp_path, "kidney inflammation") == [
-        {
-            "gse": "GSE271800",
-            "snippets": ["!Series_title = Kidney inflammation response"],
-        }
-    ]
+    assert browser.search_files(tmp_path, "kidney inflammation") == {
+        "results": [
+            {
+                "gse": "GSE271800",
+                "snippets": ["!Series_title = Kidney inflammation response"],
+            }
+        ],
+        "truncated": False,
+    }
+
+
+def test_search_files_caps_the_number_of_matching_series(tmp_path: Path) -> None:
+    browser = import_module("geo_index.soft_browser.server")
+    for accession in ("GSE100001", "GSE100002", "GSE100003"):
+        _write_gz(
+            browser.family_file_path(tmp_path, accession),
+            "!Series_summary = common phrase\n",
+        )
+
+    response = browser.search_files(tmp_path, "common phrase", max_results=2)
+
+    assert len(response["results"]) == 2
+    assert response["truncated"] is True
 
 
 def test_file_endpoint_streams_metadata_file_by_default(tmp_path: Path) -> None:
@@ -178,12 +195,15 @@ def test_search_endpoint_uses_metadata_files_by_default(tmp_path: Path) -> None:
     try:
         port = server.server_address[1]
         query = urlencode({"q": "metadata phrase"})
-        assert _get_json(f"http://127.0.0.1:{port}/api/search?{query}") == [
-            {
-                "gse": "GSE271800",
-                "snippets": ["!Series_summary = metadata phrase"],
-            }
-        ]
+        assert _get_json(f"http://127.0.0.1:{port}/api/search?{query}") == {
+            "results": [
+                {
+                    "gse": "GSE271800",
+                    "snippets": ["!Series_summary = metadata phrase"],
+                }
+            ],
+            "truncated": False,
+        }
     finally:
         server.shutdown()
         thread.join()
@@ -208,12 +228,15 @@ def test_search_endpoint_uses_raw_files_when_requested(tmp_path: Path) -> None:
     try:
         port = server.server_address[1]
         query = urlencode({"q": "raw-only phrase", "raw": "1"})
-        assert _get_json(f"http://127.0.0.1:{port}/api/search?{query}") == [
-            {
-                "gse": "GSE271800",
-                "snippets": ["!Series_summary = raw-only phrase"],
-            }
-        ]
+        assert _get_json(f"http://127.0.0.1:{port}/api/search?{query}") == {
+            "results": [
+                {
+                    "gse": "GSE271800",
+                    "snippets": ["!Series_summary = raw-only phrase"],
+                }
+            ],
+            "truncated": False,
+        }
     finally:
         server.shutdown()
         thread.join()
@@ -233,6 +256,39 @@ def test_root_serves_browser_with_both_raw_file_controls(tmp_path: Path) -> None
         assert 'id="show-raw"' in page
         assert 'id="results"' in page
         assert 'id="viewer"' in page
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def test_root_search_ui_consumes_the_capped_response(tmp_path: Path) -> None:
+    browser = import_module("geo_index.soft_browser.server")
+    server = browser.make_server(tmp_path / "raw", tmp_path / "metadata", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        status, page = _get_text(f"http://127.0.0.1:{port}/")
+        assert status == 200
+        assert "render(payload.results, payload.truncated);" in page
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def test_root_search_ui_prevents_stale_requests_from_rendering(tmp_path: Path) -> None:
+    browser = import_module("geo_index.soft_browser.server")
+    server = browser.make_server(tmp_path / "raw", tmp_path / "metadata", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        status, page = _get_text(f"http://127.0.0.1:{port}/")
+        assert status == 200
+        assert "activeSearch?.abort();" in page
+        assert "if (activeSearch !== request) return;" in page
     finally:
         server.shutdown()
         thread.join()

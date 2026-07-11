@@ -66,6 +66,11 @@ Open a lightweight local browser over the downloaded `.soft.gz` files:
 uv run geo-soft-browser
 ```
 
+The browser expects [`rg`](https://github.com/BurntSushi/ripgrep) on `PATH` and
+uses its compressed-file search mode. Run `uv run geo-strip-soft` first to
+populate the default `data/processed/soft_meta` search tree, or check
+**Search raw files** in the UI to search `data/raw/soft` directly.
+
 It listens on [http://127.0.0.1:8001](http://127.0.0.1:8001) by default.
 Searches use stripped metadata under `data/processed/soft_meta`; use the
 left-side **Search raw files** checkbox to search the original files under
