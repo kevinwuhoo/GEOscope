@@ -55,6 +55,18 @@ class _BulkClient:
         return {"errors": any(item["index"]["status"] >= 300 for item in items), "items": items}
 
 
+class _WrappedResponse:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+
+
+class _WrappedBulkClient(_BulkClient):
+    def bulk(
+        self, *, operations: list[dict[str, object]], refresh: bool
+    ) -> _WrappedResponse:
+        return _WrappedResponse(super().bulk(operations=operations, refresh=refresh))
+
+
 def _documents() -> list[IndexDocument]:
     return [
         IndexDocument("GSE2", {"gse": "GSE2", "title": "two"}),
@@ -74,6 +86,11 @@ def test_bulk_actions_use_gse_id_and_index_operation() -> None:
     assert report.succeeded == 1
     assert report.retried == 0
     assert report.failures == ()
+
+
+def test_bulk_accepts_official_client_style_object_response() -> None:
+    report = bulk_upsert(_WrappedBulkClient(), [_documents()[0]])
+    assert report.succeeded == 1
 
 
 def test_second_load_replaces_without_duplicate_documents() -> None:

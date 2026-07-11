@@ -51,6 +51,19 @@ class _Client:
         return {"_id": id, "_source": self.documents[id], "found": True}
 
 
+class _WrappedResponse:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+
+
+class _WrappedClient(_Client):
+    def search(self, **kwargs: object) -> _WrappedResponse:
+        return _WrappedResponse(super().search(**kwargs))
+
+    def get(self, *, index: str, id: str) -> _WrappedResponse:
+        return _WrappedResponse(super().get(index=index, id=id))
+
+
 def _service(
     client: _Client, *, encode_calls: list[str] | None = None
 ) -> ElasticsearchSearchService:
@@ -77,6 +90,19 @@ def test_exact_lookup_uses_gse_document_id_and_handles_missing() -> None:
         {"index": "geo-series", "id": "GSE10"},
     ]
     assert client.get_calls == [{"index": "geo-series", "id": "GSE2"}]
+
+
+def test_search_accepts_official_client_style_object_responses() -> None:
+    client = _WrappedClient(
+        documents={"GSE2": {"gse": "GSE2", "title": "two"}},
+        search_responses=[
+            _response(("GSE2", 1.0, {"title": "two"})),
+            *[_response() for _ in FACET_FIELDS],
+        ],
+    )
+    service = _service(client)
+    assert service.get_dataset("GSE2") == {"gse": "GSE2", "title": "two"}
+    assert service.search("immune", mode="bm25").hits[0]["gse"] == "GSE2"
 
 
 def test_filter_query_ors_within_and_ands_across() -> None:

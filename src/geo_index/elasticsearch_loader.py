@@ -13,6 +13,7 @@ from .elasticsearch_config import (
     VECTOR_FIELDS,
     ElasticsearchSettings,
     create_client,
+    response_body,
 )
 from .elasticsearch_index import MAPPING_REVISION, ensure_index
 from .elasticsearch_sources import IndexDocument, iter_index_documents
@@ -81,9 +82,10 @@ def _failure(document: IndexDocument, item: object) -> BulkFailure:
 
 
 def _bulk_items(response: object, expected: int) -> list[object]:
-    if not isinstance(response, dict) or not isinstance(response.get("items"), list):
+    body = response_body(response)
+    if not isinstance(body.get("items"), list):
         raise ValueError("Elasticsearch bulk response has no items array")
-    raw_items = response["items"]
+    raw_items = body["items"]
     if len(raw_items) != expected:
         raise ValueError(
             f"Elasticsearch bulk response returned {len(raw_items)} items "
@@ -169,7 +171,7 @@ class LoadFailedError(RuntimeError):
 
 
 def _server_version(client: Any) -> str:
-    response = client.info()
+    response = response_body(client.info())
     try:
         return str(response["version"]["number"])
     except (KeyError, TypeError) as exc:

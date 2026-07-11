@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 
 INDEX_NAME = "geo-series"
@@ -118,3 +118,12 @@ def create_client(settings: ElasticsearchSettings):
         retry_on_status=(429, 502, 503, 504),
         **auth,
     )
+
+
+def response_body(response: object) -> dict[str, Any]:
+    """Unwrap an official ``ObjectApiResponse`` or accept a fake dict."""
+
+    body = getattr(response, "body", response)
+    if not isinstance(body, dict):
+        raise ValueError("Elasticsearch response body must be an object")
+    return body

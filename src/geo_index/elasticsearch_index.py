@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .elasticsearch_config import INDEX_NAME, VECTOR_FIELDS
+from .elasticsearch_config import INDEX_NAME, VECTOR_FIELDS, response_body
 
 
 MAPPING_REVISION = "geo-series-v1"
@@ -84,7 +84,7 @@ def index_definition() -> dict[str, Any]:
 
 
 def _current_mapping(client: Any) -> dict[str, Any]:
-    response = client.indices.get_mapping(index=INDEX_NAME)
+    response = response_body(client.indices.get_mapping(index=INDEX_NAME))
     try:
         return dict(response[INDEX_NAME]["mappings"])
     except (KeyError, TypeError) as exc:
@@ -154,7 +154,7 @@ def index_readiness(client: Any, active_model_key: str) -> IndexReadiness:
     properties = mapping["properties"]
     if spec.field not in properties:
         raise ValueError(f"active vector field {spec.field!r} is not mapped")
-    info = client.info()
+    info = response_body(client.info())
     try:
         version = str(info["version"]["number"])
     except (KeyError, TypeError) as exc:

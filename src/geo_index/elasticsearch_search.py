@@ -8,7 +8,12 @@ from typing import Any, Literal, cast
 
 import numpy as np
 
-from .elasticsearch_config import INDEX_NAME, VECTOR_FIELDS, VectorFieldSpec
+from .elasticsearch_config import (
+    INDEX_NAME,
+    VECTOR_FIELDS,
+    VectorFieldSpec,
+    response_body,
+)
 from .elasticsearch_index import MAPPING_REVISION
 from .facets import facet_label
 from .search_models import (
@@ -71,9 +76,8 @@ def _bm25_query(query: str, filters: SearchFilters) -> dict[str, object]:
 
 
 def _response_hits(response: object) -> list[dict[str, object]]:
-    if not isinstance(response, dict):
-        raise ValueError("Elasticsearch search response must be an object")
-    hit_container = response.get("hits")
+    body = response_body(response)
+    hit_container = body.get("hits")
     if hit_container is None:
         return []
     if not isinstance(hit_container, dict) or not isinstance(
@@ -133,8 +137,8 @@ class ElasticsearchSearchService:
             raise ValueError(f"malformed GSE accession: {gse}")
         if not self._client.exists(index=INDEX_NAME, id=accession):
             return None
-        response = self._client.get(index=INDEX_NAME, id=accession)
-        if not isinstance(response, dict) or not isinstance(response.get("_source"), dict):
+        response = response_body(self._client.get(index=INDEX_NAME, id=accession))
+        if not isinstance(response.get("_source"), dict):
             raise ValueError(f"Elasticsearch get response for {accession} is malformed")
         source = dict(response["_source"])
         source["gse"] = accession
@@ -237,9 +241,8 @@ class ElasticsearchSearchService:
         field: FacetField,
         bucket_limit: int,
     ) -> tuple[FacetBucket, ...]:
-        if not isinstance(response, dict):
-            raise ValueError("Elasticsearch aggregation response must be an object")
-        aggregations = response.get("aggregations", {})
+        body = response_body(response)
+        aggregations = body.get("aggregations", {})
         values = aggregations.get("values", {}) if isinstance(aggregations, dict) else {}
         raw_buckets = values.get("buckets", []) if isinstance(values, dict) else []
         if not isinstance(raw_buckets, list):
