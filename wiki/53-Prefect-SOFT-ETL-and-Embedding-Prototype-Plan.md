@@ -291,6 +291,14 @@ Docker agents, or production orchestration.
 
 ## Implementation plan
 
+For parallel ownership, the Prefect/SOFT owner implements Tasks 1, 2, 5, and 7;
+the embedding owner implements Tasks 3, 4, and 6. They integrate only through
+the `build_missing_embeddings(...)` signature locked in Task 4. The third owner
+implements local Elasticsearch from
+[[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] and consumes the finished
+record/SQLite formats read-only. Copy-ready prompts are in
+[[55-Prefect-and-Local-Elasticsearch-Coworker-Prompts]].
+
 ### Task 1 — Pure SOFT record parser
 
 **Files:**
