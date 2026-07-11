@@ -15,7 +15,7 @@ from geo_index.fetch_soft import soft_path
 _ACCESSION = re.compile(r"GSE\d+\Z")
 _FAMILY_FILE = re.compile(r"(GSE\d+)_family\.soft\.gz\Z")
 _MAX_SNIPPETS = 2
-_MAX_RESULTS = 200
+_MAX_RESULTS = 10
 _SEARCH_TIMEOUT_SECONDS = 30
 _HTML = (Path(__file__).with_name("ui.html")).read_text()
 
@@ -125,6 +125,10 @@ def search_files(
             for snippet in result["snippets"]:
                 if len(snippets) < _MAX_SNIPPETS:
                     snippets.append(str(snippet))
+            if len(results) == max_results:
+                truncated = True
+                process.terminate()
+                break
     finally:
         timer.cancel()
         process.stdout.close()

@@ -77,7 +77,8 @@ left-side **Search raw files** checkbox to search the original files under
 `data/raw/soft`. Selecting a GSE opens its metadata SOFT, and the right-side
 **Show original raw file** checkbox switches the viewer to its full raw family
 file. Pass `--port`, `--raw-dir`, or `--metadata-dir` to use another local
-snapshot.
+snapshot. Each search stops after the first 10 matching GSEs, so refine the
+words if the desired series is not shown.
 
 > **Why not FTP family files / esummary JSON?** The FTP `*_family.soft.gz`
 > bundles the full expression matrix (~9 MB+ per series, TB-scale for the

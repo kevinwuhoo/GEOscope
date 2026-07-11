@@ -123,6 +123,20 @@ def test_search_files_caps_the_number_of_matching_series(tmp_path: Path) -> None
     assert response["truncated"] is True
 
 
+def test_search_files_stops_after_ten_series_by_default(tmp_path: Path) -> None:
+    browser = import_module("geo_index.soft_browser.server")
+    for number in range(100001, 100012):
+        _write_gz(
+            browser.family_file_path(tmp_path, f"GSE{number}"),
+            "!Series_summary = common phrase\n",
+        )
+
+    response = browser.search_files(tmp_path, "common phrase")
+
+    assert len(response["results"]) == 10
+    assert response["truncated"] is True
+
+
 def test_file_endpoint_streams_metadata_file_by_default(tmp_path: Path) -> None:
     browser = import_module("geo_index.soft_browser.server")
     raw_dir = tmp_path / "raw"
