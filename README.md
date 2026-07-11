@@ -127,3 +127,56 @@ uv run python -m geo_index.pg_hybrid filter-index
 
 Filters are series-level: selecting values across fields means the GSE contains
 each value somewhere, not that one GSM sample contains all of them.
+
+## Local Elasticsearch foundation
+
+The prototype Elasticsearch service is pinned to 9.4.2, binds only to
+`127.0.0.1:9200`, persists its data in a named Docker volume, and enables a
+local trial license so native RRF can be verified. Create the ignored local
+environment file and choose a local-only password:
+
+```bash
+cp .env.elasticsearch.example .env.elasticsearch
+# Edit ELASTICSEARCH_PASSWORD before starting.
+docker compose --env-file .env.elasticsearch \
+  -f docker-compose.elasticsearch.yml up -d
+docker compose --env-file .env.elasticsearch \
+  -f docker-compose.elasticsearch.yml ps
+```
+
+The Compose file preserves disk protection with local absolute watermarks of
+1 GB free (low), 750 MB (high), and 500 MB (flood stage). Expand Docker's disk
+allocation before loading the real corpus; the tiny synthetic test can run
+within those bounds, but the full metadata and vector index cannot fit in a
+nearly-full Docker VM.
+
+Export the same URL and credentials for the Python client, then run the
+synthetic container tests:
+
+```bash
+set -a
+source .env.elasticsearch
+set +a
+GEO_TEST_ELASTIC=1 uv run pytest tests/test_elasticsearch_live.py -v
+```
+
+The loader is independent of Prefect and model execution. After the canonical
+record tree and at least one canonical model artifact are complete, load them
+with:
+
+```bash
+uv run geo-elasticsearch-load \
+  --records-root data/processed/series_records \
+  --artifacts-root data/processed/embedding_artifacts \
+  --report data/processed/elasticsearch_load_report.json
+```
+
+Run the identical command a second time to prove the document count is
+unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
+second load replaces the same documents. Real-corpus ingestion is intentionally
+deferred until the ETL and per-model artifacts are complete.
+
+For a later managed deployment, configure only `ELASTICSEARCH_URL` and either
+`ELASTICSEARCH_USERNAME` plus `ELASTICSEARCH_PASSWORD`, or
+`ELASTICSEARCH_API_KEY`. The loader and search code do not depend on Docker or
+localhost.

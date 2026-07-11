@@ -33,7 +33,10 @@ packages = ["src/geo_index"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["integration: requires the local GEO Postgres database"]
+markers = [
+    "integration: requires the local GEO Postgres database",
+    "elastic_integration: requires local Elasticsearch and GEO_TEST_ELASTIC=1",
+]
 
 [dependency-groups]
 dev = [

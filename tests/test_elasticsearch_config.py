@@ -18,9 +18,19 @@ def test_compose_pins_local_single_node_with_volume_and_healthcheck() -> None:
     assert "discovery.type=single-node" in text
     assert "xpack.security.enabled=true" in text
     assert "xpack.security.http.ssl.enabled=false" in text
+    assert "xpack.license.self_generated.type=trial" in text
+    assert "cluster.routing.allocation.disk.watermark.low=1gb" in text
+    assert "cluster.routing.allocation.disk.watermark.high=750mb" in text
+    assert "cluster.routing.allocation.disk.watermark.flood_stage=500mb" in text
     assert "geo_elasticsearch_data:/usr/share/elasticsearch/data" in text
     assert "healthcheck:" in text
+    assert "/_security/_authenticate" in text
     assert "ELASTIC_PASSWORD" in text
+
+
+def test_example_environment_file_can_be_sourced_by_a_shell() -> None:
+    text = Path(".env.elasticsearch.example").read_text(encoding="utf-8")
+    assert 'ELASTICSEARCH_JAVA_OPTS="-Xms1g -Xmx1g"' in text
 
 
 def test_fixed_index_and_vector_fields() -> None:

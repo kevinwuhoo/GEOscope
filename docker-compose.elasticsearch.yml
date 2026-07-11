@@ -6,6 +6,11 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=false
+      - xpack.license.self_generated.type=trial
+      - cluster.routing.allocation.disk.watermark.low=1gb
+      - cluster.routing.allocation.disk.watermark.high=750mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=500mb
+      - cluster.routing.allocation.disk.watermark.flood_stage.frozen=500mb
       - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD:?set ELASTICSEARCH_PASSWORD}
       - ES_JAVA_OPTS=${ELASTICSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}
     ports:
@@ -17,7 +22,9 @@ services:
         - CMD-SHELL
         - >-
           curl --silent --fail --user elastic:$${ELASTIC_PASSWORD}
-          http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s
+          http://localhost:9200/_security/_authenticate >/dev/null
+          && curl --silent --fail --user elastic:$${ELASTIC_PASSWORD}
+          http://localhost:9200/_cluster/health?wait_for_status=yellow&wait_for_no_initializing_shards=true&timeout=5s
           >/dev/null
       interval: 10s
       timeout: 6s
