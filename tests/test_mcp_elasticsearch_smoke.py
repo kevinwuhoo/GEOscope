@@ -57,9 +57,11 @@ async def test_live_elasticsearch_serves_all_three_mcp_tools(monkeypatch) -> Non
             "facet_values", {"field": "organism_ids", "limit": 5}
         )
         assert facet.is_error is False
+        mode = os.environ.get("GEO_MCP_SMOKE_MODE", "bm25")
+        assert mode in {"bm25", "dense", "hybrid"}
         result = await client.call_tool(
             "search_datasets",
-            {"query": "cancer", "mode": "bm25", "limit": 3},
+            {"query": "cancer", "mode": mode, "limit": 3},
         )
         assert result.is_error is False
         rows = result.structured_content["results"]
