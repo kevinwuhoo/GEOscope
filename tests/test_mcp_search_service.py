@@ -191,6 +191,26 @@ def test_startup_failure_closes_client_and_leaves_service_closed() -> None:
     assert not service.is_open
 
 
+def test_truncated_facet_vocabulary_fails_closed() -> None:
+    class TruncatedClient(_Client):
+        def search(self, **kwargs: object) -> dict[str, object]:
+            response = super().search(**kwargs)
+            response["aggregations"]["assay_labels"]["sum_other_doc_count"] = 1
+            return response
+
+    client = TruncatedClient()
+    service = McpSearchService(
+        elasticsearch=SETTINGS,
+        client_factory=lambda settings: client,
+        readiness_check=lambda client, key: None,
+    )
+
+    with pytest.raises(RuntimeError, match="assay_labels vocabulary exceeds"):
+        service.open()
+    assert client.closed
+    assert not service.is_open
+
+
 def test_bm25_does_not_construct_query_encoder_but_dense_does() -> None:
     encoder = _Encoder()
     responses = [_response(mode="bm25"), _response(mode="dense")]
@@ -310,4 +330,3 @@ def test_default_encoder_factory_delegates_to_shared_elasticsearch_factory(
         "gemini_embedding_2_3072_v1"
     ) is sentinel
     assert calls == ["gemini_embedding_2_3072_v1"]
-

@@ -225,6 +225,13 @@ class McpSearchService:
             raw_buckets = raw_result.get("buckets") if isinstance(raw_result, dict) else None
             if not isinstance(raw_buckets, list):
                 raise RuntimeError(f"Elasticsearch {field} vocabulary is malformed")
+            raw_omitted = raw_result.get("sum_other_doc_count", 0)
+            if not isinstance(raw_omitted, int) or raw_omitted < 0:
+                raise RuntimeError(f"Elasticsearch {field} vocabulary is malformed")
+            if raw_omitted:
+                raise RuntimeError(
+                    f"Elasticsearch {field} vocabulary exceeds the startup bound"
+                )
             values: list[str] = []
             for bucket in raw_buckets:
                 if not isinstance(bucket, dict) or "key" not in bucket:
