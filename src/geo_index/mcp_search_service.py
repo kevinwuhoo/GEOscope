@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -21,7 +20,6 @@ from .elasticsearch_config import (
 from .elasticsearch_index import index_readiness
 from .elasticsearch_query_embeddings import create_query_encoder
 from .elasticsearch_search import ElasticsearchSearchService
-from .embedding_registry import get_variant
 from .mcp_models import (
     DatasetDetail,
     DatasetSummary,
@@ -52,71 +50,6 @@ class QueryEncoder(Protocol):
 class DomainSearch(Protocol):
     def search(self, query: str, **kwargs: object): ...
     def get_dataset(self, gse: str) -> dict[str, object] | None: ...
-
-
-def _google_client(api_key: str):
-    from google import genai
-
-    return genai.Client(api_key=api_key)
-
-
-class GeminiQueryEncoder:
-    """One fixed, lazy Gemini query encoder for the primary MCP profile."""
-
-    def __init__(
-        self,
-        *,
-        model_key: str,
-        api_key: str,
-        client_factory: Callable[[str], object] = _google_client,
-    ) -> None:
-        variant = get_variant(model_key)
-        if variant.provider != "google":
-            raise ValueError(f"not a Gemini embedding variant: {model_key}")
-        if not api_key.strip():
-            raise ValueError("GEMINI_API_KEY is required for dense or hybrid MCP search")
-        self._variant = variant
-        self._client = client_factory(api_key)
-        self._closed = False
-
-    def encode(self, query: str) -> np.ndarray:
-        if self._closed:
-            raise RuntimeError("query encoder is closed")
-        text = query.strip()
-        if not text:
-            raise ValueError("blank query")
-        from google.genai import types
-
-        response = self._client.models.embed_content(
-            model=self._variant.query_model_id,
-            contents=self._variant.query_format.format(query=text),
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY",
-                output_dimensionality=self._variant.dimensions,
-            ),
-        )
-        embeddings = getattr(response, "embeddings", None)
-        values = (
-            embeddings[0].values
-            if isinstance(embeddings, list) and len(embeddings) == 1
-            else None
-        )
-        vector = np.asarray(values, dtype=np.float32)
-        if (
-            vector.ndim != 1
-            or vector.shape != (self._variant.dimensions,)
-            or not np.isfinite(vector).all()
-        ):
-            raise RuntimeError("Gemini query encoder returned an invalid vector")
-        return np.ascontiguousarray(vector, dtype=np.float32)
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        close = getattr(self._client, "close", None)
-        if callable(close):
-            close()
 
 
 def _cap_text(
@@ -193,14 +126,12 @@ class McpSearchService:
         self,
         *,
         elasticsearch: ElasticsearchSettings,
-        environ: Mapping[str, str] | None = None,
         client_factory: Callable[[ElasticsearchSettings], object] = create_client,
         query_encoder_factory: Callable[[str], QueryEncoder] | None = None,
         search_service_factory: Callable[..., DomainSearch] = ElasticsearchSearchService,
         readiness_check: Callable[[object, str], object] = index_readiness,
     ) -> None:
         self.elasticsearch = elasticsearch
-        self._environ = os.environ if environ is None else environ
         self._client_factory = client_factory
         self._query_encoder_factory = (
             query_encoder_factory or self._default_query_encoder_factory
@@ -230,11 +161,6 @@ class McpSearchService:
         return self._facet_vocabulary
 
     def _default_query_encoder_factory(self, model_key: str) -> QueryEncoder:
-        if model_key == "gemini_embedding_2_3072_v1":
-            return GeminiQueryEncoder(
-                model_key=model_key,
-                api_key=self._environ.get("GEMINI_API_KEY", ""),
-            )
         return create_query_encoder(model_key)
 
     def open(self) -> None:

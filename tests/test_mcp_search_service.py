@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
+import geo_index.mcp_search_service as mcp_search
 from geo_index.elasticsearch_config import ElasticsearchSettings
 from geo_index.mcp_search_service import (
-    GeminiQueryEncoder,
     McpSearchService,
     UnknownFilterValueError,
 )
@@ -295,53 +293,21 @@ def test_ping_requires_open_service_and_rechecks_readiness() -> None:
     ]
 
 
-class _GoogleModels:
-    def __init__(self, values: list[float] | None = None) -> None:
-        self.values = values or [1.0] * 3072
-        self.calls: list[dict[str, object]] = []
+def test_default_encoder_factory_delegates_to_shared_elasticsearch_factory(
+    monkeypatch,
+) -> None:
+    sentinel = _Encoder()
+    calls: list[str] = []
 
-    def embed_content(self, **kwargs: object):
-        self.calls.append(kwargs)
-        return SimpleNamespace(embeddings=[SimpleNamespace(values=self.values)])
+    def shared_factory(model_key: str):
+        calls.append(model_key)
+        return sentinel
 
+    monkeypatch.setattr(mcp_search, "create_query_encoder", shared_factory)
+    service = McpSearchService(elasticsearch=SETTINGS)
 
-class _GoogleClient:
-    def __init__(self, models: _GoogleModels) -> None:
-        self.models = models
-        self.closed = False
+    assert service._default_query_encoder_factory(
+        "gemini_embedding_2_3072_v1"
+    ) is sentinel
+    assert calls == ["gemini_embedding_2_3072_v1"]
 
-    def close(self) -> None:
-        self.closed = True
-
-
-def test_gemini_query_encoder_uses_fixed_contract_and_validates_vector() -> None:
-    models = _GoogleModels()
-    client = _GoogleClient(models)
-    encoder = GeminiQueryEncoder(
-        model_key="gemini_embedding_2_3072_v1",
-        api_key="secret",
-        client_factory=lambda key: client,
-    )
-
-    vector = encoder.encode(" immune cells ")
-    assert vector.shape == (3072,)
-    assert np.isfinite(vector).all()
-    assert models.calls[0]["model"] == "gemini-embedding-2"
-    assert models.calls[0]["contents"] == "task: search result | query: immune cells"
-    assert models.calls[0]["config"].output_dimensionality == 3072
-    assert models.calls[0]["config"].task_type == "RETRIEVAL_QUERY"
-    encoder.close()
-    encoder.close()
-    assert client.closed
-
-
-@pytest.mark.parametrize("values", [[1.0], [float("nan")] * 3072])
-def test_gemini_query_encoder_rejects_invalid_vectors(values: list[float]) -> None:
-    client = _GoogleClient(_GoogleModels(values))
-    encoder = GeminiQueryEncoder(
-        model_key="gemini_embedding_2_3072_v1",
-        api_key="secret",
-        client_factory=lambda key: client,
-    )
-    with pytest.raises(RuntimeError, match="invalid vector"):
-        encoder.encode("immune")
