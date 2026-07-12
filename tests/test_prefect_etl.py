@@ -642,6 +642,11 @@ def test_incomplete_gemini_coverage_fails_and_closes_client(
     assert report.elasticsearch_error == (
         "ValueError: incomplete Gemini vector coverage: 1/2"
     )
+    assert report.elasticsearch_attempted == 2
+    assert report.elasticsearch_succeeded == 2
+    assert report.elasticsearch_retried == 1
+    assert report.elasticsearch_document_count == 2
+    assert report.elasticsearch_vector_count == 1
     assert report.succeeded is False
     assert fake_elasticsearch_stage[0].closed is True
 

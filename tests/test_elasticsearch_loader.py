@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
 import pytest
 
 from geo_index.elasticsearch_config import INDEX_NAME, VECTOR_FIELDS
@@ -72,6 +75,41 @@ def _documents() -> list[IndexDocument]:
         IndexDocument("GSE2", {"gse": "GSE2", "title": "two"}),
         IndexDocument("GSE10", {"gse": "GSE10", "title": "ten"}),
     ]
+
+
+def _write_record(root: Path, gse: str) -> None:
+    path = root / "GSEnnn" / f"{gse}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"gse": gse, "title": f"Title {gse}"}),
+        encoding="utf-8",
+    )
+
+
+def _write_artifact(
+    root: Path,
+    *,
+    model_key: str,
+    gse: str,
+    fill: float,
+) -> None:
+    spec = VECTOR_FIELDS[model_key]
+    path = root / model_key
+    path.mkdir(parents=True, exist_ok=True)
+    vectors = np.full((1, spec.dimensions), fill, dtype=np.float32)
+    np.save(path / "vectors.npy", vectors, allow_pickle=False)
+    (path / "ids.json").write_text(json.dumps([gse]), encoding="utf-8")
+    (path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_key": model_key,
+                "dimensions": spec.dimensions,
+                "record_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_bulk_actions_use_gse_id_and_index_operation() -> None:
@@ -165,6 +203,46 @@ class _LoadClient(_BulkClient):
         return {
             "count": sum(field in source for source in self.documents.values())
         }
+
+
+def test_load_index_replacement_preserves_all_available_local_vectors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records_root = tmp_path / "records"
+    artifacts_root = tmp_path / "artifacts"
+    _write_record(records_root, "GSE2")
+    _write_artifact(
+        artifacts_root,
+        model_key="bge_small_v15",
+        gse="GSE2",
+        fill=0.25,
+    )
+    _write_artifact(
+        artifacts_root,
+        model_key="gemini_embedding_2_3072_v1",
+        gse="GSE2",
+        fill=0.75,
+    )
+    client = _LoadClient()
+    client.documents["GSE2"] = {"gse": "GSE2", "stale": True}
+    monkeypatch.setattr(
+        "geo_index.elasticsearch_loader.ensure_index", lambda _client: False
+    )
+
+    report = load_index(
+        client,
+        records_root=records_root,
+        artifacts_root=artifacts_root,
+        model_keys=tuple(VECTOR_FIELDS),
+    )
+
+    source = client.documents["GSE2"]
+    assert "stale" not in source
+    assert source["embedding_bge_384"] == pytest.approx([0.25] * 384)
+    assert source["embedding_gemini_3072"] == pytest.approx([0.75] * 3072)
+    assert report.vector_coverage["embedding_bge_384"] == 1
+    assert report.vector_coverage["embedding_gemini_3072"] == 1
 
 
 def test_load_index_refreshes_once_and_reports_document_vector_coverage(
