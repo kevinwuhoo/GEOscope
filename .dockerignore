@@ -1,0 +1,15 @@
+.git
+.gitignore
+.worktrees
+.env*
+.agent-report.md
+data
+eval/results
+.venv
+.pytest_cache
+**/__pycache__
+**/*.py[cod]
+.obsidian
+.cache
+tests
+wiki
