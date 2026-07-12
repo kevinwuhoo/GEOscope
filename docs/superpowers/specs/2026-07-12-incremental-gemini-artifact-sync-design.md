@@ -128,11 +128,13 @@ Before provider work, the builder atomically writes a versioned synchronization
 plan into the model's temporary workspace. The plan records:
 
 - model key and schema version;
-- target inventory digest and ordered target IDs;
+- target inventory digest;
 - published base-artifact ID digest;
-- ordered delta IDs and explicitly replaced IDs;
-- counts for new, changed, removed, and reused records;
-- the exact request estimate used for cost authorization.
+- ordered delta IDs.
+
+The deterministic Gemini request inventory and exact cost estimate remain in
+the provider workspace/state. Final encoded and reused counts are recorded in
+the published artifact metadata.
 
 On resume, the builder recomputes the current target and base digests. It resumes
 only if they match the durable plan. A mismatch raises a diagnostic error and

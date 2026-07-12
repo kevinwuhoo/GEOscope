@@ -268,12 +268,18 @@ def _assemble_results(
     result_path: Path,
     records: Sequence[RecordRef],
     dimensions: int,
-) -> tuple[np.ndarray | None, int, tuple[GeminiBatchRowFailure, ...]]:
+) -> tuple[
+    np.ndarray | None,
+    int,
+    bool,
+    tuple[GeminiBatchRowFailure, ...],
+]:
     expected = {record.gse for record in records}
     seen: set[str] = set()
     vectors: dict[str, np.ndarray] = {}
     failures: dict[str, GeminiBatchRowFailure] = {}
     actual_tokens = 0
+    token_counts_complete = True
     with result_path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
             if not line.strip():
@@ -308,7 +314,11 @@ def _assemble_results(
             if not np.isfinite(vector).all():
                 raise ValueError(f"Gemini response {gse} contains nonfinite values")
             vectors[gse] = vector
-            actual_tokens += int(response.get("tokenCount") or 0)
+            token_count = response.get("tokenCount")
+            if token_count is None:
+                token_counts_complete = False
+            else:
+                actual_tokens += int(token_count)
     missing = sorted(expected - seen, key=lambda gse: int(gse[3:]))
     if missing:
         raise ValueError(f"missing Gemini responses: {', '.join(missing)}")
@@ -316,6 +326,7 @@ def _assemble_results(
         return (
             None,
             actual_tokens,
+            token_counts_complete,
             tuple(
                 failures[record.gse]
                 for record in records
@@ -326,7 +337,12 @@ def _assemble_results(
         np.float32,
         copy=False,
     )
-    return np.ascontiguousarray(matrix), actual_tokens, ()
+    return (
+        np.ascontiguousarray(matrix),
+        actual_tokens,
+        token_counts_complete,
+        (),
+    )
 
 
 def _display_name(base: str, shard: GeminiRequestShard, count: int) -> str:
@@ -689,6 +705,7 @@ def build_gemini_vectors(
     vector_batches: list[np.ndarray] = []
     row_failures: list[GeminiBatchRowFailure] = []
     actual_tokens = 0
+    token_counts_complete = True
     uploaded_ids: list[str] = []
     job_ids: list[str] = []
     output_ids: list[str] = []
@@ -709,7 +726,12 @@ def build_gemini_vectors(
             if not isinstance(raw_shard_state, dict):
                 raise ValueError("invalid Gemini shard state")
             shard_records = [record_by_gse[gse] for gse in shard.gses]
-            vectors, shard_tokens, shard_failures = _assemble_results(
+            (
+                vectors,
+                shard_tokens,
+                shard_token_counts_complete,
+                shard_failures,
+            ) = _assemble_results(
                 _result_path(temp_dir, shard),
                 shard_records,
                 variant.dimensions,
@@ -718,6 +740,9 @@ def build_gemini_vectors(
                 vector_batches.append(vectors)
             row_failures.extend(shard_failures)
             actual_tokens += shard_tokens
+            token_counts_complete = (
+                token_counts_complete and shard_token_counts_complete
+            )
             uploaded = raw_shard_state.get("uploaded_file_name")
             job_name = raw_shard_state.get("job_name")
             output = raw_shard_state.get("output_file_name")
@@ -742,9 +767,11 @@ def build_gemini_vectors(
         truncation_count=estimate.truncation_count,
         usage={
             "estimated_tokens_upper_bound": estimate.estimated_tokens,
-            "actual_tokens": actual_tokens,
+            "actual_tokens": actual_tokens if token_counts_complete else None,
             "estimated_charge_usd": (
                 actual_tokens / 1_000_000 * BATCH_PRICE_PER_MILLION_TOKENS_USD
+                if token_counts_complete
+                else None
             ),
             "provider_file_ids": [*uploaded_ids, *output_ids],
             "provider_job_ids": job_ids,

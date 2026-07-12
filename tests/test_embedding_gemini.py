@@ -1189,6 +1189,30 @@ def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
     assert result.usage["actual_tokens"] == 10
 
 
+def test_batch_usage_marks_unreported_token_counts_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    rows = [_response("GSE10", 10), _response("GSE2", 2)]
+    for row in rows:
+        response = row["response"]
+        assert isinstance(response, dict)
+        response.pop("tokenCount")
+    monkeypatch.setattr(gemini, "_create_client", lambda key: FakeClient(rows))
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        max_cost_usd=1.0,
+    )
+
+    assert result.usage["actual_tokens"] is None
+    assert result.usage["estimated_charge_usd"] is None
+
+
 def test_row_errors_are_aggregated_without_writing_an_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

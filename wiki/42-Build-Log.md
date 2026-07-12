@@ -142,6 +142,16 @@ before API-key lookup and client construction, and the isolated output root
 contained no `gemini_state.json`, result files, provider IDs, or final embedding
 artifact.
 
+The incremental production run on 2026-07-12 compared the published
+249,736-row Gemini artifact with 288,904 canonical records and submitted only
+the 39,168 missing IDs. It used 40 resumable Batch API shards at concurrency 4;
+all 40 succeeded. The conservative byte-derived bound was 95,459,736 tokens /
+$9.5460. Google did not report per-row token counts, so the actual charge is
+left unknown rather than recorded as zero. The merged 288,904 × 3,072 artifact
+passed full validation and exact ID-order comparison. Elasticsearch then
+indexed 288,904/288,904 documents with no retries or failures and reported
+288,904-row Gemini vector coverage.
+
 ### Final whole-branch review fixes and validation
 
 The final review hardening preserves replacement intent before encoder/provider
