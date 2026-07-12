@@ -299,6 +299,46 @@ def test_replacement_provider_failure_preserves_previous_valid_artifact(
     validate_artifact(original.artifact_path, get_variant("bge_small_v15"))
 
 
+def test_failed_forced_replacement_is_retried_without_new_replace_gses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    final = build_embedding_artifact(
+        records, output, "bge_small_v15", allow_paid_gemini=False
+    ).artifact_path
+    original_vectors = (final / "vectors.npy").read_bytes()
+    marker = output / ".bge_small_v15.replace.pending"
+    _factory(monkeypatch, FakeEncoder(384, error=RuntimeError("encode failed")))
+
+    with pytest.raises(RuntimeError, match="encode failed"):
+        build_missing_embeddings(
+            records,
+            output,
+            "bge_small_v15",
+            replace_gses={"GSE2"},
+            allow_paid_gemini=False,
+        )
+
+    assert marker.exists()
+    assert (final / "vectors.npy").read_bytes() == original_vectors
+
+    _factory(monkeypatch, FakeEncoder(384, value_offset=100))
+    result = build_missing_embeddings(
+        records,
+        output,
+        "bge_small_v15",
+        replace_gses=frozenset(),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "replaced"
+    assert np.all(np.load(final / "vectors.npy")[0] == 102)
+    assert not marker.exists()
+
+
 def test_builder_recovers_backup_when_replacement_crashed_before_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -65,15 +65,30 @@ def _encode(
     return encoder.encode(records, batch_size=variant.default_batch_size)
 
 
+def _persist_replacement_intent(marker: Path) -> None:
+    """Atomically persist replacement intent before any provider work."""
+    temporary = marker.with_suffix(marker.suffix + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write('{"schema_version":1}\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, marker)
+        directory_fd = os.open(marker.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _replace_published_artifact(temp_dir: Path, final_dir: Path) -> None:
     backup = final_dir.parent / f".{final_dir.name}.backup"
     marker = final_dir.parent / f".{final_dir.name}.replace.pending"
     if backup.exists():
         raise FileExistsError(f"stale artifact backup exists: {backup}")
-    with marker.open("w", encoding="utf-8") as handle:
-        handle.write('{"schema_version":1}\n')
-        handle.flush()
-        os.fsync(handle.fileno())
+    _persist_replacement_intent(marker)
     os.rename(final_dir, backup)
     try:
         os.rename(temp_dir, final_dir)
@@ -167,6 +182,10 @@ def _build(
         raise ValueError(f"no canonical records found under {records_root}")
     temp_dir = output_root / f".{model_key}.tmp"
     output_root.mkdir(parents=True, exist_ok=True)
+    if final_exists and force_replace:
+        _persist_replacement_intent(
+            output_root / f".{model_key}.replace.pending"
+        )
     if variant.provider != "google" and temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
