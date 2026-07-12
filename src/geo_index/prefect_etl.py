@@ -218,7 +218,7 @@ def geo_soft_etl(
     elasticsearch_retried = 0
     elasticsearch_document_count = 0
     elasticsearch_vector_count = 0
-    if embedding_error is None:
+    if not failures and embedding_error is None:
         client = None
         try:
             gemini_spec = VECTOR_FIELDS[DEFAULT_EMBEDDING_MODEL_KEY]

@@ -247,6 +247,63 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     ]
 
 
+def test_partial_materialization_failure_prevents_elasticsearch_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    jobs = tuple(_job(tmp_path, number) for number in (2, 10))
+    failure = MaterializeFailure("GSE10", jobs[1].source, "SoftParseError: bad")
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda _soft_root, _records_root: DiscoveryResult(2, 0, jobs),
+    )
+    monkeypatch.setattr(
+        prefect_etl.parse_record_batch,
+        "submit",
+        lambda _batch: FakeFuture(BatchResult(("GSE2",), (), (failure,))),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *_args, **_kwargs: _fake_embedding_result(),
+    )
+    artifact_calls: list[object] = []
+    settings_calls: list[object] = []
+    loader_calls: list[object] = []
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_artifact",
+        lambda *args: artifact_calls.append(args) or object(),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "ElasticsearchSettings",
+        SimpleNamespace(
+            from_env=lambda: settings_calls.append(object()) or object()
+        ),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_index",
+        lambda *args, **_kwargs: loader_calls.append(args) or _fake_load_report(),
+    )
+
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
+
+    assert report.failed == 1
+    assert report.elasticsearch_status == "not_run"
+    assert artifact_calls == []
+    assert settings_calls == []
+    assert fake_elasticsearch_stage == []
+    assert loader_calls == []
+
+
 def test_flow_reconciles_retry_commits_from_original_submitted_batch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

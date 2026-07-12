@@ -296,8 +296,9 @@ uv run geo-elasticsearch-load \
 Run the identical command a second time to prove the document count is
 unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
 second load replaces the same documents. On the primary path,
-`geo-soft-etl --allow-paid-gemini` performs this same idempotent operation for
-the Gemini artifact and includes its audit in the terminal flow report.
+`geo-soft-etl --allow-paid-gemini` builds or resumes the Gemini artifact, loads
+every available registered embedding artifact in one idempotent operation, and
+audits complete Gemini coverage in its terminal flow report.
 
 After BGE, MedCPT, and Qwen have full vector coverage, run the guarded read-only
 comparison. It generates real query embeddings, exercises BM25+dense native RRF

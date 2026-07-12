@@ -75,9 +75,10 @@ The prototype flow:
    `data/processed/series_records/<bucket>/<GSE>.json` exists, without reopening
    its source;
 3. parses only missing outputs and publishes each JSON atomically;
-4. exposes the completed canonical JSON tree to separate model builders that
-   create one complete NumPy matrix/ID/metadata artifact per model;
-5. exposes records and model artifacts to the separate local Elasticsearch loader.
+4. builds or resumes the registered Gemini NumPy matrix/ID/metadata artifact
+   from the completed canonical JSON tree;
+5. loads every available registered embedding artifact into local Elasticsearch
+   and audits document count plus full Gemini coverage before reporting success.
 
 Deleting one derived record is the explicit v1 invalidation mechanism. The next
 run rebuilds it and replaces that GSE's configured embeddings. This intentionally
