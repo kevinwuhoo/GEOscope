@@ -227,6 +227,7 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
         records_root=tmp_path / "records",
         parse_batch_size=250,
         allow_paid_gemini=True,
+        gemini_max_cost_usd=9.55,
         gemini_concurrency=4,
     )
 
@@ -242,6 +243,7 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
             "model_key": "gemini_embedding_2_3072_v1",
             "replace_gses": frozenset({"GSE2", "GSE20"}),
             "allow_paid_gemini": True,
+            "gemini_max_cost_usd": 9.55,
             "gemini_concurrency": 4,
         }
     ]
@@ -840,6 +842,8 @@ def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
             "--workers",
             "3",
             "--allow-paid-gemini",
+            "--gemini-max-cost-usd",
+            "9.55",
             "--gemini-concurrency",
             "4",
         ]
@@ -849,6 +853,7 @@ def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
     assert captured["max_workers"] == 3
     assert captured["parse_batch_size"] == 17
     assert captured["allow_paid_gemini"] is True
+    assert captured["gemini_max_cost_usd"] == 9.55
     assert captured["gemini_concurrency"] == 4
 
 

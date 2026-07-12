@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -647,6 +648,7 @@ def build_gemini_vectors(
     temp_dir: Path,
     *,
     allow_paid: bool,
+    max_cost_usd: float | None = None,
     concurrency: int = 1,
 ) -> LocalProviderResult:
     """Submit or resume bounded file batches and assemble aligned vectors."""
@@ -664,6 +666,15 @@ def build_gemini_vectors(
     if not allow_paid:
         raise GeminiAuthorizationError(
             "Gemini batch submission requires allow_paid_gemini=True"
+        )
+    if (
+        max_cost_usd is None
+        or not math.isfinite(max_cost_usd)
+        or max_cost_usd < estimate.estimated_cost_usd
+    ):
+        raise GeminiAuthorizationError(
+            "Gemini batch submission requires a finite cost ceiling of at least "
+            f"${estimate.estimated_cost_usd:.7f}"
         )
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:

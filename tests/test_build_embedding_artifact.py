@@ -91,8 +91,17 @@ def test_encode_forwards_explicit_gemini_concurrency(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(records, variant, temp_dir, *, allow_paid, concurrency):
+    def fake_build(
+        records,
+        variant,
+        temp_dir,
+        *,
+        allow_paid,
+        max_cost_usd,
+        concurrency,
+    ):
         captured["allow_paid"] = allow_paid
+        captured["max_cost_usd"] = max_cost_usd
         captured["concurrency"] = concurrency
         return SimpleNamespace(vectors=np.empty((0, 3072), dtype=np.float32))
 
@@ -102,10 +111,15 @@ def test_encode_forwards_explicit_gemini_concurrency(
         (),
         tmp_path,
         allow_paid_gemini=True,
+        gemini_max_cost_usd=9.55,
         gemini_concurrency=4,
     )
 
-    assert captured == {"allow_paid": True, "concurrency": 4}
+    assert captured == {
+        "allow_paid": True,
+        "max_cost_usd": 9.55,
+        "concurrency": 4,
+    }
 
 
 def test_parser_defaults_to_sequential_gemini_batches() -> None:
@@ -125,6 +139,43 @@ def test_parser_accepts_explicit_gemini_concurrency() -> None:
         ]
     )
     assert args.gemini_concurrency == 4
+
+
+def test_parser_accepts_explicit_gemini_cost_ceiling() -> None:
+    args = builder._parser().parse_args(
+        [
+            "--model-key",
+            "gemini_embedding_2_3072_v1",
+            "--gemini-max-cost-usd",
+            "9.55",
+        ]
+    )
+    assert args.gemini_max_cost_usd == 9.55
+
+
+def test_public_builder_forwards_gemini_cost_ceiling_to_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_encode(variant, provider_records, temp_dir, **kwargs):
+        captured.update(kwargs)
+        return FakeEncoder(3072).encode(provider_records, batch_size=1)
+
+    monkeypatch.setattr(builder, "_encode", fake_encode)
+
+    build_embedding_artifact(
+        records,
+        tmp_path / "artifacts",
+        "gemini_embedding_2_3072_v1",
+        allow_paid_gemini=True,
+        gemini_max_cost_usd=9.55,
+        gemini_concurrency=4,
+    )
+
+    assert captured["gemini_max_cost_usd"] == 9.55
 
 
 def test_builder_encodes_numeric_order_once_and_aligns_ids_to_rows(
@@ -172,13 +223,6 @@ def test_valid_existing_artifact_skips_encoder_construction(
         builder.embedding_local,
         "create_local_encoder",
         lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
-    )
-    monkeypatch.setattr(
-        builder,
-        "load_record_inventory",
-        lambda records_root: (_ for _ in ()).throw(
-            AssertionError("completed canonical records opened")
-        ),
     )
 
     second = build_embedding_artifact(
@@ -279,8 +323,10 @@ def test_build_missing_embeddings_replaces_complete_artifact_for_rebuilt_gse(
 
     assert result.status == "replaced"
     assert factory_calls == ["bge_small_v15"]
+    assert replacement.calls == [(("GSE2",), 128)]
     vectors = np.load(output / "bge_small_v15" / "vectors.npy")
     assert np.all(vectors[0] == 102)
+    assert np.all(vectors[1] == 10)
     assert not (output / ".bge_small_v15.backup").exists()
 
 
@@ -297,11 +343,65 @@ def test_build_missing_embeddings_with_empty_replace_set_skips_encoder(
         "create_local_encoder",
         lambda variant: (_ for _ in ()).throw(AssertionError("encoder constructed")),
     )
+
+    result = build_missing_embeddings(
+        records,
+        output,
+        "bge_small_v15",
+        replace_gses=frozenset(),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "skipped"
+
+
+def test_existing_artifact_encodes_only_new_records_and_reuses_existing_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    build_embedding_artifact(records, output, "bge_small_v15", allow_paid_gemini=False)
+    _write_record(records, "GSE5", "Five", "document five")
+    delta = FakeEncoder(384, value_offset=100)
+    factory_calls = _factory(monkeypatch, delta)
+
+    result = build_missing_embeddings(
+        records,
+        output,
+        "bge_small_v15",
+        replace_gses=frozenset(),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "replaced"
+    assert result.record_count == 3
+    assert factory_calls == ["bge_small_v15"]
+    assert delta.calls == [(("GSE5",), 128)]
+    assert json.loads((result.artifact_path / "ids.json").read_text()) == [
+        "GSE2",
+        "GSE5",
+        "GSE10",
+    ]
+    vectors = np.load(result.artifact_path / "vectors.npy")
+    assert vectors[:, 0].tolist() == [2.0, 105.0, 10.0]
+
+
+def test_existing_artifact_removes_deleted_records_without_provider_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    _factory(monkeypatch, FakeEncoder(384))
+    build_embedding_artifact(records, output, "bge_small_v15", allow_paid_gemini=False)
+    (records / "GSEnnn" / "GSE10.json").unlink()
     monkeypatch.setattr(
-        builder,
-        "load_record_inventory",
-        lambda records_root: (_ for _ in ()).throw(
-            AssertionError("completed canonical records opened")
+        builder.embedding_local,
+        "create_local_encoder",
+        lambda _variant: (_ for _ in ()).throw(
+            AssertionError("encoder constructed")
         ),
     )
 
@@ -313,7 +413,11 @@ def test_build_missing_embeddings_with_empty_replace_set_skips_encoder(
         allow_paid_gemini=False,
     )
 
-    assert result.status == "skipped"
+    assert result.status == "replaced"
+    assert result.record_count == 1
+    assert json.loads((result.artifact_path / "ids.json").read_text()) == ["GSE2"]
+    vectors = np.load(result.artifact_path / "vectors.npy")
+    assert vectors[:, 0].tolist() == [2.0]
 
 
 def test_replacement_provider_failure_preserves_previous_valid_artifact(
@@ -395,13 +499,6 @@ def test_builder_recovers_backup_when_replacement_crashed_before_publish(
     )
     backup = output / ".bge_small_v15.backup"
     original.artifact_path.rename(backup)
-    monkeypatch.setattr(
-        builder,
-        "load_record_inventory",
-        lambda records_root: (_ for _ in ()).throw(
-            AssertionError("canonical inventory opened")
-        ),
-    )
 
     result = build_embedding_artifact(
         records, output, "bge_small_v15", allow_paid_gemini=False
@@ -436,13 +533,6 @@ def test_builder_promotes_validated_temp_after_replacement_swap_crash(
     backup = output / ".bge_small_v15.backup"
     final.rename(backup)
     (output / ".bge_small_v15.replace.pending").write_text("pending\n")
-    monkeypatch.setattr(
-        builder,
-        "load_record_inventory",
-        lambda records_root: (_ for _ in ()).throw(
-            AssertionError("canonical inventory opened")
-        ),
-    )
 
     result = build_embedding_artifact(
         records, output, "bge_small_v15", allow_paid_gemini=False
@@ -539,6 +629,126 @@ def test_pending_gemini_replacement_preserves_provider_state_for_resume(
     assert not marker.exists()
 
 
+def test_pending_gemini_incremental_resume_uses_persisted_delta_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+
+    def provider(provider_records, offset: float) -> LocalProviderResult:
+        return FakeEncoder(3072, value_offset=offset).encode(
+            provider_records, batch_size=1
+        )
+
+    monkeypatch.setattr(
+        builder,
+        "_encode",
+        lambda variant, provider_records, temp_dir, **kwargs: provider(
+            provider_records, 0
+        ),
+    )
+    final = build_embedding_artifact(
+        records,
+        output,
+        "gemini_embedding_2_3072_v1",
+        allow_paid_gemini=False,
+    ).artifact_path
+    _write_record(records, "GSE5", "Five", "document five")
+
+    def interrupt(variant, provider_records, temp_dir, **kwargs):
+        assert [record.gse for record in provider_records] == ["GSE5"]
+        (temp_dir / "gemini_state.json").write_text('{"job":"delta"}\n')
+        raise RuntimeError("delta interrupted")
+
+    monkeypatch.setattr(builder, "_encode", interrupt)
+    with pytest.raises(RuntimeError, match="delta interrupted"):
+        build_missing_embeddings(
+            records,
+            output,
+            "gemini_embedding_2_3072_v1",
+            replace_gses=frozenset(),
+            allow_paid_gemini=False,
+        )
+
+    temp = output / ".gemini_embedding_2_3072_v1.tmp"
+    assert (temp / "sync_plan.json").is_file()
+
+    def resume(variant, provider_records, temp_dir, **kwargs):
+        assert [record.gse for record in provider_records] == ["GSE5"]
+        assert json.loads((temp_dir / "gemini_state.json").read_text()) == {
+            "job": "delta"
+        }
+        return provider(provider_records, 100)
+
+    monkeypatch.setattr(builder, "_encode", resume)
+    result = build_missing_embeddings(
+        records,
+        output,
+        "gemini_embedding_2_3072_v1",
+        replace_gses=frozenset(),
+        allow_paid_gemini=False,
+    )
+
+    assert result.status == "replaced"
+    assert json.loads((final / "ids.json").read_text()) == [
+        "GSE2",
+        "GSE5",
+        "GSE10",
+    ]
+    assert np.load(final / "vectors.npy")[:, 0].tolist() == [2.0, 105.0, 10.0]
+
+
+def test_pending_gemini_incremental_resume_rejects_changed_target_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _records(tmp_path)
+    output = tmp_path / "artifacts"
+    monkeypatch.setattr(
+        builder,
+        "_encode",
+        lambda variant, provider_records, temp_dir, **kwargs: FakeEncoder(
+            3072
+        ).encode(provider_records, batch_size=1),
+    )
+    build_embedding_artifact(
+        records,
+        output,
+        "gemini_embedding_2_3072_v1",
+        allow_paid_gemini=False,
+    )
+    _write_record(records, "GSE5", "Five", "document five")
+
+    def interrupt(variant, provider_records, temp_dir, **kwargs):
+        raise RuntimeError("delta interrupted")
+
+    monkeypatch.setattr(builder, "_encode", interrupt)
+    with pytest.raises(RuntimeError, match="delta interrupted"):
+        build_missing_embeddings(
+            records,
+            output,
+            "gemini_embedding_2_3072_v1",
+            replace_gses=frozenset(),
+            allow_paid_gemini=False,
+        )
+
+    _write_record(records, "GSE6", "Six", "document six")
+    monkeypatch.setattr(
+        builder,
+        "_encode",
+        lambda *args, **kwargs: pytest.fail("provider must not be called"),
+    )
+    with pytest.raises(ValueError, match="target_ids_sha256"):
+        build_missing_embeddings(
+            records,
+            output,
+            "gemini_embedding_2_3072_v1",
+            replace_gses=frozenset(),
+            allow_paid_gemini=False,
+        )
+
+
 def test_builder_removes_stale_backup_after_replacement_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -551,13 +761,6 @@ def test_builder_removes_stale_backup_after_replacement_publish(
     ).artifact_path
     backup = output / ".bge_small_v15.backup"
     shutil.copytree(artifact, backup)
-    monkeypatch.setattr(
-        builder,
-        "load_record_inventory",
-        lambda records_root: (_ for _ in ()).throw(
-            AssertionError("canonical inventory opened")
-        ),
-    )
 
     result = build_embedding_artifact(
         records, output, "bge_small_v15", allow_paid_gemini=False

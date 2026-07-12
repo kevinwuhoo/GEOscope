@@ -144,6 +144,7 @@ def geo_soft_etl(
     artifacts_root: Path | None = None,
     parse_batch_size: int = DEFAULT_BATCH_SIZE,
     allow_paid_gemini: bool = False,
+    gemini_max_cost_usd: float | None = None,
     gemini_concurrency: int = 1,
     elasticsearch_batch_size: int = 500,
     elasticsearch_max_item_retries: int = 3,
@@ -205,6 +206,7 @@ def geo_soft_etl(
             DEFAULT_EMBEDDING_MODEL_KEY,
             replace_gses=frozenset(created_gses),
             allow_paid_gemini=allow_paid_gemini,
+            gemini_max_cost_usd=gemini_max_cost_usd,
             gemini_concurrency=gemini_concurrency,
         )
         embedding_status = embedding_result.status
@@ -301,6 +303,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--allow-paid-gemini", action="store_true")
+    parser.add_argument("--gemini-max-cost-usd", type=float)
     parser.add_argument("--gemini-concurrency", type=int, default=1)
     parser.add_argument("--elasticsearch-batch-size", type=int, default=500)
     parser.add_argument("--elasticsearch-max-item-retries", type=int, default=3)
@@ -330,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         artifacts_root=args.artifacts_root,
         parse_batch_size=args.batch_size,
         allow_paid_gemini=args.allow_paid_gemini,
+        gemini_max_cost_usd=args.gemini_max_cost_usd,
         gemini_concurrency=args.gemini_concurrency,
         elasticsearch_batch_size=args.elasticsearch_batch_size,
         elasticsearch_max_item_retries=args.elasticsearch_max_item_retries,

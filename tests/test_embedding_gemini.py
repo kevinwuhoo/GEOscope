@@ -269,6 +269,91 @@ def test_paid_flag_guard_happens_before_key_or_client(
     assert "estimated Gemini batch" in capsys.readouterr().out
 
 
+def test_paid_work_requires_cost_ceiling_before_client_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        gemini,
+        "_create_client",
+        lambda _key: (_ for _ in ()).throw(AssertionError("client constructed")),
+    )
+
+    with pytest.raises(GeminiAuthorizationError, match="cost ceiling"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+        )
+
+
+def test_paid_work_rejects_insufficient_cost_ceiling_before_client_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    monkeypatch.setattr(
+        gemini,
+        "_create_client",
+        lambda _key: (_ for _ in ()).throw(AssertionError("client constructed")),
+    )
+
+    with pytest.raises(GeminiAuthorizationError, match="cost ceiling"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            max_cost_usd=estimate.estimated_cost_usd - 0.0000001,
+        )
+
+
+@pytest.mark.parametrize("ceiling", [float("nan"), float("inf")])
+def test_paid_work_rejects_nonfinite_cost_ceiling_before_client_construction(
+    ceiling: float,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        gemini,
+        "_create_client",
+        lambda _key: (_ for _ in ()).throw(AssertionError("client constructed")),
+    )
+
+    with pytest.raises(GeminiAuthorizationError, match="finite cost ceiling"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            max_cost_usd=ceiling,
+        )
+
+
+def test_paid_work_accepts_cost_ceiling_equal_to_exact_estimate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    client = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
+    monkeypatch.setattr(gemini, "_create_client", lambda _key: client)
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        max_cost_usd=estimate.estimated_cost_usd,
+    )
+
+    assert result.vectors.shape == (2, 3072)
+
+
 def test_api_key_guard_happens_before_client_construction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -286,6 +371,7 @@ def test_api_key_guard_happens_before_client_construction(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
         )
 
 
@@ -306,6 +392,7 @@ def test_invalid_concurrency_is_rejected_before_client_construction(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=0,
         )
 
@@ -325,6 +412,7 @@ def test_coordinator_fills_four_slots_before_polling(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -356,6 +444,7 @@ def test_concurrency_one_preserves_sequential_order(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=1,
     )
 
@@ -405,6 +494,7 @@ def test_mixed_state_resume_never_resubmits_persisted_paid_work(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -445,6 +535,7 @@ def test_resumed_jobs_above_limit_are_polled_before_new_submission(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=2,
     )
 
@@ -484,6 +575,7 @@ def test_terminal_failure_stops_new_submissions_and_preserves_active_jobs(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -543,6 +635,7 @@ def test_terminal_failure_harvests_later_active_success_before_raising(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=3,
         )
 
@@ -583,6 +676,7 @@ def test_successful_output_id_is_durable_before_polling_later_jobs(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=2,
         )
 
@@ -638,6 +732,7 @@ def test_definitive_429_with_zero_matches_backs_off_then_retries(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -705,6 +800,7 @@ def test_restart_of_zero_match_429_intent_schedules_a_new_identity(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -749,6 +845,7 @@ def test_429_backoff_keeps_polling_existing_jobs(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=2,
     )
 
@@ -800,6 +897,7 @@ def test_429_reconciliation_accepts_exactly_one_created_job(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -847,6 +945,7 @@ def test_429_status_is_persisted_before_reconciliation(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
         concurrency=4,
     )
 
@@ -886,6 +985,7 @@ def test_429_reconciliation_with_multiple_jobs_fails_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -924,6 +1024,7 @@ def test_429_reconciliation_without_provider_identity_fails_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -952,6 +1053,7 @@ def test_non_429_create_failure_retains_intent_and_fails_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -979,6 +1081,7 @@ def test_non_429_create_failure_retains_intent_and_fails_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -1018,6 +1121,7 @@ def test_non_429_failure_after_quota_retry_remains_fail_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -1044,6 +1148,7 @@ def test_non_429_failure_after_quota_retry_remains_fail_closed(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
             concurrency=4,
         )
 
@@ -1063,6 +1168,7 @@ def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
     )
 
     assert len(client.files.upload_calls) == 1
@@ -1108,6 +1214,7 @@ def test_row_errors_are_aggregated_without_writing_an_artifact(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
         )
 
     assert exc_info.value.failures == (
@@ -1167,7 +1274,9 @@ def test_row_errors_are_aggregated_across_all_terminal_shards(
     monkeypatch.setattr(gemini, "_create_client", lambda key: client)
 
     with pytest.raises(gemini.GeminiBatchRowError) as exc_info:
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
     assert exc_info.value.failures == (
         {"gse": "GSE2", "error": first_error},
@@ -1193,6 +1302,7 @@ def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
         )
     state = json.loads((tmp_path / "gemini_state.json").read_text())
     assert state["shards"][0]["job_name"] == "batches/job-1"
@@ -1204,6 +1314,7 @@ def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
         VARIANT,
         tmp_path,
         allow_paid=True,
+        max_cost_usd=1.0,
     )
 
     assert resumed.files.upload_calls == []
@@ -1271,13 +1382,17 @@ def test_restart_reconciles_job_created_before_state_persistence(
 
     monkeypatch.setattr(gemini, "_atomic_json", crash_after_provider_create)
     with pytest.raises(RuntimeError, match="state persistence interrupted"):
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
     monkeypatch.setattr(gemini, "_atomic_json", real_atomic_json)
     resumed_client = SimpleNamespace(files=ReconcileFiles(), batches=ReconcileBatches())
     monkeypatch.setattr(gemini, "_create_client", lambda key: resumed_client)
 
-    result = build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+    result = build_gemini_vectors(
+        _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+    )
 
     assert len(create_calls) == 1
     assert len(list_calls) == 1
@@ -1315,7 +1430,9 @@ def test_ambiguous_submission_intent_fails_closed_without_resubmitting(
     monkeypatch.setattr(gemini, "_create_client", lambda key: client)
 
     with pytest.raises(RuntimeError, match="cannot safely reconcile"):
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
 
 def test_legacy_uploaded_state_without_submission_identity_fails_closed(
@@ -1337,7 +1454,9 @@ def test_legacy_uploaded_state_without_submission_identity_fails_closed(
     monkeypatch.setattr(gemini, "_create_client", lambda key: client)
 
     with pytest.raises(RuntimeError, match="legacy Gemini submission state"):
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
 
 def test_multiple_matching_provider_jobs_fail_closed_without_resubmitting(
@@ -1373,7 +1492,9 @@ def test_multiple_matching_provider_jobs_fail_closed_without_resubmitting(
     monkeypatch.setattr(gemini, "_create_client", lambda key: client)
 
     with pytest.raises(RuntimeError, match=r"found 2.*refusing to resubmit"):
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
     assert create_calls == []
 
@@ -1440,7 +1561,9 @@ def test_resume_skips_completed_shards_and_continues_only_missing_shard(
     interrupted = ShardClient(fail_job="batches/job-2")
     monkeypatch.setattr(gemini, "_create_client", lambda key: interrupted)
     with pytest.raises(RuntimeError, match="shard two"):
-        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+        build_gemini_vectors(
+            _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+        )
 
     state = json.loads((tmp_path / "gemini_state.json").read_text())
     assert state["shards"][0]["output_file_name"] == "files/output-1"
@@ -1448,7 +1571,9 @@ def test_resume_skips_completed_shards_and_continues_only_missing_shard(
 
     resumed = ShardClient(fail_job=None)
     monkeypatch.setattr(gemini, "_create_client", lambda key: resumed)
-    result = build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+    result = build_gemini_vectors(
+        _records(), VARIANT, tmp_path, allow_paid=True, max_cost_usd=1.0
+    )
 
     assert resumed.files.upload_calls == []
     assert resumed.batches.create_calls == []
@@ -1487,6 +1612,7 @@ def test_response_identity_must_exactly_match_inventory(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
         )
 
 
@@ -1509,4 +1635,5 @@ def test_wrong_response_dimension_is_rejected(
             VARIANT,
             tmp_path,
             allow_paid=True,
+            max_cost_usd=1.0,
         )

@@ -108,8 +108,9 @@ uv run python -m geo_index.build_embedding_artifact --model-key qwen3_06b_1024_v
 
 Each model publishes `vectors.npy`, `ids.json`, and `metadata.json` under
 `data/processed/embedding_artifacts/<model-key>/`. A valid existing directory
-skips all encoder work. Delete that one directory explicitly when the canonical
-record inventory changes and a complete rebuild is intended.
+whose IDs match the canonical inventory skips all encoder work. Inventory
+changes are synchronized incrementally: only new or explicitly replaced rows
+are encoded, unchanged rows are reused, and deleted rows are removed.
 
 The existing aligned BGE baseline can be copied into the canonical contract
 without changing its source files:
@@ -130,8 +131,9 @@ The default corpus build intentionally does not call exact `count_tokens`,
 which would add a separate synchronous provider request for every document.
 Its byte-derived token and cost upper bounds are informational only: they are
 neither provider token counts nor proof that the provider will accept an
-input. The command cannot submit unless both `GEMINI_API_KEY` and
-`--allow-paid-gemini` are present:
+input. The command cannot submit unless `GEMINI_API_KEY`,
+`--allow-paid-gemini`, and a finite `--gemini-max-cost-usd` at least as large
+as the printed upper-bound estimate are present:
 
 ```bash
 set -a
@@ -140,6 +142,7 @@ set +a
 uv run python -m geo_index.build_embedding_artifact \
   --model-key gemini_embedding_2_3072_v1 \
   --gemini-concurrency 4 \
+  --gemini-max-cost-usd 9.55 \
   --allow-paid-gemini
 ```
 
@@ -179,21 +182,21 @@ source .env.elasticsearch
 set +a
 uv run geo-soft-etl \
   --allow-paid-gemini \
+  --gemini-max-cost-usd 9.55 \
   --gemini-concurrency 4
 ```
 
-Do not shorten the production invocation to
-`uv run geo-soft-etl --allow-paid-gemini`: without the explicit concurrency
-option it uses the default of one active Gemini batch job.
+The `uv run geo-soft-etl --allow-paid-gemini` invocation still requires the
+cost-ceiling option shown above before it can submit. Omitting the explicit
+concurrency option uses the default of one active Gemini batch job.
 
 Gemini embedding and Elasticsearch loading are required primary stages. The
 loader includes every available registered embedding artifact, preserving
 non-Gemini model vectors while replacing documents. A run is successful only
 after every indexed document has `embedding_gemini_3072`; record parsing,
 embedding, Elasticsearch loading, or audit failures make the run unsuccessful.
-Completed records and artifacts remain safe to reuse on retry. The
-`--allow-paid-gemini` flag is intentionally required before the flow may submit
-paid Gemini batch work.
+Completed records and artifacts remain safe to reuse on retry. Both paid-work
+flags are intentionally required before the flow may submit Gemini batch work.
 
 Search the indexed corpus or launch the comparison UI:
 
