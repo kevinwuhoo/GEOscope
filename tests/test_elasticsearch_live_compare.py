@@ -116,7 +116,7 @@ class _FakeIndices:
 
     def get_mapping(self, *, index: str):
         assert index == "geo-series"
-        return {"geo-series": self.mapping}
+        return {"geo-series": {"mappings": self.mapping}}
 
 
 class _FakeCluster:

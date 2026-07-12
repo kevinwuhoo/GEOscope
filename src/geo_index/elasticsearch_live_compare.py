@@ -131,7 +131,7 @@ def inspect_index(client) -> IndexSnapshot:
 
     raw_mapping = response_body(client.indices.get_mapping(index=INDEX_NAME))
     try:
-        mapping = raw_mapping[INDEX_NAME]
+        mapping = raw_mapping[INDEX_NAME]["mappings"]
         metadata = mapping["_meta"]
         properties = mapping["properties"]
     except (KeyError, TypeError) as exc:
