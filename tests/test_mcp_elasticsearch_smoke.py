@@ -64,6 +64,9 @@ async def test_live_elasticsearch_serves_all_three_mcp_tools(monkeypatch) -> Non
             {"query": "cancer", "mode": mode, "limit": 3},
         )
         assert result.is_error is False
+        assert result.structured_content["embedding_variant"] == (
+            None if mode == "bm25" else settings.elasticsearch.active_model_key
+        )
         rows = result.structured_content["results"]
         assert rows
         detail = await client.call_tool("get_dataset", {"gse": rows[0]["gse"]})
