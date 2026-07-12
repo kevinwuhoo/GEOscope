@@ -107,6 +107,20 @@ def fake_elasticsearch_stage(monkeypatch: pytest.MonkeyPatch):
     return clients
 
 
+def test_paid_authorization_and_concurrency_fail_before_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("discovered")),
+    )
+    with pytest.raises(ValueError, match="allow-paid-gemini"):
+        geo_soft_etl.fn(allow_paid_gemini=False)
+    with pytest.raises(ValueError, match="concurrency"):
+        geo_soft_etl.fn(allow_paid_gemini=True, gemini_concurrency=0)
+
+
 def test_parse_task_logs_each_record_failure_for_prefect_visibility(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -161,6 +175,7 @@ def test_flow_batches_501_jobs_as_250_250_1_and_resolves_every_future(
         soft_root=tmp_path,
         records_root=tmp_path / "records",
         parse_batch_size=250,
+        allow_paid_gemini=True,
     )
 
     assert [len(batch) for batch in submitted] == [250, 250, 1]
@@ -188,11 +203,9 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     )
     embedding_calls: list[dict[str, object]] = []
 
-    def fake_embeddings(records_root, store_path, model_key, **kwargs):
+    def fake_embeddings(_records_root, _store_path, model_key, **kwargs):
         embedding_calls.append(
             {
-                "records_root": records_root,
-                "store_path": store_path,
                 "model_key": model_key,
                 **kwargs,
             }
@@ -205,6 +218,8 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
         soft_root=tmp_path,
         records_root=tmp_path / "records",
         parse_batch_size=250,
+        allow_paid_gemini=True,
+        gemini_concurrency=4,
     )
 
     assert report.discovered == 4
@@ -214,11 +229,10 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     assert report.failures[0]["gse"] == "GSE10"
     assert embedding_calls == [
         {
-            "records_root": tmp_path / "records",
-            "store_path": tmp_path / "embedding_artifacts",
             "model_key": "gemini_embedding_2_3072_v1",
             "replace_gses": frozenset({"GSE2", "GSE20"}),
-            "allow_paid_gemini": False,
+            "allow_paid_gemini": True,
+            "gemini_concurrency": 4,
         }
     ]
 
@@ -258,6 +272,7 @@ def test_flow_reconciles_retry_commits_from_original_submitted_batch(
         soft_root=tmp_path,
         records_root=tmp_path / "records",
         parse_batch_size=250,
+        allow_paid_gemini=True,
     )
 
     assert report.created == 1
@@ -291,7 +306,11 @@ def test_completed_record_causes_no_source_read_in_full_flow_path(
     )
     completed_source.chmod(0)
     try:
-        report = geo_soft_etl.fn(soft_root=soft_root, records_root=records_root)
+        report = geo_soft_etl.fn(
+            soft_root=soft_root,
+            records_root=records_root,
+            allow_paid_gemini=True,
+        )
     finally:
         completed_source.chmod(0o644)
 
@@ -323,8 +342,16 @@ def test_second_run_submits_no_parse_batches_for_completed_records(
 
     monkeypatch.setattr(prefect_etl, "build_missing_embeddings", fake_embeddings)
 
-    first = geo_soft_etl.fn(soft_root=soft_root, records_root=records_root)
-    second = geo_soft_etl.fn(soft_root=soft_root, records_root=records_root)
+    first = geo_soft_etl.fn(
+        soft_root=soft_root,
+        records_root=records_root,
+        allow_paid_gemini=True,
+    )
+    second = geo_soft_etl.fn(
+        soft_root=soft_root,
+        records_root=records_root,
+        allow_paid_gemini=True,
+    )
 
     assert first.created == 2
     assert second.created == 0
@@ -356,10 +383,18 @@ def test_deleting_one_record_rebuilds_exactly_that_gse(
             replace_sets.append(replace_gses) or _fake_embedding_result()
         ),
     )
-    geo_soft_etl.fn(soft_root=soft_root, records_root=records_root)
+    geo_soft_etl.fn(
+        soft_root=soft_root,
+        records_root=records_root,
+        allow_paid_gemini=True,
+    )
     record_path(records_root, "GSE2").unlink()
 
-    report = geo_soft_etl.fn(soft_root=soft_root, records_root=records_root)
+    report = geo_soft_etl.fn(
+        soft_root=soft_root,
+        records_root=records_root,
+        allow_paid_gemini=True,
+    )
 
     assert report.created == 1
     assert report.skipped == 1
@@ -382,7 +417,11 @@ def test_report_is_atomically_overwritten_with_required_counts(
     )
     records_root = tmp_path / "processed" / "series_records"
 
-    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=records_root)
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=records_root,
+        allow_paid_gemini=True,
+    )
 
     report_path = tmp_path / "processed" / "soft_etl_report.json"
     payload = json.loads(report_path.read_text())
@@ -411,6 +450,7 @@ def test_embedding_failure_is_reported_and_makes_cli_result_unsuccessful(
     report = geo_soft_etl.fn(
         soft_root=tmp_path,
         records_root=tmp_path / "records",
+        allow_paid_gemini=True,
     )
 
     assert report.embedding_error == "RuntimeError: embed failed"
@@ -497,7 +537,11 @@ def test_elasticsearch_failure_is_reported_and_client_is_closed(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("load failed")),
     )
 
-    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
 
     assert report.elasticsearch_status == "failed"
     assert report.elasticsearch_error == "RuntimeError: load failed"
@@ -521,7 +565,11 @@ def test_embedding_failure_does_not_create_elasticsearch_client(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("embed failed")),
     )
 
-    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
 
     assert report.elasticsearch_status == "not_run"
     assert fake_elasticsearch_stage == []
@@ -550,7 +598,11 @@ def test_incomplete_elasticsearch_audit_fails_closed_with_observed_metrics(
         ),
     )
 
-    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
 
     assert report.elasticsearch_status == "failed"
     assert "Gemini vector coverage 1 != 2" in report.elasticsearch_error
@@ -587,7 +639,11 @@ def test_bulk_failure_preserves_partial_elasticsearch_metrics(
         lambda *args, **kwargs: (_ for _ in ()).throw(LoadFailedError(partial)),
     )
 
-    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
 
     assert report.elasticsearch_status == "failed"
     assert report.elasticsearch_error == "LoadFailedError: 1 Elasticsearch bulk items failed"
@@ -597,6 +653,20 @@ def test_bulk_failure_preserves_partial_elasticsearch_metrics(
     assert report.elasticsearch_document_count == 2
     assert report.elasticsearch_vector_count == 1
     assert fake_elasticsearch_stage[0].closed is True
+
+
+def test_cli_paid_authorization_and_concurrency_fail_before_flow_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl.geo_soft_etl,
+        "with_options",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("configured")),
+    )
+    with pytest.raises(ValueError, match="allow-paid-gemini"):
+        main([])
+    with pytest.raises(ValueError, match="concurrency"):
+        main(["--allow-paid-gemini", "--gemini-concurrency", "0"])
 
 
 def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
@@ -638,12 +708,17 @@ def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
             "17",
             "--workers",
             "3",
+            "--allow-paid-gemini",
+            "--gemini-concurrency",
+            "4",
         ]
     )
 
     assert exit_code == 1
     assert captured["max_workers"] == 3
     assert captured["parse_batch_size"] == 17
+    assert captured["allow_paid_gemini"] is True
+    assert captured["gemini_concurrency"] == 4
 
 
 def test_etl_report_is_frozen_and_success_requires_no_failures() -> None:

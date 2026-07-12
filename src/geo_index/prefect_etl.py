@@ -143,10 +143,15 @@ def geo_soft_etl(
     artifacts_root: Path | None = None,
     parse_batch_size: int = DEFAULT_BATCH_SIZE,
     allow_paid_gemini: bool = False,
+    gemini_concurrency: int = 1,
     elasticsearch_batch_size: int = 500,
     elasticsearch_max_item_retries: int = 3,
 ) -> EtlReport:
     """Materialize, embed with Gemini, and index canonical records in Elastic."""
+    if not allow_paid_gemini:
+        raise ValueError("--allow-paid-gemini is required for the primary Gemini ETL")
+    if gemini_concurrency < 1:
+        raise ValueError("Gemini concurrency must be at least 1")
     if parse_batch_size < 1:
         raise ValueError("parse_batch_size must be positive")
     if elasticsearch_batch_size < 1:
@@ -199,6 +204,7 @@ def geo_soft_etl(
             DEFAULT_EMBEDDING_MODEL_KEY,
             replace_gses=frozenset(created_gses),
             allow_paid_gemini=allow_paid_gemini,
+            gemini_concurrency=gemini_concurrency,
         )
         embedding_status = embedding_result.status
     except Exception as exc:  # noqa: BLE001 - report before returning nonzero
@@ -283,6 +289,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--allow-paid-gemini", action="store_true")
+    parser.add_argument("--gemini-concurrency", type=int, default=1)
     parser.add_argument("--elasticsearch-batch-size", type=int, default=500)
     parser.add_argument("--elasticsearch-max-item-retries", type=int, default=3)
     return parser
@@ -290,6 +297,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if not args.allow_paid_gemini:
+        raise ValueError("--allow-paid-gemini is required for the primary Gemini ETL")
+    if args.gemini_concurrency < 1:
+        raise ValueError("Gemini concurrency must be at least 1")
     if args.batch_size < 1:
         raise ValueError("batch size must be positive")
     if args.workers < 1:
@@ -307,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         artifacts_root=args.artifacts_root,
         parse_batch_size=args.batch_size,
         allow_paid_gemini=args.allow_paid_gemini,
+        gemini_concurrency=args.gemini_concurrency,
         elasticsearch_batch_size=args.elasticsearch_batch_size,
         elasticsearch_max_item_retries=args.elasticsearch_max_item_retries,
     )
