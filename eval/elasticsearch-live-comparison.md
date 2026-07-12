@@ -4,7 +4,7 @@
 
 | Property | Value |
 |---|---|
-| Source revision | `e0f7379223a98901042e321e235f33656f2779fd` |
+| Source revision | `5df0008cbcaf37d010fa299775c8d316778ff68d` |
 | Query fixture SHA-256 | `493a42b25fc45cac50a49dd57d2a4652be4372a0edb206395df2c4147a1e2aab` |
 | Elasticsearch | `9.4.2` |
 | Index | `geo-series` |
@@ -34,8 +34,10 @@
 
 ## Query: control_childhood_malaria
 
-**Search:** whole blood transcriptomics of children with severe malaria  
-**Intent:** Traceable control related to the known GSE1124 record.  
+**Search:** whole blood transcriptomics of children with severe malaria
+
+**Intent:** Traceable control related to the known GSE1124 record.
+
 **Filters:** `{}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -77,8 +79,10 @@
 
 ## Query: human_tumor_exhausted_t_cells
 
-**Search:** single-cell RNA sequencing of exhausted CD8 T cells in human solid tumors  
-**Intent:** Find human tumor immune-state scRNA-seq datasets.  
+**Search:** single-cell RNA sequencing of exhausted CD8 T cells in human solid tumors
+
+**Intent:** Find human tumor immune-state scRNA-seq datasets.
+
 **Filters:** `{"assay_labels":["scRNA-seq"],"organism_ids":["NCBITaxon:9606"]}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -120,8 +124,10 @@
 
 ## Query: mouse_brain_spatial_injury
 
-**Search:** spatial transcriptomics of mouse hippocampus after traumatic brain injury  
-**Intent:** Find mouse spatial-expression studies involving brain injury.  
+**Search:** spatial transcriptomics of mouse hippocampus after traumatic brain injury
+
+**Intent:** Find mouse spatial-expression studies involving brain injury.
+
 **Filters:** `{"organism_ids":["NCBITaxon:10090"]}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -163,8 +169,10 @@
 
 ## Query: crispr_interferon_t_cells
 
-**Search:** CRISPR knockout screen for regulators of interferon response in T cells  
-**Intent:** Find genetic perturbation screens despite terminology variation.  
+**Search:** CRISPR knockout screen for regulators of interferon response in T cells
+
+**Intent:** Find genetic perturbation screens despite terminology variation.
+
 **Filters:** `{}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -206,8 +214,10 @@
 
 ## Query: rare_disease_fibroblasts
 
-**Search:** fibroblast transcriptomes from patients with rare inherited connective tissue disorders  
-**Intent:** Find patient-derived rare-disease fibroblast expression datasets.  
+**Search:** fibroblast transcriptomes from patients with rare inherited connective tissue disorders
+
+**Intent:** Find patient-derived rare-disease fibroblast expression datasets.
+
 **Filters:** `{}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -249,8 +259,10 @@
 
 ## Query: ribosome_er_stress
 
-**Search:** ribosome profiling during endoplasmic reticulum stress  
-**Intent:** Find Ribo-seq or ribosome-footprinting stress experiments.  
+**Search:** ribosome profiling during endoplasmic reticulum stress
+
+**Intent:** Find Ribo-seq or ribosome-footprinting stress experiments.
+
 **Filters:** `{}`
 
 ### Full hybrid: native RRF (BM25 + dense)
@@ -292,8 +304,10 @@
 
 ## Query: airway_viral_infection
 
-**Search:** airway epithelial response to respiratory viral infection  
-**Intent:** Find airway infection-response datasets across virus names.  
+**Search:** airway epithelial response to respiratory viral infection
+
+**Intent:** Find airway infection-response datasets across virus names.
+
 **Filters:** `{}`
 
 ### Full hybrid: native RRF (BM25 + dense)
