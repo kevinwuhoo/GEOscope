@@ -50,12 +50,12 @@ sequenceDiagram
   participant U as User
   participant L as LLM (MCP client)
   participant S as GEO MCP server
-  participant PG as Postgres
+  participant ES as Elasticsearch
   U->>L: "find single cell RNA datasets in human PBMC"
   L->>L: expand: scRNA-seq, 10x 3'/5', Drop-seq, SPLiT-seq...
   L->>S: search_datasets(query, filters={organism, assay})
-  S->>PG: hybrid retrieve + facet counts
-  PG-->>S: ranked GSE list + facets
+  S->>ES: hybrid retrieve + facet counts
+  ES-->>S: ranked GSE list + facets
   S-->>L: results + facets (structured)
   L->>S: get_dataset("GSE123456")   %% drill in
   S-->>L: indexed bounded detail
@@ -113,8 +113,9 @@ Both are possible, but only the first is **(v1)**:
 
 ## Build notes
 
-- Standalone **FastMCP 3**; thin, typed layer over the
-  [[26-Datastore-Postgres|Postgres]] query service.
+- Standalone **FastMCP 3** in `src/geo_index/mcp_server.py`; its typed
+  `McpSearchService` adapter uses the primary Elasticsearch `geo-series` index
+  for exact, BM25, dense, hybrid, filter, and facet retrieval.
 - Streamable HTTP with stateless transport, one application worker, TLS at the
   hosting edge, and mandatory invite-only OAuth/JWT authorization.
 - Read-only tools with bounded result counts; pagination remains **(v2+)**.
@@ -123,6 +124,9 @@ Both are possible, but only the first is **(v1)**:
 - The active embedding variant is server configuration and appears only as
   output provenance; callers cannot select a model. →
   [[48-Alternate-Embedding-Bakeoff]]
+- The current default is `gemini_embedding_2_3072_v1`; dense and hybrid calls
+  create its query encoder lazily, while BM25 and exact lookup remain
+  provider-free.
 
 → Milestone placement in [[40-Roadmap]].
 
