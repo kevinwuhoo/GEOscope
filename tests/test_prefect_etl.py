@@ -203,9 +203,11 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     )
     embedding_calls: list[dict[str, object]] = []
 
-    def fake_embeddings(_records_root, _store_path, model_key, **kwargs):
+    def fake_embeddings(records_root, store_path, model_key, **kwargs):
         embedding_calls.append(
             {
+                "records_root": records_root,
+                "store_path": store_path,
                 "model_key": model_key,
                 **kwargs,
             }
@@ -229,6 +231,8 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     assert report.failures[0]["gse"] == "GSE10"
     assert embedding_calls == [
         {
+            "records_root": tmp_path / "records",
+            "store_path": tmp_path / "embedding_artifacts",
             "model_key": "gemini_embedding_2_3072_v1",
             "replace_gses": frozenset({"GSE2", "GSE20"}),
             "allow_paid_gemini": True,
