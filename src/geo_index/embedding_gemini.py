@@ -340,8 +340,11 @@ def build_gemini_vectors(
     temp_dir: Path,
     *,
     allow_paid: bool,
+    concurrency: int = 1,
 ) -> LocalProviderResult:
     """Submit or resume bounded file batches and assemble aligned vectors."""
+    if concurrency < 1:
+        raise ValueError("Gemini concurrency must be at least 1")
     estimate = prepare_gemini_requests(records, variant, temp_dir)
     print(
         "estimated Gemini batch: "

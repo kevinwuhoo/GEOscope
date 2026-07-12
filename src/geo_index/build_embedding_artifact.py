@@ -51,6 +51,7 @@ def _encode(
     temp_dir: Path,
     *,
     allow_paid_gemini: bool,
+    gemini_concurrency: int = 1,
 ):
     if variant.provider == "google":
         from .embedding_gemini import build_gemini_vectors
@@ -60,6 +61,7 @@ def _encode(
             variant,
             temp_dir,
             allow_paid=allow_paid_gemini,
+            concurrency=gemini_concurrency,
         )
     encoder = embedding_local.create_local_encoder(variant)
     return encoder.encode(records, batch_size=variant.default_batch_size)
@@ -159,6 +161,7 @@ def _build(
     *,
     allow_paid_gemini: bool,
     force_replace: bool,
+    gemini_concurrency: int = 1,
 ) -> EmbeddingBuildResult:
     started = time.perf_counter()
     variant = get_variant(model_key)
@@ -197,6 +200,7 @@ def _build(
             inventory.records,
             temp_dir,
             allow_paid_gemini=allow_paid_gemini,
+            gemini_concurrency=gemini_concurrency,
         )
         vectors = np.ascontiguousarray(provider.vectors, dtype=np.float32)
         np.save(temp_dir / "vectors.npy", vectors, allow_pickle=False)
@@ -253,6 +257,7 @@ def build_embedding_artifact(
     model_key: str,
     *,
     allow_paid_gemini: bool,
+    gemini_concurrency: int = 1,
 ) -> EmbeddingBuildResult:
     """Build a complete artifact, or skip a valid existing artifact."""
     return _build(
@@ -261,6 +266,7 @@ def build_embedding_artifact(
         model_key,
         allow_paid_gemini=allow_paid_gemini,
         force_replace=False,
+        gemini_concurrency=gemini_concurrency,
     )
 
 
@@ -271,6 +277,7 @@ def build_missing_embeddings(
     *,
     replace_gses: AbstractSet[str],
     allow_paid_gemini: bool,
+    gemini_concurrency: int = 1,
 ) -> EmbeddingBuildResult:
     """ETL integration facade with explicit rebuilt-GSE replacement semantics."""
     if not replace_gses:
@@ -280,6 +287,7 @@ def build_missing_embeddings(
             model_key,
             allow_paid_gemini=allow_paid_gemini,
             force_replace=False,
+            gemini_concurrency=gemini_concurrency,
         )
     inventory = load_record_inventory(records_root)
     missing = sorted(set(replace_gses) - set(inventory.ids))
@@ -291,6 +299,7 @@ def build_missing_embeddings(
         model_key,
         allow_paid_gemini=allow_paid_gemini,
         force_replace=bool(replace_gses),
+        gemini_concurrency=gemini_concurrency,
     )
 
 
@@ -300,6 +309,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--model-key", required=True)
     parser.add_argument("--allow-paid-gemini", action="store_true")
+    parser.add_argument("--gemini-concurrency", type=int, default=1)
     return parser
 
 
@@ -310,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_root,
         args.model_key,
         allow_paid_gemini=args.allow_paid_gemini,
+        gemini_concurrency=args.gemini_concurrency,
     )
     print(json.dumps({**asdict(result), "artifact_path": str(result.artifact_path)}))
     return 0

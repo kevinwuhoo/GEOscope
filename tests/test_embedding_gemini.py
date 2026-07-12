@@ -200,6 +200,27 @@ def test_api_key_guard_happens_before_client_construction(
         )
 
 
+def test_invalid_concurrency_is_rejected_before_client_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        gemini,
+        "_create_client",
+        lambda key: (_ for _ in ()).throw(AssertionError("client constructed")),
+    )
+
+    with pytest.raises(ValueError, match="concurrency must be at least 1"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=0,
+        )
+
+
 def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import geo_index.build_embedding_artifact as builder
+import geo_index.embedding_gemini as gemini
 from geo_index.build_embedding_artifact import (
     EmbeddingBuildResult,
     build_embedding_artifact,
@@ -81,6 +83,48 @@ def _records(tmp_path: Path) -> Path:
     _write_record(records, "GSE10", "Ten", "document ten")
     _write_record(records, "GSE2", "Two", "document two")
     return records
+
+
+def test_encode_forwards_explicit_gemini_concurrency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build(records, variant, temp_dir, *, allow_paid, concurrency):
+        captured["allow_paid"] = allow_paid
+        captured["concurrency"] = concurrency
+        return SimpleNamespace(vectors=np.empty((0, 3072), dtype=np.float32))
+
+    monkeypatch.setattr(gemini, "build_gemini_vectors", fake_build)
+    builder._encode(
+        get_variant("gemini_embedding_2_3072_v1"),
+        (),
+        tmp_path,
+        allow_paid_gemini=True,
+        gemini_concurrency=4,
+    )
+
+    assert captured == {"allow_paid": True, "concurrency": 4}
+
+
+def test_parser_defaults_to_sequential_gemini_batches() -> None:
+    args = builder._parser().parse_args(
+        ["--model-key", "gemini_embedding_2_3072_v1"]
+    )
+    assert args.gemini_concurrency == 1
+
+
+def test_parser_accepts_explicit_gemini_concurrency() -> None:
+    args = builder._parser().parse_args(
+        [
+            "--model-key",
+            "gemini_embedding_2_3072_v1",
+            "--gemini-concurrency",
+            "4",
+        ]
+    )
+    assert args.gemini_concurrency == 4
 
 
 def test_builder_encodes_numeric_order_once_and_aligns_ids_to_rows(
