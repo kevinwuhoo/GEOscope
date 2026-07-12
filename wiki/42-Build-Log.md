@@ -132,6 +132,48 @@ before API-key lookup and client construction, and the isolated output root
 contained no `gemini_state.json`, result files, provider IDs, or final embedding
 artifact.
 
+### Final whole-branch review fixes and validation
+
+The final review hardening preserves replacement intent before encoder/provider
+work, reconciles Prefect retry commits from the originally submitted batch,
+aggregates Gemini row failures across every terminal result shard, and rejects
+invalid UTF-8 or unterminated retained series tables before canonical
+publication. Gemini submissions now persist a unique display name before paid
+creation. If the process dies after creation but before the returned job name is
+saved, restart lists provider jobs and resumes the one exact display-name match;
+zero or multiple matches fail closed without resubmission.
+
+The linked worktree has no `data/` directory, so the binding independent
+validator was run from `/Users/kwu/projects/geo-metadata-index` against that
+repository's actual default `data/processed/soft_meta` and `data/raw/soft`
+roots:
+
+```bash
+/Users/kwu/projects/geo-metadata-index/.worktrees/prefect-soft-canonical-embeddings/.venv/bin/geo-validate-soft --limit 5000
+```
+
+Result: **PASS: 5,000 files**, `field_fail=0`; reconstruction **65 checked / 0
+mismatched**.
+
+Final focused verification:
+
+```bash
+.venv/bin/pytest -q tests/test_build_embedding_artifact.py tests/test_embedding_gemini.py tests/test_prefect_etl.py tests/test_soft_records.py tests/test_soft_record_materialization.py
+```
+
+Result: **66 passed in 1.08s**.
+
+Final full offline verification (run with sandbox permission for the seven
+existing localhost soft-browser tests):
+
+```bash
+env UV_CACHE_DIR=/private/tmp/geo-index-uv-cache uv run pytest -q
+```
+
+Result: **165 passed, 4 skipped in 4.72s**. An initial restricted-sandbox run
+reached 158 passes and 4 skips but could not bind ephemeral localhost sockets;
+all seven affected tests passed in the authorized rerun.
+
 ## Status — 2026-07-10 (normalization and assay hardening)
 
 Track 1 from [[44-Normalization-Tests-and-Assay-Hardening-Plan]] is implemented:
