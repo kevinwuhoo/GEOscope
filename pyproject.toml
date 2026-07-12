@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Metadata index + search service over NCBI GEO (v1 spike)"
 requires-python = ">=3.11"
 dependencies = [
+    "elasticsearch>=9.4,<10",
     "google-genai>=2.9.0",
     "httpx>=0.27",
     "numpy>=2,<3",
@@ -23,6 +24,8 @@ geo-embed = "geo_index.build_embeddings:main"
 geo-search = "geo_index.search_test:main"
 geo-normalize = "geo_index.normalize:main"
 geo-soft-browser = "geo_index.soft_browser.server:main"
+geo-elasticsearch-load = "geo_index.elasticsearch_loader:main"
+geo-elasticsearch-compare = "geo_index.elasticsearch_live_compare:main"
 geo-soft-etl = "geo_index.prefect_etl:main"
 
 [build-system]
@@ -35,7 +38,10 @@ packages = ["src/geo_index"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["integration: requires the local GEO Postgres database"]
+markers = [
+    "integration: requires the local GEO Postgres database",
+    "elastic_integration: requires local Elasticsearch and GEO_TEST_ELASTIC=1",
+]
 
 [dependency-groups]
 dev = [
