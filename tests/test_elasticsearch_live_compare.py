@@ -416,6 +416,7 @@ def test_render_markdown_is_stable_readable_and_escaped() -> None:
     assert "/Users/" not in rendered
     assert "password" not in rendered.lower()
     assert "latency" not in rendered.lower()
+    assert not any(line.endswith(" ") for line in rendered.splitlines())
 
 
 def test_write_report_atomic_replaces_existing_content(tmp_path: Path) -> None:

@@ -366,4 +366,3 @@ git commit -m "docs: record Elasticsearch live comparison"
 
 Expected: tests pass, no whitespace errors, only intended files are committed, and
 the branch remains ready for review.
-
