@@ -338,6 +338,21 @@ def _result_path(temp_dir: Path, shard: GeminiRequestShard) -> Path:
     return temp_dir / f"gemini_results-{shard.index:05d}.jsonl"
 
 
+def _persist_succeeded_output(
+    job,
+    state_path: Path,
+    state: dict[str, object],
+    raw_shard_state: dict[str, object],
+) -> str:
+    output_file_name = job.dest.file_name
+    if not output_file_name:
+        raise RuntimeError(f"Gemini batch {job.name} has no output file")
+    if raw_shard_state.get("output_file_name") != output_file_name:
+        raw_shard_state["output_file_name"] = output_file_name
+        _atomic_json(state_path, state)
+    return str(output_file_name)
+
+
 def _download_succeeded_job(
     client,
     job,
@@ -346,11 +361,12 @@ def _download_succeeded_job(
     state: dict[str, object],
     raw_shard_state: dict[str, object],
 ) -> None:
-    output_file_name = job.dest.file_name
-    if not output_file_name:
-        raise RuntimeError(f"Gemini batch {job.name} has no output file")
-    raw_shard_state["output_file_name"] = output_file_name
-    _atomic_json(state_path, state)
+    output_file_name = _persist_succeeded_output(
+        job,
+        state_path,
+        state,
+        raw_shard_state,
+    )
     content = client.files.download(file=output_file_name)
     temporary = result_path.with_suffix(".jsonl.tmp")
     temporary.write_bytes(content)
@@ -457,6 +473,12 @@ def _run_batch_lifecycle(
             _atomic_json(state_path, state)
             made_progress = made_progress or previous != job_state
             if job_state == "JOB_STATE_SUCCEEDED":
+                _persist_succeeded_output(
+                    job,
+                    state_path,
+                    state,
+                    raw,
+                )
                 succeeded.append((index, job))
             elif job_state in TERMINAL_STATES:
                 raise RuntimeError(

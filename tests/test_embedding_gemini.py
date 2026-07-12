@@ -484,6 +484,39 @@ def test_terminal_failure_stops_new_submissions_and_preserves_active_jobs(
     ]
 
 
+def test_successful_output_id_is_durable_before_polling_later_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+
+    class LaterPollFailsClient(CooperativeClient):
+        def get(self, *, name):
+            index = name.rsplit("-", 1)[1]
+            if index == "00001":
+                self.events.append(("get", index))
+                raise RuntimeError("later poll interrupted")
+            return super().get(name=name)
+
+    client = LaterPollFailsClient(running_polls=0)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match="later poll interrupted"):
+        build_gemini_vectors(
+            _many_records(2),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=2,
+        )
+
+    state = json.loads((tmp_path / "gemini_state.json").read_text())
+    assert state["shards"][0]["job_state"] == "JOB_STATE_SUCCEEDED"
+    assert state["shards"][0]["output_file_name"] == "files/output-00000"
+    assert ("download", "00000") not in client.events
+
+
 def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
