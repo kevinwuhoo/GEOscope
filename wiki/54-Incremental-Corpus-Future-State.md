@@ -19,6 +19,11 @@ This page preserves the production-oriented endpoint we discussed so it is not
 lost while the prototype deliberately uses existence-based idempotence and one
 canonical version.
 
+The observed full-corpus crawl and its bounded top-up procedure are captured
+in [[56-GEO-Full-Corpus-Crawl-Runbook]]. This page remains the **(v2+)** design
+for immutable record and embedding revisions rather than a crawler
+implementation plan.
+
 **Do not implement this design during the current prototype.** Its components
 become useful only after real daily operation shows that source updates,
 reproducible releases, embedding reuse across record revisions, or index rollback

@@ -15,6 +15,7 @@ Citations gathered during the [[Home|research pass]] (2026-07). Grouped by topic
 - MINiML format — https://www.ncbi.nlm.nih.gov/geo/info/MINiML.html
 - Download / FTP layout — https://www.ncbi.nlm.nih.gov/geo/info/download.html
 - Programmatic access — https://www.ncbi.nlm.nih.gov/geo/info/geo_paccess.html
+- Private-accession example (GSE335901) — https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE335901
 - HTS/SRA linkage — https://www.ncbi.nlm.nih.gov/geo/info/seq.html
 - Homepage counts — https://www.ncbi.nlm.nih.gov/geo/
 - E-utilities book — https://www.ncbi.nlm.nih.gov/books/NBK25501/ · usage/rate limits — https://www.ncbi.nlm.nih.gov/books/NBK25497/ · API-key account — https://www.ncbi.nlm.nih.gov/account/ · JSON params — https://www.ncbi.nlm.nih.gov/books/NBK25499/

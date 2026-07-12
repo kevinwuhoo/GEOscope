@@ -12,6 +12,10 @@ created: 2026-07-08
 > Postgres measurements below remain historical evidence and its code remains
 > available, but current CLI/web/ETL code targets Elasticsearch.
 
+> **Full-corpus crawl record (2026-07-12):** the complete operational outcome,
+> retry/concurrency evidence, and the one private residual accession are in
+> [[56-GEO-Full-Corpus-Crawl-Runbook]].
+
 ← [[Home]] · plan in [[40-Roadmap]] · decisions in [[41-Open-Questions]]
 
 A running record of what we've actually built, what we tried, and what the data
