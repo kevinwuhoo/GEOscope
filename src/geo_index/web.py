@@ -1,7 +1,7 @@
-"""Tiny local web UI: our Postgres hybrid retrieval vs NCBI GEO keyword search.
+"""Tiny local web UI: Elasticsearch hybrid retrieval vs GEO keyword search.
 
-Side-by-side demo harness. Loads the embedding model once at startup, then per
-request runs (a) our pg_search+pgvector hybrid and (b) a live GEO keyword search
+Side-by-side demo harness. Owns one Elasticsearch runtime, then per request
+runs (a) Elasticsearch BM25/Gemini dense RRF and (b) a live GEO keyword search
 via NCBI E-utilities (db=gds, restricted to Series), so you can eyeball what
 GEO's own search returns for the same query vs what semantic retrieval finds.
 
@@ -18,14 +18,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import pg_hybrid
+from .elasticsearch_runtime import ElasticsearchRuntime
 from .eutils import EutilsClient
 from .search_models import SearchFilters, SearchResponse
 
 _HTML = (Path(__file__).parent / "web_ui.html").read_text()
 
-_model = None
-_model_lock = threading.Lock()
+_runtime: ElasticsearchRuntime | None = None
+_runtime_lock = threading.Lock()
 _ncbi = EutilsClient()
 _ncbi_lock = threading.Lock()
 
@@ -75,25 +75,12 @@ def _our_search(
     topk: int,
     filters: SearchFilters,
 ) -> SearchResponse:
-    global _model
-    qv = None
-    if mode != "bm25":
-        with _model_lock:
-            if _model is None:
-                _model = pg_hybrid.load_model()
-            qv = pg_hybrid.embed_query(_model, query)
-    conn = pg_hybrid._connect()
-    try:
-        return pg_hybrid.search_with_facets(
-            conn,
-            query,
-            qv=qv,
-            mode=mode,
-            topk=topk,
-            filters=filters,
-        )
-    finally:
-        conn.close()
+    global _runtime
+    with _runtime_lock:
+        if _runtime is None:
+            _runtime = ElasticsearchRuntime()
+        runtime = _runtime
+    return runtime.search(query, mode=mode, topk=topk, filters=filters)
 
 
 def _geo_keyword_search(query: str, topk: int) -> dict:
@@ -193,14 +180,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="GEO hybrid-vs-keyword demo UI.")
+    p = argparse.ArgumentParser(
+        description="Elasticsearch/Gemini hybrid-vs-GEO-keyword demo UI."
+    )
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--host", default="127.0.0.1")
     a = p.parse_args(argv)
 
-    global _model
-    print("loading embedding model (once)...", flush=True)
-    _model = pg_hybrid.load_model()
+    global _runtime
+    print("connecting to Elasticsearch...", flush=True)
+    _runtime = ElasticsearchRuntime()
     server = ThreadingHTTPServer((a.host, a.port), Handler)
     print(f"serving on http://{a.host}:{a.port}  (Ctrl-C to stop)", flush=True)
     try:
@@ -209,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        if _runtime is not None:
+            _runtime.close()
+            _runtime = None
     return 0
 
 

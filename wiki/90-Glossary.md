@@ -5,6 +5,15 @@ tags: [glossary, reference]
 
 # 90 · Glossary
 
+- **Primary path** — stripped SOFT → canonical GSE records → Prefect-managed
+  `gemini_embedding_2_3072_v1` artifact → Elasticsearch `geo-series` load and
+  audit → `geo-search` / `geo-web` retrieval.
+- **`gemini_embedding_2_3072_v1`** — the primary `gemini-embedding-2` document
+  and query contract. Its 3,072-dimensional vectors live in Elasticsearch field
+  `embedding_gemini_3072`.
+- **Elasticsearch** — the primary online datastore and search backend for BM25,
+  dense kNN, native RRF, normalized filters, facets, and exact GSE lookup.
+
 ← [[Home]]
 
 ## GEO / NCBI
@@ -42,9 +51,9 @@ tags: [glossary, reference]
 
 ## Search / RAG
 - **Dense / sparse retrieval** — embedding kNN vs. term-based (BM25).
-- **BM25** — the standard lexical ranking function. Our chosen provider is
-  **ParadeDB `pg_search`**; current facets use separate SQL counts. Postgres
-  native FTS `ts_rank` is not BM25. → [[26-Datastore-Postgres]]
+- **BM25** — the standard lexical ranking function. Elasticsearch is the
+  current provider. ParadeDB `pg_search` and its separate SQL facet counts are
+  the historical baseline. → [[26-Datastore-Postgres]]
 - **`pg_search` / `pdb.score` / `pdb.agg`** — ParadeDB's BM25 search operator
   (`@@@`), relevance score, and optional single-pass facet aggregation. v1 uses
   `pg_search` for lexical retrieval and explicit SQL `GROUP BY` for facets.
@@ -56,7 +65,8 @@ tags: [glossary, reference]
 - **Facet** — `(value, count)` buckets over a result set; disjunctive = OR-within/AND-across.
 
 ## Models
-- **BGE-small-en-v1.5** — current 384-dimensional whole-document retrieval baseline.
+- **BGE-small-en-v1.5** — historical 384-dimensional whole-document retrieval
+  baseline retained for the model bake-off.
 - **MedCPT** — NCBI biomedical retriever (paired Query+Article bi-encoders;
   768 dimensions) in the v1 bake-off.
 - **Qwen3-Embedding-0.6B** — open embedding model tested at its full

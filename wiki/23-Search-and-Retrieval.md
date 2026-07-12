@@ -5,6 +5,12 @@ tags: [search, retrieval, rag, hybrid]
 
 # 23 · Search & Retrieval
 
+> **Current implementation (2026-07-12):** Elasticsearch is the primary search
+> backend. `geo-search` and `geo-web` use native BM25, Gemini
+> `gemini_embedding_2_3072_v1` dense kNN, native RRF hybrid retrieval,
+> normalized filters, and scoped facets. PostgreSQL examples below are retained
+> only as historical evaluation context.
+
 ← [[Home]] · pairs with [[24-Faceted-Search]], [[27-MCP-Interface]]
 
 ## Pipeline
@@ -12,10 +18,10 @@ tags: [search, retrieval, rag, hybrid]
 ```mermaid
 flowchart LR
   Q[user conceptual query] --> QU[v1 LLM-client understanding\n+ optional synonym expansion]
-  QU --> H1[dense: pgvector\nembedding kNN]
-  QU --> H2[sparse: pg_search BM25\naccessions, gene symbols]
+  QU --> H1[dense: Elasticsearch kNN\nGemini 3,072 dimensions]
+  QU --> H2[sparse: Elasticsearch BM25\naccessions, gene symbols]
   QU --> FIL[current structured filters\norganism/sex/assay]
-  H1 --> RRF[RRF fusion]
+  H1 --> RRF[Elasticsearch native RRF]
   H2 --> RRF
   FIL -. applied to both .-> RRF
   RRF --> RR[optional rerank\nv2+]

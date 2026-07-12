@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,11 @@ import pytest
 
 import geo_index.prefect_etl as prefect_etl
 from geo_index.prefect_etl import EtlReport, geo_soft_etl, main
+from geo_index.elasticsearch_loader import (
+    BulkFailure,
+    LoadFailedError,
+    LoadReport,
+)
 from geo_index.soft_records import (
     BatchResult,
     DiscoveryResult,
@@ -57,6 +63,48 @@ def _copy_fixture(soft_root: Path, gse: str) -> Path:
 
 def _fake_embedding_result(status: str = "created"):
     return SimpleNamespace(status=status, record_count=1, duration_seconds=0.01)
+
+
+def _fake_load_report(**changes) -> LoadReport:
+    report = LoadReport(
+        server_version="9.4.2",
+        index_name="geo-series",
+        mapping_revision="geo-series-v1",
+        discovered_records=2,
+        attempted=2,
+        succeeded=2,
+        retried=1,
+        failures=(),
+        document_count=2,
+        vector_coverage={"embedding_gemini_3072": 2},
+    )
+    return replace(report, **changes)
+
+
+@pytest.fixture(autouse=True)
+def fake_elasticsearch_stage(monkeypatch: pytest.MonkeyPatch):
+    clients: list[SimpleNamespace] = []
+
+    def fake_client(_settings):
+        client = SimpleNamespace(closed=False)
+        client.close = lambda: setattr(client, "closed", True)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        prefect_etl,
+        "ElasticsearchSettings",
+        SimpleNamespace(from_env=lambda: object()),
+        raising=False,
+    )
+    monkeypatch.setattr(prefect_etl, "create_client", fake_client, raising=False)
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_index",
+        lambda *args, **kwargs: _fake_load_report(),
+        raising=False,
+    )
+    return clients
 
 
 def test_parse_task_logs_each_record_failure_for_prefect_visibility(
@@ -168,7 +216,7 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
         {
             "records_root": tmp_path / "records",
             "store_path": tmp_path / "embedding_artifacts",
-            "model_key": "bge_small_v15",
+            "model_key": "gemini_embedding_2_3072_v1",
             "replace_gses": frozenset({"GSE2", "GSE20"}),
             "allow_paid_gemini": False,
         }
@@ -369,6 +417,188 @@ def test_embedding_failure_is_reported_and_makes_cli_result_unsuccessful(
     assert report.succeeded is False
 
 
+def test_flow_loads_only_gemini_artifact_after_embedding_and_records_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(0, 0, ()),
+    )
+    events: list[str] = []
+
+    def fake_embeddings(*args, **kwargs):
+        events.append("embed")
+        assert args[2] == "gemini_embedding_2_3072_v1"
+        assert kwargs["allow_paid_gemini"] is True
+        return _fake_embedding_result()
+
+    load_calls: list[dict[str, object]] = []
+
+    def fake_load(client, **kwargs):
+        events.append("load")
+        load_calls.append(kwargs)
+        return _fake_load_report()
+
+    monkeypatch.setattr(prefect_etl, "build_missing_embeddings", fake_embeddings)
+    monkeypatch.setattr(prefect_etl, "load_index", fake_load)
+    records_root = tmp_path / "processed" / "series_records"
+    artifacts_root = tmp_path / "custom-artifacts"
+
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=records_root,
+        artifacts_root=artifacts_root,
+        allow_paid_gemini=True,
+        elasticsearch_batch_size=17,
+        elasticsearch_max_item_retries=4,
+    )
+
+    assert events == ["embed", "load"]
+    assert load_calls == [
+        {
+            "records_root": records_root,
+            "artifacts_root": artifacts_root,
+            "model_keys": ("gemini_embedding_2_3072_v1",),
+            "batch_size": 17,
+            "max_item_retries": 4,
+        }
+    ]
+    assert report.elasticsearch_status == "indexed"
+    assert report.elasticsearch_attempted == 2
+    assert report.elasticsearch_succeeded == 2
+    assert report.elasticsearch_retried == 1
+    assert report.elasticsearch_document_count == 2
+    assert report.elasticsearch_vector_count == 2
+    assert report.succeeded is True
+    assert fake_elasticsearch_stage[0].closed is True
+
+
+def test_elasticsearch_failure_is_reported_and_client_is_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(0, 0, ()),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *args, **kwargs: _fake_embedding_result(),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_index",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("load failed")),
+    )
+
+    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+
+    assert report.elasticsearch_status == "failed"
+    assert report.elasticsearch_error == "RuntimeError: load failed"
+    assert report.succeeded is False
+    assert fake_elasticsearch_stage[0].closed is True
+
+
+def test_embedding_failure_does_not_create_elasticsearch_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(0, 0, ()),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("embed failed")),
+    )
+
+    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+
+    assert report.elasticsearch_status == "not_run"
+    assert fake_elasticsearch_stage == []
+
+
+def test_incomplete_elasticsearch_audit_fails_closed_with_observed_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(0, 0, ()),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *args, **kwargs: _fake_embedding_result(),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_index",
+        lambda *args, **kwargs: _fake_load_report(
+            vector_coverage={"embedding_gemini_3072": 1}
+        ),
+    )
+
+    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+
+    assert report.elasticsearch_status == "failed"
+    assert "Gemini vector coverage 1 != 2" in report.elasticsearch_error
+    assert report.elasticsearch_attempted == 2
+    assert report.elasticsearch_document_count == 2
+    assert report.elasticsearch_vector_count == 1
+    assert report.succeeded is False
+    assert fake_elasticsearch_stage[0].closed is True
+
+
+def test_bulk_failure_preserves_partial_elasticsearch_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_elasticsearch_stage,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(0, 0, ()),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *args, **kwargs: _fake_embedding_result(),
+    )
+    partial = _fake_load_report(
+        succeeded=1,
+        failures=(BulkFailure("GSE2", 400, "bad_document", "rejected"),),
+        vector_coverage={"embedding_gemini_3072": 1},
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_index",
+        lambda *args, **kwargs: (_ for _ in ()).throw(LoadFailedError(partial)),
+    )
+
+    report = geo_soft_etl.fn(soft_root=tmp_path, records_root=tmp_path / "records")
+
+    assert report.elasticsearch_status == "failed"
+    assert report.elasticsearch_error == "LoadFailedError: 1 Elasticsearch bulk items failed"
+    assert report.elasticsearch_attempted == 2
+    assert report.elasticsearch_succeeded == 1
+    assert report.elasticsearch_retried == 1
+    assert report.elasticsearch_document_count == 2
+    assert report.elasticsearch_vector_count == 1
+    assert fake_elasticsearch_stage[0].closed is True
+
+
 def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -391,6 +621,7 @@ def test_cli_uses_requested_worker_bound_and_returns_nonzero_on_failure(
                 created_gses=(),
                 embedding_status="skipped",
                 embedding_error=None,
+                elasticsearch_status="indexed",
             )
 
         return run
@@ -427,6 +658,7 @@ def test_etl_report_is_frozen_and_success_requires_no_failures() -> None:
         created_gses=(),
         embedding_status="skipped",
         embedding_error=None,
+        elasticsearch_status="indexed",
     )
     assert report.succeeded is True
     with pytest.raises((AttributeError, TypeError)):

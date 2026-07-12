@@ -5,6 +5,12 @@ tags: [roadmap, plan, milestones]
 
 # 40 · Roadmap & Milestones
 
+> **Primary-path cutover (2026-07-12):** Elasticsearch plus
+> `gemini_embedding_2_3072_v1` (3,072 dimensions) is the current target.
+> `geo-soft-etl` owns canonical materialization, paid Gemini embedding, bulk
+> indexing, and audit as one fail-closed Prefect run. PostgreSQL milestones
+> remain recorded as completed historical experiments, not deployment work.
+
 ← [[Home]] · decisions in [[41-Open-Questions]]
 
 Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-end thread, not durability.
@@ -40,8 +46,8 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
    disjunctive counts, and API exposure. Creating the four optional GIN indexes
    on the shared database remains an explicit database-change step.
 3. [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan|Prefect SOFT ETL]] — parse
-   only missing stripped SOFT outputs into canonical GSE JSON records; separate
-   builders later create one complete matrix artifact per model.
+   **implemented and extended**: parse missing stripped SOFT outputs, build the
+   Gemini artifact, load Elasticsearch, and audit coverage in one required run.
 4. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
    and hybrid results for 16 fixed queries and measure Recall@20, NDCG@10, and
    MRR@20 with reviewed qrels.
@@ -52,25 +58,25 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
    with BGE, MedCPT, Qwen, and full-dimension Gemini dense/hybrid pipelines using
    provider-neutral artifacts and reviewed GEO qrels.
 7. [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan|Local Elasticsearch]] —
-   load canonical records/vectors with GSE-keyed upserts and prove Postgres
-   retrieval/facet parity. No cloud provisioning or alias lifecycle yet.
+   **implemented as the primary local path** with GSE-keyed upserts, Gemini
+   3,072-dimensional vectors, retrieval, filters, and facets. Managed
+   provisioning and alias lifecycle remain future work.
 
-Dependencies: Track 1 and Track 2 have landed in the Postgres baseline. Prefect
-ETL and local Elasticsearch can be implemented separately after agreeing on the
-   canonical JSON/matrix-artifact contract. The embedding first draft contributes only
-provider-neutral registry/encoder ideas. Model promotion still depends on the
-local ES adapter and reviewed qrels. None of these tracks waits for tissue mapping.
+Dependencies: the historical Postgres tracks, canonical contract, Prefect ETL,
+and local Elasticsearch adapter have landed. Model-quality promotion still
+depends on reviewed qrels; managed deployment and tissue mapping are separate.
 
 ## Phased plan
 
 ### Phase 0 — Foundations (½–1 wk)
 - [x] Postgres baseline up (ParadeDB with pgvector + pg_search); 222,961 series loaded.
-- [ ] Build and validate the local Elasticsearch-only replacement before
-  switching the application default. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
+- [x] Build and validate the local Elasticsearch-only replacement and switch
+  the application default. → [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - [x] Ingestion skeleton hitting `esearch`/`esummary` (JSON) → `geo-fetch-summaries`.
 - [x] Land the corpus — **chose GEOmetadb bulk over a crawl**: 222,961 series into `data/processed/geo_series.jsonl`. → [[42-Build-Log]]
-- [ ] Materialize downloaded stripped SOFT into canonical per-GSE records and
-  canonical embedding storage. → [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]
+- [x] Materialize downloaded stripped SOFT into canonical per-GSE records,
+  build Gemini storage, and load/audit Elasticsearch. →
+  [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]]
 - [ ] **Build the eval set** (seed queries + pooled judgments). →
   [[46-Retrieval-Evaluation-Plan]]
 

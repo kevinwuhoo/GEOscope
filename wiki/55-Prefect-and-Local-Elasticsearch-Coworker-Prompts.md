@@ -8,6 +8,11 @@ updated: 2026-07-11
 
 # 55 · Prefect and Local Elasticsearch Coworker Prompts
 
+> **Historical handoff prompts (2026-07-12):** Their formerly separate
+> Prefect/embedding and Elasticsearch ownership boundaries have been merged.
+> The primary `geo-soft-etl` flow now requires Gemini 3,072-dimensional
+> embeddings, Elasticsearch loading, and an index audit in one run.
+
 ← [[Home]] · replaces the active ETL/embedding/search handoffs in
 [[50-Coworker-Handoff-Prompts]] · plans:
 [[53-Prefect-SOFT-ETL-and-Embedding-Prototype-Plan]] and

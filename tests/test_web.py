@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from geo_index import web
@@ -93,33 +91,22 @@ def test_our_search_delegates_filters_to_scoped_search(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    class Connection:
-        closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-    conn = Connection()
     response = SearchResponse(hits=())
-    monkeypatch.setattr(web.pg_hybrid, "_connect", lambda: conn)
-    monkeypatch.setattr(web.pg_hybrid, "load_model", lambda: "model")
-    monkeypatch.setattr(web.pg_hybrid, "embed_query", lambda model, query: "qv")
-
-    def fake_search(_conn: object, query: str, **kwargs: Any) -> SearchResponse:
-        calls.append({"query": query, **kwargs})
-        return response
-
-    monkeypatch.setattr(web.pg_hybrid, "search_with_facets", fake_search)
-    monkeypatch.setattr(web, "_model", None)
+    runtime = type(
+        "Runtime",
+        (),
+        {"search": lambda self, query, **kwargs: calls.append(
+            {"query": query, **kwargs}
+        ) or response},
+    )()
+    monkeypatch.setattr(web, "_runtime", runtime)
     filters = SearchFilters(organism_ids=("NCBITaxon:9606",))
     assert web._our_search("immune", "hybrid", 5, filters) is response
     assert calls == [
         {
             "query": "immune",
-            "qv": "qv",
             "mode": "hybrid",
             "topk": 5,
             "filters": filters,
         }
     ]
-    assert conn.closed

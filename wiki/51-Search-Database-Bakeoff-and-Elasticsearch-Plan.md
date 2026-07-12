@@ -8,6 +8,12 @@ updated: 2026-07-11
 
 # 51 · Search Database Bake-off and Elasticsearch Plan
 
+> **Implemented primary cutover (2026-07-12):** Elasticsearch now owns the
+> primary loader, search CLI, web path, filters, facets, and native RRF.
+> Prefect builds `gemini_embedding_2_3072_v1` and audits its 3,072-dimensional
+> `embedding_gemini_3072` field before success. PostgreSQL code is retained only
+> for historical comparison.
+
 ← [[Home]] · supersedes the deployment choice in [[26-Datastore-Postgres]] ·
 coordinates with [[52-Embedding-Bakeoff-Runbook]] and [[47-MCP-Server-Plan]]
 

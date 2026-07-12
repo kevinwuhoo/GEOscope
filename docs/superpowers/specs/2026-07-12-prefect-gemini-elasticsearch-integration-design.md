@@ -1,163 +1,125 @@
-# Prefect Gemini and Elasticsearch Integration Design
+# Prefect Gemini and Elasticsearch Completion Safety Design
+
+**Status:** Approved as a refinement of the approved Elasticsearch Primary
+Cutover Design (`998d686`)
 
 ## Goal
 
-Extend the canonical SOFT Prefect flow so an explicitly authorized run can
-update the BGE and Gemini embedding artifacts, then load the complete canonical
-record and vector set into Elasticsearch. Separately, finish the already-running
-Gemini corpus build, validate its published artifact, load it into the current
-local Elasticsearch index, and prove full Gemini vector coverage.
+Finish the already-running Gemini corpus build, validate and upload the complete
+artifact to Elasticsearch, and harden the primary Prefect pipeline so every
+future successful run builds/resumes Gemini and proves it is fully represented
+in Elasticsearch.
 
-## Safety defaults
+## Relationship to the primary cutover
 
-Ordinary `geo-soft-etl` runs remain local, offline, and non-billing. Gemini and
-Elasticsearch are enabled only by explicit command-line flags:
+The approved primary-cutover design is authoritative: Gemini and Elasticsearch
+are required stages of `geo-soft-etl`, not optional extensions. This refinement
+adds missing production guarantees without reversing that decision:
 
-- `--with-gemini` adds `gemini_embedding_2_3072_v1` after the existing BGE step;
-- `--allow-paid-gemini` is required whenever `--with-gemini` is used;
-- `--gemini-concurrency` defaults to `1` and is forwarded only to Gemini;
-- `--load-elasticsearch` enables the final network write after every requested
-  embedding step succeeds.
+- paid Gemini still requires `--allow-paid-gemini`;
+- `--gemini-concurrency` defaults to `1` and production uses `4`;
+- Elasticsearch replacement writes preserve every available registered vector
+  artifact, not only Gemini;
+- a successful flow requires Gemini vector coverage equal to document count.
 
-The production command uses Gemini concurrency `4`. The flow never starts a
-second Gemini coordinator against an existing temporary state directory.
+## Prefect contract
 
-## Existing contracts retained
-
-- Canonical records remain under `data/processed/series_records`.
-- Canonical artifacts remain three-file directories under
-  `data/processed/embedding_artifacts/<model-key>`.
-- `build_missing_embeddings(...)` remains the only embedding execution owner.
-- Elasticsearch remains `geo-series`, keyed by GSE with bulk `index` actions.
-- The existing mapping already contains `embedding_gemini_3072` with 3,072
-  dimensions; no mapping revision or index reset is required.
-- Elasticsearch credentials remain environment-only.
-
-## Prefect flow interface
-
-`geo_soft_etl(...)` gains keyword parameters:
-
-```python
-with_gemini: bool = False
-allow_paid_gemini: bool = False
-gemini_concurrency: int = 1
-load_elasticsearch: bool = False
-```
-
-The CLI exposes matching flags. It rejects `--with-gemini` without
-`--allow-paid-gemini` and rejects concurrency below one before discovering or
-materializing records.
-
-The flow performs these stages in order:
-
-1. Discover and materialize missing canonical records in the existing bounded
-   Prefect task pool.
-2. Update `bge_small_v15` with `replace_gses=created_gses`.
-3. When enabled, update `gemini_embedding_2_3072_v1` with the same replacement
-   set, the paid authorization, and the configured concurrency.
-4. If all requested embeddings succeed and Elasticsearch loading is enabled,
-   load canonical records with every available registered artifact. The
-   current corpus has BGE, MedCPT, Qwen, and—after this run—Gemini, so the load
-   preserves all four vector fields.
-5. Require Gemini coverage to equal the Elasticsearch document count. A
-   missing artifact, partial join, bulk failure, or incomplete coverage makes
-   the flow unsuccessful.
-
-Embedding stages are serialized. Prefect's thread pool remains limited to SOFT
-parsing; it does not create multiple embedding writers or multiple
-Elasticsearch loaders.
-
-## Elasticsearch preservation and coverage
-
-Bulk `index` replaces the complete document source. Loading only Gemini would
-therefore remove existing BGE, MedCPT, or Qwen fields. Both the one-time
-production load and the Prefect load call `load_index(...)` with the full
-registered model-key sequence so all available canonical vectors are joined
-into each replacement document.
-
-Before the Prefect Elasticsearch stage, the Gemini artifact is validated with
-the existing canonical artifact loader. After bulk refresh, the flow checks:
+The primary flow remains:
 
 ```text
-vector_coverage["embedding_gemini_3072"] == document_count
+SOFT -> canonical records -> Gemini artifact -> Elasticsearch -> audited report
 ```
 
-The one-time live upload uses the same default all-model loader behavior and
-performs the same coverage check through the generated load report plus a live
-Elasticsearch count query.
+`geo_soft_etl(...)` accepts the existing roots and Elasticsearch retry bounds,
+plus `gemini_concurrency: int = 1`. The CLI exposes
+`--gemini-concurrency`. Concurrency below one or missing paid authorization
+fails before record discovery.
 
-## Reporting
-
-Replace the single-model embedding report fields with explicit stage reports:
+The flow calls `build_missing_embeddings(...)` once for
+`gemini_embedding_2_3072_v1`, forwarding:
 
 ```python
-@dataclass(frozen=True)
-class EmbeddingStepReport:
-    model_key: str
-    status: str | None
-    error: str | None
-
-@dataclass(frozen=True)
-class ElasticsearchStepReport:
-    status: str
-    document_count: int | None
-    vector_coverage: dict[str, int]
-    error: str | None
+replace_gses=frozenset(created_gses)
+allow_paid_gemini=allow_paid_gemini
+gemini_concurrency=gemini_concurrency
 ```
 
-`EtlReport` contains `embeddings: tuple[EmbeddingStepReport, ...]` and
-`elasticsearch: ElasticsearchStepReport | None`. `succeeded` requires zero
-record failures, no embedding error, and no requested Elasticsearch error.
-The atomic JSON report remains `soft_etl_report.json`.
+It never creates a second writer for the same Gemini temporary state.
+
+## Elasticsearch preservation
+
+The loader uses bulk `index`, which replaces the complete document source.
+Passing only the Gemini model key would remove BGE, MedCPT, and Qwen vector
+fields already present on each document. The primary Prefect stage therefore
+passes `model_keys=tuple(VECTOR_FIELDS)` so every available canonical artifact
+is joined into each replacement source.
+
+The current artifact root contains complete BGE, MedCPT, and Qwen artifacts.
+After the active build finishes it will also contain Gemini. The Prefect stage
+validates the Gemini artifact before creating the Elasticsearch client. Other
+registered artifacts retain the loader's existing availability behavior, but
+the primary Gemini artifact is mandatory.
+
+## Coverage and reporting
+
+After `load_index(...)` refreshes the index, the flow reads:
+
+```text
+document_count
+vector_coverage["embedding_gemini_3072"]
+```
+
+The two values must be equal. Otherwise the Elasticsearch stage is reported as
+failed with an incomplete-coverage error and `EtlReport.succeeded` is false.
+Existing load counters and error fields remain the public report shape; no
+second report abstraction is introduced.
+
+The report never includes API keys, passwords, or raw client configuration.
+The Elasticsearch client always closes in `finally`.
 
 ## Failure behavior
 
-- Invalid paid/concurrency flags fail before record work.
-- Every requested embedding is reported separately.
-- A BGE failure prevents Gemini and Elasticsearch work.
-- A Gemini failure preserves its resumable state and prevents Elasticsearch
-  writes.
-- Missing Elasticsearch credentials, mapping mismatch, bulk item failure, or
-  incomplete Gemini coverage is reported and returns a nonzero CLI result.
-- Clients are always closed. No credential value is logged or written to the
-  ETL report.
-- An Elasticsearch failure does not invalidate completed canonical artifacts;
-  rerunning with the same flags skips/resumes embedding work and retries the
-  idempotent GSE-keyed load.
+- Invalid concurrency or missing paid authorization fails before discovery.
+- Record or Gemini failure prevents Elasticsearch client construction.
+- Missing/invalid Gemini artifact prevents Elasticsearch writes.
+- Settings, connection, mapping, bulk, or coverage failure is captured in the
+  terminal ETL report and returns nonzero.
+- Completed records and artifacts remain durable for retry.
+- Re-running the GSE-keyed loader is idempotent.
 
-## Verification
+## Testing
 
-Offline tests use fake embedding builders and fake Elasticsearch clients. They
-prove:
+Offline fake-only tests prove:
 
-1. default ETL remains BGE-only and performs no Elasticsearch call;
-2. paid authorization and concurrency validation happen before discovery;
-3. BGE then Gemini execute in order with identical replacement GSEs;
-4. a failed embedding prevents later paid or Elasticsearch work;
-5. the Elasticsearch stage receives every registered model key;
-6. full Gemini vector coverage is required for success;
-7. settings/client/load failures are reported and clients close;
-8. CLI flags propagate into the configured Prefect flow;
-9. report JSON contains per-model and Elasticsearch evidence.
+1. paid authorization and concurrency validate before discovery;
+2. Gemini concurrency reaches `build_missing_embeddings`;
+3. Elasticsearch starts only after Gemini succeeds;
+4. the loader receives every registered model key;
+5. the Gemini artifact is mandatory;
+6. incomplete Gemini coverage makes the flow unsuccessful;
+7. client closure and report counters/errors are deterministic;
+8. CLI flags propagate into the configured Prefect flow.
 
-Live completion requires all of the following evidence:
+Full offline verification must not source credentials or contact Google or
+Elasticsearch.
 
-- the Gemini coordinator exits zero and publishes the final artifact;
-- canonical validation reports 249,736 rows, 3,072 dimensions, and the Gemini
-  model key;
-- a repeated Gemini build returns `status=skipped` without provider work;
-- the Elasticsearch loader exits zero with no bulk failures;
-- Elasticsearch document count equals canonical record count;
-- `embedding_gemini_3072` coverage equals document count;
-- a second identical Elasticsearch load leaves document count unchanged;
-- the patched Prefect offline tests and the full repository suite pass.
+## Live completion evidence
 
-## Operational credentials
+The goal is complete only after all evidence exists:
 
-The healthy local Elasticsearch container is already running. The main
-worktree has no `.env.elasticsearch`, but the ignored credential file used to
-start the container exists at
-`.worktrees/elasticsearch-foundation/.env.elasticsearch`. The one-time load can
-source that file without printing or copying any secret. Future Prefect runs
-must export the same Elasticsearch variables before using
-`--load-elasticsearch`.
+- the existing Gemini coordinator exits zero;
+- the final artifact validates as 249,736 rows by 3,072 dimensions for
+  `gemini_embedding_2_3072_v1`;
+- a repeated builder invocation returns `status=skipped` without provider work;
+- the all-model Elasticsearch loader reports no failures;
+- Elasticsearch document count is 249,736;
+- `embedding_gemini_3072` coverage is 249,736;
+- a second identical load leaves both counts unchanged;
+- an end-to-end `geo-soft-etl --allow-paid-gemini --gemini-concurrency 4` run
+  skips the complete artifact, reloads Elasticsearch, reports full coverage,
+  and exits zero;
+- focused and full offline tests pass.
+
+The local Elasticsearch container is healthy. Its ignored credential file is
+available at `.worktrees/elasticsearch-foundation/.env.elasticsearch` and can
+be sourced for the live load without printing or copying secrets.

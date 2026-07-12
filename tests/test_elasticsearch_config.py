@@ -5,10 +5,23 @@ from pathlib import Path
 import pytest
 
 from geo_index.elasticsearch_config import (
+    DEFAULT_ACTIVE_MODEL_KEY,
     INDEX_NAME,
     VECTOR_FIELDS,
     ElasticsearchSettings,
 )
+
+
+def test_default_active_model_is_gemini_3072() -> None:
+    settings = ElasticsearchSettings.from_env(
+        {
+            "ELASTICSEARCH_URL": "http://localhost:9200",
+            "ELASTICSEARCH_API_KEY": "encoded-key",
+        }
+    )
+
+    assert DEFAULT_ACTIVE_MODEL_KEY == "gemini_embedding_2_3072_v1"
+    assert settings.active_model_key == DEFAULT_ACTIVE_MODEL_KEY
 
 
 def test_compose_pins_local_single_node_with_volume_and_healthcheck() -> None:

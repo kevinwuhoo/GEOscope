@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -17,10 +18,16 @@ COMPARISON_MODEL_KEYS: Final[tuple[str, ...]] = (
 )
 
 
-def _comparison_variant(model_key: str) -> EmbeddingVariant:
-    if model_key not in COMPARISON_MODEL_KEYS:
-        raise ValueError(f"not an Elasticsearch comparison model: {model_key}")
+def _search_variant(model_key: str) -> EmbeddingVariant:
+    if model_key not in VECTOR_MODEL_KEYS:
+        raise ValueError(f"not an Elasticsearch search model: {model_key}")
     return get_variant(model_key)
+
+
+VECTOR_MODEL_KEYS: Final[tuple[str, ...]] = (
+    *COMPARISON_MODEL_KEYS,
+    "gemini_embedding_2_3072_v1",
+)
 
 
 def format_query(model_key: str, query: str) -> str:
@@ -29,13 +36,13 @@ def format_query(model_key: str, query: str) -> str:
     text = query.strip()
     if not text:
         raise ValueError("blank query")
-    return _comparison_variant(model_key).query_format.format(query=text)
+    return _search_variant(model_key).query_format.format(query=text)
 
 
 def validate_query_vector(model_key: str, value: object) -> np.ndarray:
     """Return a finite, normalized float32 vector of the registered size."""
 
-    variant = _comparison_variant(model_key)
+    variant = _search_variant(model_key)
     vector = np.asarray(value, dtype=np.float32)
     if vector.ndim != 1 or vector.shape != (variant.dimensions,):
         raise ValueError(
@@ -171,10 +178,61 @@ class _MedCPTQueryEncoder:
         self.tokenizer = None
 
 
+class _GeminiQueryEncoder:
+    def __init__(
+        self,
+        variant: EmbeddingVariant,
+        *,
+        api_key: str | None = None,
+        client: object | None = None,
+    ) -> None:
+        key = (api_key or os.environ.get("GEMINI_API_KEY", "")).strip()
+        if not key:
+            raise ValueError("GEMINI_API_KEY is required for Gemini query embeddings")
+        if variant.model_key != "gemini_embedding_2_3072_v1":
+            raise ValueError(f"not a Gemini query model: {variant.model_key}")
+        if client is None:
+            from google import genai
+
+            client = genai.Client(api_key=key)
+        self.variant = variant
+        self.client = client
+        self.info = QueryEncoderInfo(
+            variant.model_key,
+            variant.query_model_id,
+            "provider-managed",
+            variant.dimensions,
+        )
+
+    def encode(self, query: str) -> np.ndarray:
+        if self.client is None:
+            raise RuntimeError("query encoder is closed")
+        response = self.client.models.embed_content(
+            model=self.variant.query_model_id,
+            contents=format_query(self.variant.model_key, query),
+            config={
+                "task_type": "RETRIEVAL_QUERY",
+                "output_dimensionality": self.variant.dimensions,
+            },
+        )
+        embeddings = getattr(response, "embeddings", None)
+        if not isinstance(embeddings, list) or len(embeddings) != 1:
+            raise ValueError("Gemini query response must contain exactly one embedding")
+        values = getattr(embeddings[0], "values", None)
+        return validate_query_vector(self.variant.model_key, values)
+
+    def close(self) -> None:
+        if self.client is not None:
+            self.client.close()
+            self.client = None
+
+
 def create_query_encoder(model_key: str) -> QueryEncoder:
     """Create one lazy real query encoder for a fixed comparison model."""
 
-    variant = _comparison_variant(model_key)
+    variant = _search_variant(model_key)
+    if model_key == "gemini_embedding_2_3072_v1":
+        return _GeminiQueryEncoder(variant)
     if model_key == "medcpt_v1":
         return _MedCPTQueryEncoder(variant)
     return _SentenceTransformerQueryEncoder(variant)

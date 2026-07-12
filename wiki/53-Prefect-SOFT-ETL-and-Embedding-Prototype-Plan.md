@@ -8,6 +8,11 @@ updated: 2026-07-11
 
 # 53 · Prefect SOFT ETL and Embedding Prototype Plan
 
+> **Superseded pipeline boundary (2026-07-12):** This plan stopped at canonical
+> records and embedding artifacts. The implemented primary Prefect flow now
+> requires `gemini_embedding_2_3072_v1`, loads it into Elasticsearch, audits
+> document/vector coverage, and fails the run if indexing is unavailable.
+
 ← [[Home]] · implements the current path in [[21-Ingestion-Pipeline]] · feeds
 [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] · model details in
 [[52-Embedding-Bakeoff-Runbook]] · future endpoint in

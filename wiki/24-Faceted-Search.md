@@ -5,7 +5,11 @@ tags: [facets, search, ontology]
 
 # 24 · Faceted Search
 
-← [[Home]] · depends on [[22-Ontology-Normalization]] · served by [[26-Datastore-Postgres]]
+← [[Home]] · depends on [[22-Ontology-Normalization]] · served by Elasticsearch
+
+> **Current implementation (2026-07-12):** Elasticsearch keyword arrays and
+> aggregations implement normalized filters and disjunctive facet counts on the
+> primary path. PostgreSQL facet SQL below is historical comparison material.
 
 > **v1 implementation:** [[45-Normalized-Filters-and-Facets-Plan]] starts with
 > the already-populated `organism_ids`, `sex_ids`, `assay_categories`, and
