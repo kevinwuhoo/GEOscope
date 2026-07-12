@@ -230,6 +230,25 @@ unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
 second load replaces the same documents. Real-corpus ingestion is intentionally
 deferred until the ETL and per-model artifacts are complete.
 
+After BGE, MedCPT, and Qwen have full vector coverage, run the guarded read-only
+comparison. It generates real query embeddings, exercises BM25+dense native RRF
+with normalized filters and disjunctive facets, records standalone BM25/dense
+diagnostics, and writes stable Markdown tables for review:
+
+```bash
+set -a
+source .env.elasticsearch
+set +a
+GEO_TEST_ELASTIC=1 uv run geo-elasticsearch-compare \
+  --queries eval/elasticsearch_live_queries.jsonl \
+  --topk 5 \
+  --output eval/elasticsearch-live-comparison.md
+```
+
+The internal comparison always runs the three fixed registry models and does not
+add a public model selector. It never resets or writes `geo-series`; ordinary
+tests do not contact Elasticsearch or load query models.
+
 For a later managed deployment, configure only `ELASTICSEARCH_URL` and either
 `ELASTICSEARCH_USERNAME` plus `ELASTICSEARCH_PASSWORD`, or
 `ELASTICSEARCH_API_KEY`. The loader and search code do not depend on Docker or

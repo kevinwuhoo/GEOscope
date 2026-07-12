@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .elasticsearch_config import INDEX_NAME, VECTOR_FIELDS, response_body
+from .elasticsearch_config import (
+    INDEX_NAME,
+    VECTOR_FIELDS,
+    ElasticsearchSettings,
+    create_client,
+    response_body,
+)
 from .elasticsearch_index import MAPPING_REVISION
 from .elasticsearch_query_embeddings import (
     COMPARISON_MODEL_KEYS,
@@ -336,3 +348,268 @@ def run_comparison(
         bm25_by_query=bm25_by_query,
         models=models,
     )
+
+
+def overlap_at_five(left: SearchResponse, right: SearchResponse) -> int:
+    """Count shared GSE accessions in two top-five result sets."""
+
+    left_gses = {str(hit["gse"]) for hit in left.hits[:5]}
+    right_gses = {str(hit["gse"]) for hit in right.hits[:5]}
+    return len(left_gses & right_gses)
+
+
+def _markdown_text(value: object, *, limit: int | None = None) -> str:
+    text = " ".join(str(value).split()).replace("|", r"\|")
+    if limit is not None and len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _hit_cell(hit: dict[str, object]) -> str:
+    return f"{hit['gse']} — {_markdown_text(hit.get('title', ''), limit=100)}"
+
+
+def _filters_text(filters: SearchFilters) -> str:
+    active = {key: value for key, value in filters.as_dict().items() if value}
+    return _markdown_text(json.dumps(active, sort_keys=True, separators=(",", ":")))
+
+
+def render_markdown(
+    run: ComparisonRun,
+    *,
+    source_revision: str,
+    query_digest: str,
+) -> str:
+    """Render one deterministic, diff-friendly comparison report."""
+
+    lines = [
+        "# Elasticsearch Live Search Comparison",
+        "",
+        "## Run provenance",
+        "",
+        "| Property | Value |",
+        "|---|---|",
+        f"| Source revision | `{_markdown_text(source_revision)}` |",
+        f"| Query fixture SHA-256 | `{_markdown_text(query_digest)}` |",
+        f"| Elasticsearch | `{run.snapshot.server_version}` |",
+        f"| Index | `{INDEX_NAME}` |",
+        f"| Mapping | `{run.snapshot.mapping_revision}` |",
+        f"| Documents | {run.snapshot.document_count} |",
+        "| Retrieval | topk=5, deep=100, candidates=500, RRF k0=60, facet pool=100 |",
+        "",
+        "## Model readiness",
+        "",
+        "| Model | Query model | Revision | Vector field | Dimensions | Coverage |",
+        "|---|---|---|---|---:|---:|",
+    ]
+    for model_key in COMPARISON_MODEL_KEYS:
+        model = run.models[model_key]
+        spec = VECTOR_FIELDS[model_key]
+        lines.append(
+            f"| `{model_key}` | `{model.info.model_id}` | `{model.info.revision}` | "
+            f"`{spec.field}` | {spec.dimensions} | "
+            f"{run.snapshot.vector_coverage[model_key]} |"
+        )
+    gemini = VECTOR_FIELDS["gemini_embedding_2_3072_v1"]
+    lines.append(
+        f"| `gemini_embedding_2_3072_v1` (context only) | `gemini-embedding-2` | — | "
+        f"`{gemini.field}` | {gemini.dimensions} | "
+        f"{run.snapshot.vector_coverage['gemini_embedding_2_3072_v1']} |"
+    )
+    lines.extend(
+        [
+            "",
+            "## Feature proof",
+            "",
+            "| Feature | Status | Evidence |",
+            "|---|---|---|",
+        ]
+    )
+    for check in run.checks:
+        label = check.name.replace("_", " ").capitalize()
+        lines.append(
+            f"| {label} | {'PASS' if check.passed else 'FAIL'} | "
+            f"{_markdown_text(check.note)} |"
+        )
+
+    for case in run.cases:
+        lines.extend(
+            [
+                "",
+                f"## Query: {case.query_id}",
+                "",
+                f"**Search:** {_markdown_text(case.query)}  ",
+                f"**Intent:** {_markdown_text(case.intent)}  ",
+                f"**Filters:** `{_filters_text(case.filters)}`",
+                "",
+                "### Full hybrid: native RRF (BM25 + dense)",
+                "",
+                "| Rank | BGE | MedCPT | Qwen |",
+                "|---:|---|---|---|",
+            ]
+        )
+        hybrid = {
+            key: run.models[key].hybrid_by_query[case.query_id]
+            for key in COMPARISON_MODEL_KEYS
+        }
+        for rank in range(5):
+            lines.append(
+                f"| {rank + 1} | {_hit_cell(hybrid['bge_small_v15'].hits[rank])} | "
+                f"{_hit_cell(hybrid['medcpt_v1'].hits[rank])} | "
+                f"{_hit_cell(hybrid['qwen3_06b_1024_v1'].hits[rank])} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Diagnostic components",
+                "",
+                "| Rank | BM25 | BGE dense | MedCPT dense | Qwen dense |",
+                "|---:|---|---|---|---|",
+            ]
+        )
+        bm25 = run.bm25_by_query[case.query_id]
+        dense = {
+            key: run.models[key].dense_by_query[case.query_id]
+            for key in COMPARISON_MODEL_KEYS
+        }
+        for rank in range(5):
+            lines.append(
+                f"| {rank + 1} | {_hit_cell(bm25.hits[rank])} | "
+                f"{_hit_cell(dense['bge_small_v15'].hits[rank])} | "
+                f"{_hit_cell(dense['medcpt_v1'].hits[rank])} | "
+                f"{_hit_cell(dense['qwen3_06b_1024_v1'].hits[rank])} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Hybrid facet evidence",
+                "",
+                "| Model | Facet | Scope | Candidates | Top buckets |",
+                "|---|---|---|---:|---|",
+            ]
+        )
+        for model_key in COMPARISON_MODEL_KEYS:
+            response = hybrid[model_key]
+            for field in FACET_FIELDS:
+                facet = response.facets[field]
+                buckets = ", ".join(
+                    f"{bucket.value} ({bucket.count})" for bucket in facet.buckets[:3]
+                )
+                lines.append(
+                    f"| `{model_key}` | `{field}` | `{facet.scope}` | "
+                    f"{facet.candidate_count} | {_markdown_text(buckets)} |"
+                )
+
+    lines.extend(
+        [
+            "",
+            "## Pairwise overlap@5",
+            "",
+            "| Query | Mode | BGE/MedCPT | BGE/Qwen | MedCPT/Qwen |",
+            "|---|---|---:|---:|---:|",
+        ]
+    )
+    pairs = (
+        ("bge_small_v15", "medcpt_v1"),
+        ("bge_small_v15", "qwen3_06b_1024_v1"),
+        ("medcpt_v1", "qwen3_06b_1024_v1"),
+    )
+    for case in run.cases:
+        for mode in ("dense", "hybrid"):
+            responses = {
+                key: (
+                    run.models[key].dense_by_query[case.query_id]
+                    if mode == "dense"
+                    else run.models[key].hybrid_by_query[case.query_id]
+                )
+                for key in COMPARISON_MODEL_KEYS
+            }
+            overlaps = [overlap_at_five(responses[left], responses[right]) for left, right in pairs]
+            lines.append(
+                f"| `{case.query_id}` | {mode} | {overlaps[0]} | {overlaps[1]} | {overlaps[2]} |"
+            )
+    lines.extend(
+        [
+            "",
+            "> This is a qualitative live smoke comparison, not a relevance judgment or model-selection result.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_report_atomic(path: Path, content: str) -> None:
+    """Replace a report only after its complete content is available."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as handle:
+            handle.write(content)
+            temporary = Path(handle.name)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Compare full Elasticsearch search with three fixed query models"
+    )
+    parser.add_argument(
+        "--queries",
+        type=Path,
+        default=Path("eval/elasticsearch_live_queries.jsonl"),
+    )
+    parser.add_argument("--topk", type=int, default=5)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("eval/elasticsearch-live-comparison.md"),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    if os.environ.get("GEO_TEST_ELASTIC") != "1":
+        print("set GEO_TEST_ELASTIC=1 to run the live comparison", file=sys.stderr)
+        return 2
+    args = _parser().parse_args(argv)
+    client = None
+    try:
+        if args.topk != 5:
+            raise ValueError("the reviewable comparison requires --topk 5")
+        settings = ElasticsearchSettings.from_env()
+        client = create_client(settings)
+        cases = load_query_cases(args.queries)
+        run = run_comparison(client, cases, topk=args.topk)
+        source_revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+        query_digest = hashlib.sha256(args.queries.read_bytes()).hexdigest()
+        report = render_markdown(
+            run,
+            source_revision=source_revision,
+            query_digest=query_digest,
+        )
+        write_report_atomic(args.output, report)
+        print(f"wrote {args.output} with {len(cases)} queries and 3 models")
+        return 0
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"comparison failed: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        if client is not None:
+            client.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

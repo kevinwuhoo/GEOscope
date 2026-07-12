@@ -25,6 +25,7 @@ geo-search = "geo_index.search_test:main"
 geo-normalize = "geo_index.normalize:main"
 geo-soft-browser = "geo_index.soft_browser.server:main"
 geo-elasticsearch-load = "geo_index.elasticsearch_loader:main"
+geo-elasticsearch-compare = "geo_index.elasticsearch_live_compare:main"
 geo-soft-etl = "geo_index.prefect_etl:main"
 
 [build-system]

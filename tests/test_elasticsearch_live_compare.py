@@ -9,7 +9,11 @@ from geo_index.elasticsearch_index import index_definition
 from geo_index.elasticsearch_live_compare import (
     inspect_index,
     load_query_cases,
+    main,
+    overlap_at_five,
+    render_markdown,
     run_comparison,
+    write_report_atomic,
 )
 from geo_index.elasticsearch_query_embeddings import QueryEncoderInfo
 from geo_index.search_models import (
@@ -336,3 +340,65 @@ def test_run_comparison_executes_full_hybrid_and_diagnostic_paths() -> None:
         assert call["k0"] == 60
         assert call["facet_pool"] == 100
         assert call["bucket_limit"] == 10
+
+
+def _comparison_run():
+    cases = (load_query_cases(Path("eval/elasticsearch_live_queries.jsonl"))[0],)
+    return run_comparison(
+        _FakeInspectionClient(),
+        cases,
+        encoder_factory=_FakeEncoder,
+        service_factory=lambda _client, *, active_model_key, encode_query: (
+            _RecordingService(active_model_key)
+        ),
+    )
+
+
+def test_overlap_at_five_counts_shared_gses() -> None:
+    left = _response("bge_small_v15", "dense", SearchFilters())
+    right = _response("medcpt_v1", "dense", SearchFilters())
+    right.hits[0]["gse"] = "GSE999"
+
+    assert overlap_at_five(left, right) == 4
+
+
+def test_render_markdown_is_stable_readable_and_escaped() -> None:
+    run = _comparison_run()
+    query_id = run.cases[0].query_id
+    run.models["bge_small_v15"].hybrid_by_query[query_id].hits[0]["title"] = (
+        "title with | pipe\nand newline"
+    )
+
+    rendered = render_markdown(
+        run, source_revision="abc123", query_digest="digest123"
+    )
+
+    assert "# Elasticsearch Live Search Comparison" in rendered
+    assert "| Full hybrid | PASS |" in rendered
+    assert "## Query: control_childhood_malaria" in rendered
+    assert "### Full hybrid: native RRF (BM25 + dense)" in rendered
+    assert "### Diagnostic components" in rendered
+    assert "### Hybrid facet evidence" in rendered
+    assert "## Pairwise overlap@5" in rendered
+    assert "title with \\| pipe and newline" in rendered
+    assert "/Users/" not in rendered
+    assert "password" not in rendered.lower()
+    assert "latency" not in rendered.lower()
+
+
+def test_write_report_atomic_replaces_existing_content(tmp_path: Path) -> None:
+    path = tmp_path / "report.md"
+    path.write_text("old\n", encoding="utf-8")
+
+    write_report_atomic(path, "new\n")
+
+    assert path.read_text(encoding="utf-8") == "new\n"
+
+
+def test_main_refuses_live_work_without_explicit_guard(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GEO_TEST_ELASTIC", raising=False)
+
+    assert main([]) == 2
+    assert "GEO_TEST_ELASTIC=1" in capsys.readouterr().err
