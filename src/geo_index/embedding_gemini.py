@@ -271,7 +271,7 @@ def _assemble_results(
     expected = {record.gse for record in records}
     seen: set[str] = set()
     vectors: dict[str, np.ndarray] = {}
-    failures: list[GeminiBatchRowFailure] = []
+    failures: dict[str, GeminiBatchRowFailure] = {}
     actual_tokens = 0
     with result_path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -288,8 +288,9 @@ def _assemble_results(
                 raise ValueError(f"duplicate Gemini response {gse}")
             seen.add(gse)
             if row.get("error") is not None:
-                failures.append(
-                    GeminiBatchRowFailure(gse=gse, error=row["error"])
+                failures[gse] = GeminiBatchRowFailure(
+                    gse=gse,
+                    error=row["error"],
                 )
                 continue
             response = row.get("response")
@@ -311,7 +312,15 @@ def _assemble_results(
     if missing:
         raise ValueError(f"missing Gemini responses: {', '.join(missing)}")
     if failures:
-        return None, actual_tokens, tuple(failures)
+        return (
+            None,
+            actual_tokens,
+            tuple(
+                failures[record.gse]
+                for record in records
+                if record.gse in failures
+            ),
+        )
     matrix = np.vstack([vectors[record.gse] for record in records]).astype(
         np.float32,
         copy=False,
@@ -339,8 +348,11 @@ def _quota_backoff_seconds(retry_count: int) -> int:
 
 
 def _error_status_code(exc: BaseException) -> int | None:
-    value = getattr(exc, "status_code", None)
-    return value if isinstance(value, int) else None
+    for attribute in ("code", "status_code"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 def _reconcile_submission(client, display_name: str):
@@ -557,6 +569,7 @@ def _run_batch_lifecycle(
             if state_shards[index].get("job_name")
         ]
         succeeded: list[tuple[int, object]] = []
+        terminal_error: RuntimeError | None = None
 
         for index in tuple(active):
             raw = state_shards[index]
@@ -575,8 +588,8 @@ def _run_batch_lifecycle(
                     raw,
                 )
                 succeeded.append((index, job))
-            elif job_state in TERMINAL_STATES:
-                raise RuntimeError(
+            elif job_state in TERMINAL_STATES and terminal_error is None:
+                terminal_error = RuntimeError(
                     f"Gemini batch {job_name} ended as {job_state}: {job.error}"
                 )
 
@@ -590,6 +603,9 @@ def _run_batch_lifecycle(
                 state_shards[index],
             )
             made_progress = True
+
+        if terminal_error is not None:
+            raise terminal_error
 
         active_count = sum(
             1

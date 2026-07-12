@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from google.genai.errors import ClientError
 
 import geo_index.embedding_gemini as gemini
 from geo_index.embedding_artifacts import RecordRef
@@ -501,6 +502,63 @@ def test_terminal_failure_stops_new_submissions_and_preserves_active_jobs(
     ]
 
 
+def test_terminal_failure_harvests_later_active_success_before_raising(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    records = _many_records(3)
+    estimate = prepare_gemini_requests(records, VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    for index in range(2):
+        state["shards"][index].update(  # type: ignore[index,union-attr]
+            uploaded_file_name=f"files/input-{index:05d}",
+            submission_display_name=f"display-{index:05d}",
+            job_name=f"batches/job-{index:05d}",
+            job_state="JOB_STATE_RUNNING",
+        )
+    gemini._atomic_json(state_path, state)
+
+    class FailedThenSucceededClient(CooperativeClient):
+        def get(self, *, name):
+            index = name.rsplit("-", 1)[1]
+            if index == "00000":
+                self.events.append(("get", index))
+                return SimpleNamespace(
+                    name=name,
+                    state=SimpleNamespace(name="JOB_STATE_FAILED"),
+                    dest=SimpleNamespace(file_name=None),
+                    error="provider failure",
+                )
+            return super().get(name=name)
+
+    client = FailedThenSucceededClient(running_polls=0)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match="batches/job-00000.*JOB_STATE_FAILED"):
+        build_gemini_vectors(
+            records,
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=3,
+        )
+
+    assert client.events == [
+        ("get", "00000"),
+        ("get", "00001"),
+        ("download", "00001"),
+    ]
+    persisted = json.loads(state_path.read_text())["shards"]
+    assert persisted[1]["job_state"] == "JOB_STATE_SUCCEEDED"
+    assert persisted[1]["output_file_name"] == "files/output-00001"
+    assert (tmp_path / "gemini_results-00001.jsonl").exists()
+    assert persisted[2]["uploaded_file_name"] is None
+    assert persisted[2]["job_name"] is None
+
+
 def test_successful_output_id_is_durable_before_polling_later_jobs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -546,7 +604,16 @@ def test_definitive_429_with_zero_matches_backs_off_then_retries(
         def create_embeddings(self, *, model, src, config):
             create_display_names.append(config["display_name"])
             if len(create_display_names) == 1:
-                raise QuotaError("queue full")
+                raise ClientError(
+                    429,
+                    {
+                        "error": {
+                            "code": 429,
+                            "message": "queue full",
+                            "status": "RESOURCE_EXHAUSTED",
+                        }
+                    },
+                )
             return SimpleNamespace(name="batches/job-after-backoff")
 
         def list(self):
@@ -1044,8 +1111,8 @@ def test_row_errors_are_aggregated_without_writing_an_artifact(
         )
 
     assert exc_info.value.failures == (
-        {"gse": "GSE10", "error": first_error},
         {"gse": "GSE2", "error": second_error},
+        {"gse": "GSE10", "error": first_error},
     )
     assert "GSE10" in str(exc_info.value)
     assert "GSE2" in str(exc_info.value)
