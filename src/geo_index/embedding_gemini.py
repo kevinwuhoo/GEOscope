@@ -261,7 +261,7 @@ def _assemble_results(
     result_path: Path,
     records: Sequence[RecordRef],
     dimensions: int,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray | None, int, tuple[GeminiBatchRowFailure, ...]]:
     expected = {record.gse for record in records}
     seen: set[str] = set()
     vectors: dict[str, np.ndarray] = {}
@@ -305,12 +305,12 @@ def _assemble_results(
     if missing:
         raise ValueError(f"missing Gemini responses: {', '.join(missing)}")
     if failures:
-        raise GeminiBatchRowError(failures)
+        return None, actual_tokens, tuple(failures)
     matrix = np.vstack([vectors[record.gse] for record in records]).astype(
         np.float32,
         copy=False,
     )
-    return np.ascontiguousarray(matrix), actual_tokens
+    return np.ascontiguousarray(matrix), actual_tokens, ()
 
 
 def _display_name(base: str, shard: GeminiRequestShard, count: int) -> str:
@@ -349,6 +349,7 @@ def build_gemini_vectors(
         raise ValueError("invalid Gemini shard state")
     record_by_gse = {record.gse: record for record in records}
     vector_batches: list[np.ndarray] = []
+    row_failures: list[GeminiBatchRowFailure] = []
     actual_tokens = 0
     uploaded_ids: list[str] = []
     job_ids: list[str] = []
@@ -420,12 +421,14 @@ def build_gemini_vectors(
                 temporary.write_bytes(content)
                 os.replace(temporary, result_path)
 
-            vectors, shard_tokens = _assemble_results(
+            vectors, shard_tokens, shard_failures = _assemble_results(
                 result_path,
                 shard_records,
                 variant.dimensions,
             )
-            vector_batches.append(vectors)
+            if vectors is not None:
+                vector_batches.append(vectors)
+            row_failures.extend(shard_failures)
             actual_tokens += shard_tokens
             uploaded = raw_shard_state.get("uploaded_file_name")
             job_name = raw_shard_state.get("job_name")
@@ -441,6 +444,8 @@ def build_gemini_vectors(
         if close is not None:
             close()
 
+    if row_failures:
+        raise GeminiBatchRowError(row_failures)
     vectors = np.concatenate(vector_batches, axis=0)
     return LocalProviderResult(
         vectors=np.ascontiguousarray(vectors, dtype=np.float32),

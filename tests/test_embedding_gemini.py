@@ -271,6 +271,61 @@ def test_row_errors_are_aggregated_without_writing_an_artifact(
     assert (tmp_path / "gemini_results-00000.jsonl").exists()
 
 
+def test_row_errors_are_aggregated_across_all_terminal_shards(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    first_error = {"code": 400, "message": "first shard rejected"}
+    second_error = {"code": 429, "message": "second shard rejected"}
+
+    class ShardFiles:
+        def __init__(self) -> None:
+            self.upload_count = 0
+
+        def upload(self, *, file, config):
+            self.upload_count += 1
+            return SimpleNamespace(name=f"files/input-{self.upload_count}")
+
+        def download(self, *, file):
+            rows = {
+                "files/output-1": [{"key": "GSE2", "error": first_error}],
+                "files/output-2": [{"key": "GSE10", "error": second_error}],
+            }[file]
+            return ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+
+    class ShardBatches:
+        def __init__(self) -> None:
+            self.create_count = 0
+
+        def create_embeddings(self, *, model, src, config):
+            self.create_count += 1
+            return SimpleNamespace(name=f"batches/job-{self.create_count}")
+
+        def get(self, *, name):
+            suffix = name.rsplit("-", 1)[1]
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name=f"files/output-{suffix}"),
+                error=None,
+            )
+
+    client = SimpleNamespace(files=ShardFiles(), batches=ShardBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(gemini.GeminiBatchRowError) as exc_info:
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    assert exc_info.value.failures == (
+        {"gse": "GSE2", "error": first_error},
+        {"gse": "GSE10", "error": second_error},
+    )
+    assert (tmp_path / "gemini_results-00000.jsonl").exists()
+    assert (tmp_path / "gemini_results-00001.jsonl").exists()
+
+
 def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
