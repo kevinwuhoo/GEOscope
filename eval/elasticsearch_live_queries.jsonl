@@ -1,0 +1,7 @@
+{"query_id":"control_childhood_malaria","query":"whole blood transcriptomics of children with severe malaria","intent":"Traceable control related to the known GSE1124 record.","filters":{}}
+{"query_id":"human_tumor_exhausted_t_cells","query":"single-cell RNA sequencing of exhausted CD8 T cells in human solid tumors","intent":"Find human tumor immune-state scRNA-seq datasets.","filters":{"organism_ids":["NCBITaxon:9606"],"assay_labels":["scRNA-seq"]}}
+{"query_id":"mouse_brain_spatial_injury","query":"spatial transcriptomics of mouse hippocampus after traumatic brain injury","intent":"Find mouse spatial-expression studies involving brain injury.","filters":{"organism_ids":["NCBITaxon:10090"]}}
+{"query_id":"crispr_interferon_t_cells","query":"CRISPR knockout screen for regulators of interferon response in T cells","intent":"Find genetic perturbation screens despite terminology variation.","filters":{}}
+{"query_id":"rare_disease_fibroblasts","query":"fibroblast transcriptomes from patients with rare inherited connective tissue disorders","intent":"Find patient-derived rare-disease fibroblast expression datasets.","filters":{}}
+{"query_id":"ribosome_er_stress","query":"ribosome profiling during endoplasmic reticulum stress","intent":"Find Ribo-seq or ribosome-footprinting stress experiments.","filters":{}}
+{"query_id":"airway_viral_infection","query":"airway epithelial response to respiratory viral infection","intent":"Find airway infection-response datasets across virus names.","filters":{}}
