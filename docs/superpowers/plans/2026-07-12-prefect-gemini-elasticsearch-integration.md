@@ -137,8 +137,9 @@ git commit -m "feat: configure primary Gemini ETL concurrency"
 
 - [ ] **Step 1: Write failing preservation test**
 
-Update the existing successful load test to fake Gemini artifact validation and
-require all registered keys:
+Rename the existing successful load test to
+`test_flow_loads_all_available_artifacts_after_gemini_and_records_audit`, fake
+Gemini artifact validation, and require all registered keys:
 
 ```python
 validated: list[tuple[Path, str]] = []
@@ -244,7 +245,7 @@ def test_missing_gemini_artifact_prevents_elasticsearch_client(
 Run:
 
 ```bash
-uv run pytest -q tests/test_prefect_etl.py -k 'loads_only_gemini or incomplete_gemini or missing_gemini'
+uv run pytest -q tests/test_prefect_etl.py -k 'loads_all_available or incomplete_gemini or missing_gemini'
 ```
 
 Expected: the loader still receives only Gemini, no artifact preflight occurs,
