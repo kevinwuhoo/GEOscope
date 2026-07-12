@@ -21,10 +21,6 @@ from .embedding_registry import EmbeddingVariant
 BATCH_PRICE_PER_MILLION_TOKENS_USD = 0.10
 MAX_REQUESTS_PER_SHARD = 1_000
 MAX_REQUEST_FILE_BYTES = 100 * 1024 * 1024
-# Gemini exposes no offline tokenizer. A UTF-8 byte bound is a conservative
-# token upper bound, with room below the model's 8,192-token input limit for
-# provider-added tokens. This avoids a synchronous countTokens call per GSE.
-SAFE_INPUT_UTF8_BYTES = 8_000
 POLL_SECONDS = 30
 TERMINAL_STATES = {
     "JOB_STATE_SUCCEEDED",
@@ -36,6 +32,29 @@ TERMINAL_STATES = {
 
 class GeminiAuthorizationError(RuntimeError):
     """Paid Gemini work was not explicitly and completely authorized."""
+
+
+@dataclass(frozen=True)
+class GeminiBatchRowFailure:
+    """One provider row failure associated with its request identity."""
+
+    gse: str
+    error: object
+
+    def as_payload(self) -> dict[str, object]:
+        return {"gse": self.gse, "error": self.error}
+
+
+class GeminiBatchRowError(RuntimeError):
+    """One or more Gemini batch rows failed."""
+
+    def __init__(self, failures: Sequence[GeminiBatchRowFailure]) -> None:
+        self._row_failures = tuple(failures)
+        self.failures = tuple(
+            failure.as_payload() for failure in self._row_failures
+        )
+        failed_gses = ", ".join(failure.gse for failure in self._row_failures)
+        super().__init__(f"Gemini row errors for: {failed_gses}")
 
 
 @dataclass(frozen=True)
@@ -73,23 +92,18 @@ def _atomic_json(path: Path, value: object) -> None:
     os.replace(temporary, path)
 
 
-def _wrapped_document(record: RecordRef, variant: EmbeddingVariant) -> tuple[str, bool]:
-    text = variant.document_format.format(
+def _wrapped_document(record: RecordRef, variant: EmbeddingVariant) -> str:
+    return variant.document_format.format(
         title=record.title,
         embed_text=record.embed_text,
     )
-    encoded = text.encode("utf-8")
-    truncated = len(encoded) > SAFE_INPUT_UTF8_BYTES
-    if truncated:
-        text = encoded[:SAFE_INPUT_UTF8_BYTES].decode("utf-8", errors="ignore")
-    return text, truncated
 
 
 def _request_line(
     record: RecordRef,
     variant: EmbeddingVariant,
 ) -> tuple[bytes, int, bool]:
-    text, truncated = _wrapped_document(record, variant)
+    text = _wrapped_document(record, variant)
     text_bytes = text.encode("utf-8")
     row = {
         "key": record.gse,
@@ -104,7 +118,7 @@ def _request_line(
     # One token cannot encode less than one input byte. Treating every byte as
     # a token deliberately overestimates cost rather than understating it.
     estimated_tokens = max(1, len(text_bytes))
-    return line, estimated_tokens, truncated
+    return line, estimated_tokens, False
 
 
 def prepare_gemini_requests(
@@ -249,7 +263,9 @@ def _assemble_results(
     dimensions: int,
 ) -> tuple[np.ndarray, int]:
     expected = {record.gse for record in records}
+    seen: set[str] = set()
     vectors: dict[str, np.ndarray] = {}
+    failures: list[GeminiBatchRowFailure] = []
     actual_tokens = 0
     with result_path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -258,13 +274,18 @@ def _assemble_results(
             row = json.loads(line)
             if not isinstance(row, dict):
                 raise ValueError(f"Gemini result line {line_number} is not an object")
-            if row.get("error"):
-                raise RuntimeError(f"Gemini row error at line {line_number}: {row['error']}")
-            gse = row.get("key")
-            if gse not in expected:
-                raise ValueError(f"unexpected Gemini response {gse}")
-            if gse in vectors:
+            raw_gse = row.get("key")
+            if raw_gse not in expected:
+                raise ValueError(f"unexpected Gemini response {raw_gse}")
+            gse = str(raw_gse)
+            if gse in seen:
                 raise ValueError(f"duplicate Gemini response {gse}")
+            seen.add(gse)
+            if row.get("error") is not None:
+                failures.append(
+                    GeminiBatchRowFailure(gse=gse, error=row["error"])
+                )
+                continue
             response = row.get("response")
             if not isinstance(response, dict):
                 raise ValueError(f"Gemini response {gse} has no response object")
@@ -278,11 +299,13 @@ def _assemble_results(
             vector = np.asarray(values, dtype=np.float32)
             if not np.isfinite(vector).all():
                 raise ValueError(f"Gemini response {gse} contains nonfinite values")
-            vectors[str(gse)] = vector
+            vectors[gse] = vector
             actual_tokens += int(response.get("tokenCount") or 0)
-    missing = sorted(expected - set(vectors), key=lambda gse: int(gse[3:]))
+    missing = sorted(expected - seen, key=lambda gse: int(gse[3:]))
     if missing:
         raise ValueError(f"missing Gemini responses: {', '.join(missing)}")
+    if failures:
+        raise GeminiBatchRowError(failures)
     matrix = np.vstack([vectors[record.gse] for record in records]).astype(
         np.float32,
         copy=False,
@@ -436,6 +459,5 @@ def build_gemini_vectors(
             "request_shards": len(estimate.shards),
             "max_requests_per_shard": MAX_REQUESTS_PER_SHARD,
             "max_request_file_bytes": MAX_REQUEST_FILE_BYTES,
-            "safe_input_utf8_bytes": SAFE_INPUT_UTF8_BYTES,
         },
     )

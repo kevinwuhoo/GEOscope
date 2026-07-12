@@ -136,17 +136,25 @@ def test_requests_are_deterministically_sharded_by_bounded_record_count(
     assert [shard.request_path.read_bytes() for shard in second.shards] == first_bytes
 
 
-def test_request_preflight_uses_token_safe_utf8_byte_bound(tmp_path: Path) -> None:
+def test_request_preflight_preserves_full_input_with_multibyte_unicode(
+    tmp_path: Path,
+) -> None:
+    title = "Crème brûlée 🧬"
+    embed_text = "é漢🙂" * 1_000
     records = (
-        RecordRef("GSE2", "Two", "é" * 10_000, Path("GSE2.json")),
+        RecordRef("GSE2", title, embed_text, Path("GSE2.json")),
     )
 
     estimate = prepare_gemini_requests(records, VARIANT, tmp_path)
     row = json.loads(estimate.request_path.read_text())
     text = row["request"]["content"]["parts"][0]["text"]
 
-    assert len(text.encode("utf-8")) <= gemini.SAFE_INPUT_UTF8_BYTES
-    assert estimate.truncation_count == 1
+    assert len(embed_text.encode("utf-8")) > 8_000
+    assert text == VARIANT.document_format.format(
+        title=title,
+        embed_text=embed_text,
+    )
+    assert estimate.truncation_count == 0
 
 
 def test_paid_flag_guard_happens_before_key_or_client(
@@ -222,6 +230,45 @@ def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
     assert np.all(result.vectors[1] == 10)
     assert result.usage["provider_job_ids"] == ["batches/job-1"]
     assert result.usage["actual_tokens"] == 10
+
+
+def test_row_errors_are_aggregated_without_writing_an_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    first_error = {
+        "code": 400,
+        "message": "input rejected",
+        "details": [{"reason": "document too long"}],
+    }
+    second_error = {"code": 429, "message": "quota exhausted"}
+    client = FakeClient(
+        [
+            {"key": "GSE10", "error": first_error},
+            {"key": "GSE2", "error": second_error},
+        ]
+    )
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(gemini.GeminiBatchRowError) as exc_info:
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+        )
+
+    assert exc_info.value.failures == (
+        {"gse": "GSE10", "error": first_error},
+        {"gse": "GSE2", "error": second_error},
+    )
+    assert "GSE10" in str(exc_info.value)
+    assert "GSE2" in str(exc_info.value)
+    assert not (tmp_path / "vectors.npy").exists()
+    assert (tmp_path / "gemini_requests-00000.jsonl").exists()
+    assert (tmp_path / "gemini_state.json").exists()
+    assert (tmp_path / "gemini_results-00000.jsonl").exists()
 
 
 def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
