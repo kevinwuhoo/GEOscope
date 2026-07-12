@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from typing import Sequence
+from uuid import uuid4
 
 import numpy as np
 
@@ -220,6 +221,7 @@ def _new_shard_state(shard: GeminiRequestShard) -> dict[str, object]:
         "request_sha256": shard.request_sha256,
         "gses": list(shard.gses),
         "uploaded_file_name": None,
+        "submission_display_name": None,
         "job_name": None,
         "job_state": None,
         "output_file_name": None,
@@ -317,6 +319,21 @@ def _display_name(base: str, shard: GeminiRequestShard, count: int) -> str:
     return base if count == 1 else f"{base}-{shard.index:05d}"
 
 
+def _reconcile_submission(client, display_name: str):
+    matches = [
+        job
+        for job in client.batches.list()
+        if getattr(job, "display_name", None) == display_name
+    ]
+    if len(matches) != 1 or not getattr(matches[0], "name", None):
+        raise RuntimeError(
+            f"Gemini submission {display_name!r} cannot safely reconcile to "
+            f"exactly one provider job (found {len(matches)}); refusing to "
+            "resubmit potentially paid work"
+        )
+    return matches[0]
+
+
 def build_gemini_vectors(
     records: Sequence[RecordRef],
     variant: EmbeddingVariant,
@@ -383,17 +400,27 @@ def build_gemini_vectors(
 
                 job_name = raw_shard_state.get("job_name")
                 if not job_name:
-                    job = client.batches.create_embeddings(
-                        model=variant.document_model_id,
-                        src={"file_name": uploaded_file_name},
-                        config={
-                            "display_name": _display_name(
-                                "geo-gemini-embedding-2",
-                                shard,
-                                len(estimate.shards),
-                            )
-                        },
+                    submission_display_name = raw_shard_state.get(
+                        "submission_display_name"
                     )
+                    if submission_display_name:
+                        job = _reconcile_submission(
+                            client,
+                            str(submission_display_name),
+                        )
+                    else:
+                        submission_display_name = (
+                            f"geo-gemini-embedding-2-{uuid4().hex}"
+                        )
+                        raw_shard_state["submission_display_name"] = (
+                            submission_display_name
+                        )
+                        _atomic_json(state_path, state)
+                        job = client.batches.create_embeddings(
+                            model=variant.document_model_id,
+                            src={"file_name": uploaded_file_name},
+                            config={"display_name": submission_display_name},
+                        )
                     job_name = job.name
                     raw_shard_state["job_name"] = job_name
                     _atomic_json(state_path, state)

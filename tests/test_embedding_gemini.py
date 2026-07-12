@@ -216,13 +216,14 @@ def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
     )
 
     assert len(client.files.upload_calls) == 1
-    assert client.batches.create_calls == [
-        {
-            "model": "gemini-embedding-2",
-            "src": {"file_name": "files/input-1"},
-            "config": {"display_name": "geo-gemini-embedding-2"},
-        }
-    ]
+    assert len(client.batches.create_calls) == 1
+    create_call = client.batches.create_calls[0]
+    assert create_call["model"] == "gemini-embedding-2"
+    assert create_call["src"] == {"file_name": "files/input-1"}
+    display_name = create_call["config"]["display_name"]  # type: ignore[index]
+    assert display_name.startswith("geo-gemini-embedding-2-")
+    state = json.loads((tmp_path / "gemini_state.json").read_text())
+    assert state["shards"][0]["submission_display_name"] == display_name
     assert client.files.download_calls == ["files/output-1"]
     assert result.vectors.shape == (2, 3072)
     assert result.vectors.dtype == np.float32
@@ -359,6 +360,112 @@ def test_resume_uses_persisted_job_without_duplicate_upload_or_submission(
     assert resumed.batches.create_calls == []
     assert resumed.batches.get_calls == ["batches/job-1"]
     assert result.vectors.shape == (2, 3072)
+
+
+def test_restart_reconciles_job_created_before_state_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    created_jobs: list[SimpleNamespace] = []
+    create_calls: list[dict[str, object]] = []
+    list_calls: list[None] = []
+    upload_calls: list[str] = []
+
+    class ReconcileFiles:
+        def upload(self, *, file, config):
+            upload_calls.append(file)
+            return SimpleNamespace(name="files/input-1")
+
+        def download(self, *, file):
+            rows = [_response("GSE2", 2), _response("GSE10", 10)]
+            return ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+
+    class ReconcileBatches:
+        def create_embeddings(self, *, model, src, config):
+            create_calls.append({"model": model, "src": src, "config": config})
+            job = SimpleNamespace(
+                name=f"batches/job-{len(create_calls)}",
+                display_name=config["display_name"],
+            )
+            created_jobs.append(job)
+            return job
+
+        def list(self):
+            list_calls.append(None)
+            return tuple(created_jobs)
+
+        def get(self, *, name):
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name="files/output-1"),
+                error=None,
+            )
+
+    first_client = SimpleNamespace(files=ReconcileFiles(), batches=ReconcileBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: first_client)
+    real_atomic_json = gemini._atomic_json
+
+    def crash_after_provider_create(path: Path, value: object) -> None:
+        shards = value.get("shards") if isinstance(value, dict) else None
+        if (
+            created_jobs
+            and isinstance(shards, list)
+            and shards
+            and isinstance(shards[0], dict)
+            and shards[0].get("job_name")
+        ):
+            raise RuntimeError("state persistence interrupted")
+        real_atomic_json(path, value)
+
+    monkeypatch.setattr(gemini, "_atomic_json", crash_after_provider_create)
+    with pytest.raises(RuntimeError, match="state persistence interrupted"):
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    monkeypatch.setattr(gemini, "_atomic_json", real_atomic_json)
+    resumed_client = SimpleNamespace(files=ReconcileFiles(), batches=ReconcileBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: resumed_client)
+
+    result = build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    assert len(create_calls) == 1
+    assert len(list_calls) == 1
+    assert len(upload_calls) == 1
+    assert result.usage["provider_job_ids"] == ["batches/job-1"]
+
+
+def test_ambiguous_submission_intent_fails_closed_without_resubmitting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    state["shards"][0].update(  # type: ignore[index,union-attr]
+        {
+            "uploaded_file_name": "files/input-1",
+            "submission_display_name": "geo-gemini-embedding-2-ambiguous",
+        }
+    )
+    gemini._atomic_json(state_path, state)
+
+    class NoMatchBatches:
+        def list(self):
+            return ()
+
+        def create_embeddings(self, **kwargs):
+            raise AssertionError("ambiguous provider work was resubmitted")
+
+    client = SimpleNamespace(
+        files=SimpleNamespace(),
+        batches=NoMatchBatches(),
+    )
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match="cannot safely reconcile"):
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
 
 
 def test_resume_skips_completed_shards_and_continues_only_missing_shard(
