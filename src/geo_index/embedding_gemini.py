@@ -382,6 +382,7 @@ def build_gemini_vectors(
             result_path = temp_dir / f"gemini_results-{shard.index:05d}.jsonl"
             if not result_path.exists():
                 uploaded_file_name = raw_shard_state.get("uploaded_file_name")
+                had_persisted_upload = bool(uploaded_file_name)
                 if not uploaded_file_name:
                     uploaded = client.files.upload(
                         file=str(shard.request_path),
@@ -409,6 +410,12 @@ def build_gemini_vectors(
                             str(submission_display_name),
                         )
                     else:
+                        if had_persisted_upload:
+                            raise RuntimeError(
+                                "legacy Gemini submission state has an uploaded "
+                                "file but no job or submission identity; refusing "
+                                "to resubmit potentially paid work"
+                            )
                         submission_display_name = (
                             f"geo-gemini-embedding-2-{uuid4().hex}"
                         )

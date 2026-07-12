@@ -468,6 +468,66 @@ def test_ambiguous_submission_intent_fails_closed_without_resubmitting(
         build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
 
 
+def test_legacy_uploaded_state_without_submission_identity_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    state["shards"][0]["uploaded_file_name"] = "files/input-1"  # type: ignore[index]
+    gemini._atomic_json(state_path, state)
+
+    class LegacyBatches:
+        def create_embeddings(self, **kwargs):
+            raise AssertionError("legacy ambiguous state was resubmitted")
+
+    client = SimpleNamespace(files=SimpleNamespace(), batches=LegacyBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match="legacy Gemini submission state"):
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+
+def test_multiple_matching_provider_jobs_fail_closed_without_resubmitting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    display_name = "geo-gemini-embedding-2-duplicate"
+    state["shards"][0].update(  # type: ignore[index,union-attr]
+        {
+            "uploaded_file_name": "files/input-1",
+            "submission_display_name": display_name,
+        }
+    )
+    gemini._atomic_json(state_path, state)
+    create_calls: list[dict[str, object]] = []
+
+    class MultipleMatchBatches:
+        def list(self):
+            return (
+                SimpleNamespace(name="batches/job-1", display_name=display_name),
+                SimpleNamespace(name="batches/job-2", display_name=display_name),
+            )
+
+        def create_embeddings(self, **kwargs):
+            create_calls.append(kwargs)
+            raise AssertionError("duplicate provider matches were resubmitted")
+
+    client = SimpleNamespace(files=SimpleNamespace(), batches=MultipleMatchBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match=r"found 2.*refusing to resubmit"):
+        build_gemini_vectors(_records(), VARIANT, tmp_path, allow_paid=True)
+
+    assert create_calls == []
+
+
 def test_resume_skips_completed_shards_and_continues_only_missing_shard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
