@@ -161,7 +161,7 @@ Final focused verification:
 .venv/bin/pytest -q tests/test_build_embedding_artifact.py tests/test_embedding_gemini.py tests/test_prefect_etl.py tests/test_soft_records.py tests/test_soft_record_materialization.py
 ```
 
-Result: **66 passed in 1.08s**.
+Result: **68 passed in 0.92s**.
 
 Final full offline verification (run with sandbox permission for the seven
 existing localhost soft-browser tests):
@@ -170,7 +170,7 @@ existing localhost soft-browser tests):
 env UV_CACHE_DIR=/private/tmp/geo-index-uv-cache uv run pytest -q
 ```
 
-Result: **165 passed, 4 skipped in 4.72s**. An initial restricted-sandbox run
+Result: **167 passed, 4 skipped in 4.87s**. An initial restricted-sandbox run
 reached 158 passes and 4 skips but could not bind ephemeral localhost sockets;
 all seven affected tests passed in the authorized rerun.
 
