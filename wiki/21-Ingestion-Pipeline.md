@@ -46,15 +46,23 @@ This decision and its measured source tradeoff are recorded in
 The operator entry point owns the complete primary chain:
 
 ```bash
-uv run geo-soft-etl --allow-paid-gemini
+set -a
+source .env
+source .env.elasticsearch
+set +a
+uv run geo-soft-etl \
+  --allow-paid-gemini \
+  --gemini-concurrency 4
 ```
 
 After materialization, the flow builds or resumes
-`embedding_artifacts/gemini_embedding_2_3072_v1`, upserts that model into
-Elasticsearch `geo-series`, refreshes once, and audits document count plus
-`embedding_gemini_3072` coverage. Any parse, embedding, connection, bulk-item,
-or audit failure makes the run unsuccessful. Stable GSE `_id` values and
-durable local artifacts make the complete operation safe to retry.
+`embedding_artifacts/gemini_embedding_2_3072_v1`, loads every available
+registered embedding artifact into Elasticsearch `geo-series`, refreshes once,
+and audits document count plus full `embedding_gemini_3072` coverage. Gemini
+embedding and Elasticsearch loading are required primary stages. Any parse,
+embedding, connection, bulk-item, or audit failure makes the run unsuccessful.
+Stable GSE `_id` values and durable local artifacts make the complete operation
+safe to retry.
 
 The crawler and table stripper already produce metadata-only family SOFT files
 under `data/processed/soft_meta/`. At the 2026-07-11 checkpoint there were

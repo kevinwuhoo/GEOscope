@@ -173,13 +173,27 @@ Run the complete required Prefect path—canonical records, resumable Gemini
 artifact, idempotent Elasticsearch upsert, and index/vector audit:
 
 ```bash
-uv run geo-soft-etl --allow-paid-gemini
+set -a
+source .env
+source .env.elasticsearch
+set +a
+uv run geo-soft-etl \
+  --allow-paid-gemini \
+  --gemini-concurrency 4
 ```
 
-The flag is intentionally required before the flow may submit paid Gemini
-batch work. A run is unsuccessful if record parsing, embedding, Elasticsearch
-loading, or the final audit fails; completed records and artifacts remain safe
-to reuse on retry.
+Do not shorten the production invocation to
+`uv run geo-soft-etl --allow-paid-gemini`: without the explicit concurrency
+option it uses the default of one active Gemini batch job.
+
+Gemini embedding and Elasticsearch loading are required primary stages. The
+loader includes every available registered embedding artifact, preserving
+non-Gemini model vectors while replacing documents. A run is successful only
+after every indexed document has `embedding_gemini_3072`; record parsing,
+embedding, Elasticsearch loading, or audit failures make the run unsuccessful.
+Completed records and artifacts remain safe to reuse on retry. The
+`--allow-paid-gemini` flag is intentionally required before the flow may submit
+paid Gemini batch work.
 
 Search the indexed corpus or launch the comparison UI:
 
