@@ -334,6 +334,180 @@ def _reconcile_submission(client, display_name: str):
     return matches[0]
 
 
+def _result_path(temp_dir: Path, shard: GeminiRequestShard) -> Path:
+    return temp_dir / f"gemini_results-{shard.index:05d}.jsonl"
+
+
+def _download_succeeded_job(
+    client,
+    job,
+    result_path: Path,
+    state_path: Path,
+    state: dict[str, object],
+    raw_shard_state: dict[str, object],
+) -> None:
+    output_file_name = job.dest.file_name
+    if not output_file_name:
+        raise RuntimeError(f"Gemini batch {job.name} has no output file")
+    raw_shard_state["output_file_name"] = output_file_name
+    _atomic_json(state_path, state)
+    content = client.files.download(file=output_file_name)
+    temporary = result_path.with_suffix(".jsonl.tmp")
+    temporary.write_bytes(content)
+    os.replace(temporary, result_path)
+
+
+def _submit_or_resume_shard(
+    client,
+    shard: GeminiRequestShard,
+    raw_shard_state: dict[str, object],
+    state: dict[str, object],
+    state_path: Path,
+    variant: EmbeddingVariant,
+    *,
+    shard_count: int,
+    now_fn=time.time,
+) -> bool:
+    uploaded_file_name = raw_shard_state.get("uploaded_file_name")
+    had_persisted_upload = bool(uploaded_file_name)
+    if not uploaded_file_name:
+        uploaded = client.files.upload(
+            file=str(shard.request_path),
+            config={
+                "display_name": _display_name(
+                    "geo-gemini-embedding-2-input",
+                    shard,
+                    shard_count,
+                ),
+                "mime_type": "jsonl",
+            },
+        )
+        uploaded_file_name = uploaded.name
+        raw_shard_state["uploaded_file_name"] = uploaded_file_name
+        _atomic_json(state_path, state)
+
+    job_name = raw_shard_state.get("job_name")
+    if job_name:
+        return True
+
+    submission_display_name = raw_shard_state.get("submission_display_name")
+    if submission_display_name:
+        job = _reconcile_submission(client, str(submission_display_name))
+    else:
+        if had_persisted_upload:
+            raise RuntimeError(
+                "legacy Gemini submission state has an uploaded file but no job "
+                "or submission identity; refusing to resubmit potentially paid work"
+            )
+        submission_display_name = f"geo-gemini-embedding-2-{uuid4().hex}"
+        raw_shard_state["submission_display_name"] = submission_display_name
+        _atomic_json(state_path, state)
+        job = client.batches.create_embeddings(
+            model=variant.document_model_id,
+            src={"file_name": uploaded_file_name},
+            config={"display_name": submission_display_name},
+        )
+    raw_shard_state["job_name"] = job.name
+    _atomic_json(state_path, state)
+    return True
+
+
+def _run_batch_lifecycle(
+    client,
+    estimate: GeminiRequestEstimate,
+    state: dict[str, object],
+    state_path: Path,
+    temp_dir: Path,
+    variant: EmbeddingVariant,
+    *,
+    concurrency: int,
+    sleep_fn=time.sleep,
+    now_fn=time.time,
+) -> None:
+    state_shards = state.get("shards")
+    if not isinstance(state_shards, list):
+        raise ValueError("invalid Gemini shard state")
+    if any(not isinstance(raw, dict) for raw in state_shards):
+        raise ValueError("invalid Gemini shard state")
+
+    while True:
+        incomplete = [
+            index
+            for index, shard in enumerate(estimate.shards)
+            if not _result_path(temp_dir, shard).exists()
+        ]
+        if not incomplete:
+            return
+
+        made_progress = False
+        active = [
+            index
+            for index in incomplete
+            if state_shards[index].get("job_name")
+        ]
+        succeeded: list[tuple[int, object]] = []
+
+        for index in tuple(active):
+            raw = state_shards[index]
+            job_name = str(raw["job_name"])
+            job = client.batches.get(name=job_name)
+            previous = raw.get("job_state")
+            job_state = _state_name(job)
+            raw["job_state"] = job_state
+            _atomic_json(state_path, state)
+            made_progress = made_progress or previous != job_state
+            if job_state == "JOB_STATE_SUCCEEDED":
+                succeeded.append((index, job))
+            elif job_state in TERMINAL_STATES:
+                raise RuntimeError(
+                    f"Gemini batch {job_name} ended as {job_state}: {job.error}"
+                )
+
+        for index, job in succeeded:
+            _download_succeeded_job(
+                client,
+                job,
+                _result_path(temp_dir, estimate.shards[index]),
+                state_path,
+                state,
+                state_shards[index],
+            )
+            made_progress = True
+
+        active_count = sum(
+            1
+            for index in incomplete
+            if state_shards[index].get("job_name")
+            and not _result_path(temp_dir, estimate.shards[index]).exists()
+        )
+        for index in incomplete:
+            if active_count >= concurrency:
+                break
+            shard = estimate.shards[index]
+            if _result_path(temp_dir, shard).exists():
+                continue
+            raw = state_shards[index]
+            if raw.get("job_name"):
+                continue
+            if _submit_or_resume_shard(
+                client,
+                shard,
+                raw,
+                state,
+                state_path,
+                variant,
+                shard_count=len(estimate.shards),
+                now_fn=now_fn,
+            ):
+                active_count += 1
+                made_progress = True
+            else:
+                break
+
+        if not made_progress:
+            sleep_fn(POLL_SECONDS)
+
+
 def build_gemini_vectors(
     records: Sequence[RecordRef],
     variant: EmbeddingVariant,
@@ -376,90 +550,23 @@ def build_gemini_vectors(
     output_ids: list[str] = []
     client = _create_client(api_key)
     try:
+        _run_batch_lifecycle(
+            client,
+            estimate,
+            state,
+            state_path,
+            temp_dir,
+            variant,
+            concurrency=concurrency,
+        )
         for shard, raw_shard_state in zip(
             estimate.shards, state_shards, strict=True
         ):
             if not isinstance(raw_shard_state, dict):
                 raise ValueError("invalid Gemini shard state")
             shard_records = [record_by_gse[gse] for gse in shard.gses]
-            result_path = temp_dir / f"gemini_results-{shard.index:05d}.jsonl"
-            if not result_path.exists():
-                uploaded_file_name = raw_shard_state.get("uploaded_file_name")
-                had_persisted_upload = bool(uploaded_file_name)
-                if not uploaded_file_name:
-                    uploaded = client.files.upload(
-                        file=str(shard.request_path),
-                        config={
-                            "display_name": _display_name(
-                                "geo-gemini-embedding-2-input",
-                                shard,
-                                len(estimate.shards),
-                            ),
-                            "mime_type": "jsonl",
-                        },
-                    )
-                    uploaded_file_name = uploaded.name
-                    raw_shard_state["uploaded_file_name"] = uploaded_file_name
-                    _atomic_json(state_path, state)
-
-                job_name = raw_shard_state.get("job_name")
-                if not job_name:
-                    submission_display_name = raw_shard_state.get(
-                        "submission_display_name"
-                    )
-                    if submission_display_name:
-                        job = _reconcile_submission(
-                            client,
-                            str(submission_display_name),
-                        )
-                    else:
-                        if had_persisted_upload:
-                            raise RuntimeError(
-                                "legacy Gemini submission state has an uploaded "
-                                "file but no job or submission identity; refusing "
-                                "to resubmit potentially paid work"
-                            )
-                        submission_display_name = (
-                            f"geo-gemini-embedding-2-{uuid4().hex}"
-                        )
-                        raw_shard_state["submission_display_name"] = (
-                            submission_display_name
-                        )
-                        _atomic_json(state_path, state)
-                        job = client.batches.create_embeddings(
-                            model=variant.document_model_id,
-                            src={"file_name": uploaded_file_name},
-                            config={"display_name": submission_display_name},
-                        )
-                    job_name = job.name
-                    raw_shard_state["job_name"] = job_name
-                    _atomic_json(state_path, state)
-
-                while True:
-                    job = client.batches.get(name=job_name)
-                    job_state = _state_name(job)
-                    raw_shard_state["job_state"] = job_state
-                    _atomic_json(state_path, state)
-                    if job_state in TERMINAL_STATES:
-                        break
-                    time.sleep(POLL_SECONDS)
-                if job_state != "JOB_STATE_SUCCEEDED":
-                    raise RuntimeError(
-                        f"Gemini batch {job_name} ended as {job_state}: {job.error}"
-                    )
-
-                output_file_name = job.dest.file_name
-                if not output_file_name:
-                    raise RuntimeError(f"Gemini batch {job_name} has no output file")
-                raw_shard_state["output_file_name"] = output_file_name
-                _atomic_json(state_path, state)
-                content = client.files.download(file=output_file_name)
-                temporary = result_path.with_suffix(".jsonl.tmp")
-                temporary.write_bytes(content)
-                os.replace(temporary, result_path)
-
             vectors, shard_tokens, shard_failures = _assemble_results(
-                result_path,
+                _result_path(temp_dir, shard),
                 shard_records,
                 variant.dimensions,
             )

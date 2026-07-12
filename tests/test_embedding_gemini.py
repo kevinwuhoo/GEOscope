@@ -32,6 +32,18 @@ def _records() -> tuple[RecordRef, ...]:
     )
 
 
+def _many_records(count: int) -> tuple[RecordRef, ...]:
+    return tuple(
+        RecordRef(
+            f"GSE{index + 1}",
+            f"Title {index + 1}",
+            f"document {index + 1}",
+            Path(f"GSE{index + 1}.json"),
+        )
+        for index in range(count)
+    )
+
+
 def _response(gse: str, value: float, *, tokens: int = 5) -> dict[str, object]:
     return {
         "key": gse,
@@ -91,6 +103,65 @@ class FakeClient:
     ) -> None:
         self.files = FakeFiles(result_rows)
         self.batches = FakeBatches(fail_get_once=fail_get_once)
+
+    @property
+    def models(self):
+        raise AssertionError("synchronous models API must not be used")
+
+
+class CooperativeClient:
+    def __init__(self, *, running_polls: int = 1) -> None:
+        self.events: list[tuple[str, str]] = []
+        self.polls: dict[str, int] = {}
+        self.running_polls = running_polls
+        self.files = SimpleNamespace(
+            upload=self.upload,
+            download=self.download,
+        )
+        self.batches = SimpleNamespace(
+            create_embeddings=self.create_embeddings,
+            get=self.get,
+            list=lambda: (),
+        )
+
+    def upload(self, *, file, config):
+        index = Path(file).stem.rsplit("-", 1)[1]
+        self.events.append(("upload", index))
+        return SimpleNamespace(name=f"files/input-{index}")
+
+    def create_embeddings(self, *, model, src, config):
+        index = src["file_name"].rsplit("-", 1)[1]
+        self.events.append(("create", index))
+        return SimpleNamespace(name=f"batches/job-{index}")
+
+    def get(self, *, name):
+        index = name.rsplit("-", 1)[1]
+        count = self.polls.get(index, 0)
+        self.polls[index] = count + 1
+        self.events.append(("get", index))
+        state = (
+            "JOB_STATE_RUNNING"
+            if count < self.running_polls
+            else "JOB_STATE_SUCCEEDED"
+        )
+        return SimpleNamespace(
+            name=name,
+            state=SimpleNamespace(name=state),
+            dest=SimpleNamespace(
+                file_name=(
+                    f"files/output-{index}"
+                    if state == "JOB_STATE_SUCCEEDED"
+                    else None
+                )
+            ),
+            error=None,
+        )
+
+    def download(self, *, file):
+        index = file.rsplit("-", 1)[1]
+        self.events.append(("download", index))
+        gse = f"GSE{int(index) + 1}"
+        return (json.dumps(_response(gse, float(int(index) + 1))) + "\n").encode()
 
     @property
     def models(self):
@@ -219,6 +290,198 @@ def test_invalid_concurrency_is_rejected_before_client_construction(
             allow_paid=True,
             concurrency=0,
         )
+
+
+def test_coordinator_fills_four_slots_before_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    monkeypatch.setattr(gemini.time, "sleep", lambda seconds: None)
+    client = CooperativeClient(running_polls=1)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    result = build_gemini_vectors(
+        _many_records(5),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    creates = [
+        position
+        for position, event in enumerate(client.events)
+        if event[0] == "create"
+    ]
+    first_get = next(
+        position for position, event in enumerate(client.events) if event[0] == "get"
+    )
+    assert all(position < first_get for position in creates[:4])
+    assert creates[4] > first_get
+    assert result.vectors.shape == (5, 3072)
+    assert result.vectors[:, 0].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_concurrency_one_preserves_sequential_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    client = CooperativeClient(running_polls=0)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    build_gemini_vectors(
+        _many_records(2),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=1,
+    )
+
+    assert client.events == [
+        ("upload", "00000"),
+        ("create", "00000"),
+        ("get", "00000"),
+        ("download", "00000"),
+        ("upload", "00001"),
+        ("create", "00001"),
+        ("get", "00001"),
+        ("download", "00001"),
+    ]
+
+
+def test_mixed_state_resume_never_resubmits_persisted_paid_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    records = _many_records(4)
+    estimate = prepare_gemini_requests(records, VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    state_shards = state["shards"]
+    assert isinstance(state_shards, list)
+    (tmp_path / "gemini_results-00000.jsonl").write_text(
+        json.dumps(_response("GSE1", 1.0)) + "\n",
+        encoding="utf-8",
+    )
+    for index in (1, 2):
+        raw = state_shards[index]
+        assert isinstance(raw, dict)
+        raw.update(
+            uploaded_file_name=f"files/input-{index:05d}",
+            submission_display_name=f"display-{index:05d}",
+            job_name=f"batches/job-{index:05d}",
+            job_state="JOB_STATE_RUNNING",
+        )
+    gemini._atomic_json(state_path, state)
+    client = CooperativeClient(running_polls=0)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    result = build_gemini_vectors(
+        records,
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    assert ("upload", "00000") not in client.events
+    assert ("create", "00000") not in client.events
+    assert ("upload", "00001") not in client.events
+    assert ("create", "00001") not in client.events
+    assert ("upload", "00002") not in client.events
+    assert ("create", "00002") not in client.events
+    assert ("download", "00001") in client.events
+    assert ("download", "00002") in client.events
+    assert result.vectors[:, 0].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_resumed_jobs_above_limit_are_polled_before_new_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    records = _many_records(4)
+    estimate = prepare_gemini_requests(records, VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    for index in range(3):
+        state["shards"][index].update(  # type: ignore[index,union-attr]
+            uploaded_file_name=f"files/input-{index:05d}",
+            submission_display_name=f"display-{index:05d}",
+            job_name=f"batches/job-{index:05d}",
+            job_state="JOB_STATE_RUNNING",
+        )
+    gemini._atomic_json(state_path, state)
+    client = CooperativeClient(running_polls=0)
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    build_gemini_vectors(
+        records,
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=2,
+    )
+
+    assert client.events[:3] == [
+        ("get", "00000"),
+        ("get", "00001"),
+        ("get", "00002"),
+    ]
+    assert client.events.index(("upload", "00003")) > 2
+
+
+def test_terminal_failure_stops_new_submissions_and_preserves_active_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+
+    class FailingFirstClient(CooperativeClient):
+        def get(self, *, name):
+            index = name.rsplit("-", 1)[1]
+            self.events.append(("get", index))
+            state = "JOB_STATE_FAILED" if index == "00000" else "JOB_STATE_RUNNING"
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name=state),
+                dest=SimpleNamespace(file_name=None),
+                error="provider failure" if state == "JOB_STATE_FAILED" else None,
+            )
+
+    client = FailingFirstClient()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match="batches/job-00000.*JOB_STATE_FAILED"):
+        build_gemini_vectors(
+            _many_records(5),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    creates = [event for event in client.events if event[0] == "create"]
+    assert creates == [
+        ("create", "00000"),
+        ("create", "00001"),
+        ("create", "00002"),
+        ("create", "00003"),
+    ]
+    state = json.loads((tmp_path / "gemini_state.json").read_text())
+    assert [state["shards"][index]["job_name"] for index in range(1, 4)] == [
+        "batches/job-00001",
+        "batches/job-00002",
+        "batches/job-00003",
+    ]
 
 
 def test_batch_submission_uses_file_api_and_aligns_results_by_gse(
