@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import gzip
 import json
-import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -428,7 +427,7 @@ def test_report_is_atomically_overwritten_with_required_counts(
     )
     records_root = tmp_path / "processed" / "series_records"
 
-    report = geo_soft_etl.fn(
+    geo_soft_etl.fn(
         soft_root=tmp_path,
         records_root=records_root,
         allow_paid_gemini=True,
