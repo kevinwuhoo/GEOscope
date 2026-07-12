@@ -168,6 +168,23 @@ class CooperativeClient:
         raise AssertionError("synchronous models API must not be used")
 
 
+class QuotaError(RuntimeError):
+    status_code = 429
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1_000.0
+        self.sleeps: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 def test_request_jsonl_is_deterministic_keyed_and_full_dimension(tmp_path: Path) -> None:
     first = prepare_gemini_requests(_records(), VARIANT, tmp_path)
     first_bytes = first.request_path.read_bytes()
@@ -515,6 +532,455 @@ def test_successful_output_id_is_durable_before_polling_later_jobs(
     assert state["shards"][0]["job_state"] == "JOB_STATE_SUCCEEDED"
     assert state["shards"][0]["output_file_name"] == "files/output-00000"
     assert ("download", "00000") not in client.events
+
+
+def test_definitive_429_with_zero_matches_backs_off_then_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    clock = FakeClock()
+    create_display_names: list[str] = []
+
+    class QuotaBatches:
+        def create_embeddings(self, *, model, src, config):
+            create_display_names.append(config["display_name"])
+            if len(create_display_names) == 1:
+                raise QuotaError("queue full")
+            return SimpleNamespace(name="batches/job-after-backoff")
+
+        def list(self):
+            return ()
+
+        def get(self, *, name):
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name="files/output-1"),
+                error=None,
+            )
+
+    client = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
+    client.batches = QuotaBatches()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+    monkeypatch.setattr(gemini.time, "time", clock.time)
+    monkeypatch.setattr(gemini.time, "sleep", clock.sleep)
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    assert len(create_display_names) == 2
+    assert create_display_names[0] != create_display_names[1]
+    assert clock.sleeps[0] == 30
+    assert result.vectors.shape == (2, 3072)
+
+
+def test_quota_backoff_is_exponential_and_capped() -> None:
+    assert [gemini._quota_backoff_seconds(count) for count in range(1, 7)] == [
+        30,
+        60,
+        120,
+        240,
+        300,
+        300,
+    ]
+
+
+def test_restart_of_zero_match_429_intent_schedules_a_new_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    original_display_name = "geo-gemini-embedding-2-original"
+    state["shards"][0].update(  # type: ignore[index,union-attr]
+        uploaded_file_name="files/input-1",
+        submission_display_name=original_display_name,
+        last_create_status=429,
+        submission_retry_count=0,
+        submission_retry_not_before=None,
+    )
+    gemini._atomic_json(state_path, state)
+    clock = FakeClock()
+    create_display_names: list[str] = []
+
+    class RestartBatches:
+        def list(self):
+            return ()
+
+        def create_embeddings(self, *, model, src, config):
+            create_display_names.append(config["display_name"])
+            return SimpleNamespace(name="batches/restarted")
+
+        def get(self, *, name):
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name="files/output-1"),
+                error=None,
+            )
+
+    client = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
+    client.batches = RestartBatches()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+    monkeypatch.setattr(gemini.time, "time", clock.time)
+    monkeypatch.setattr(gemini.time, "sleep", clock.sleep)
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    assert len(create_display_names) == 1
+    assert create_display_names[0] != original_display_name
+    assert clock.sleeps[0] == 30
+    persisted = json.loads(state_path.read_text())["shards"][0]
+    assert persisted["submission_retry_count"] == 1
+    assert persisted["job_name"] == "batches/restarted"
+    assert result.vectors.shape == (2, 3072)
+
+
+def test_429_backoff_keeps_polling_existing_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setattr(gemini, "MAX_REQUESTS_PER_SHARD", 1)
+    clock = FakeClock()
+
+    class QuotaSecondClient(CooperativeClient):
+        def __init__(self) -> None:
+            self.second_attempts = 0
+            super().__init__(running_polls=0)
+
+        def create_embeddings(self, *, model, src, config):
+            index = src["file_name"].rsplit("-", 1)[1]
+            self.events.append(("create", index))
+            if index == "00001":
+                self.second_attempts += 1
+                if self.second_attempts == 1:
+                    raise QuotaError("queue full")
+            return SimpleNamespace(name=f"batches/job-{index}")
+
+    client = QuotaSecondClient()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+    monkeypatch.setattr(gemini.time, "time", clock.time)
+    monkeypatch.setattr(gemini.time, "sleep", clock.sleep)
+
+    result = build_gemini_vectors(
+        _many_records(2),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=2,
+    )
+
+    first_job_poll = client.events.index(("get", "00000"))
+    second_retry = max(
+        index
+        for index, event in enumerate(client.events)
+        if event == ("create", "00001")
+    )
+    assert first_job_poll < second_retry
+    assert ("download", "00000") in client.events
+    assert result.vectors.shape == (2, 3072)
+
+
+def test_429_reconciliation_accepts_exactly_one_created_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    create_calls: list[str] = []
+
+    class ReconciledBatches:
+        def create_embeddings(self, *, model, src, config):
+            create_calls.append(config["display_name"])
+            raise QuotaError("quota response after create")
+
+        def list(self):
+            return (
+                SimpleNamespace(
+                    name="batches/reconciled",
+                    display_name=create_calls[0],
+                ),
+            )
+
+        def get(self, *, name):
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name="files/output-1"),
+                error=None,
+            )
+
+    client = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
+    client.batches = ReconciledBatches()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    assert len(create_calls) == 1
+    assert result.usage["provider_job_ids"] == ["batches/reconciled"]
+
+
+def test_429_status_is_persisted_before_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    class DurableStatusBatches:
+        display_name: str | None = None
+
+        def create_embeddings(self, *, model, src, config):
+            self.display_name = config["display_name"]
+            raise QuotaError("quota response after create")
+
+        def list(self):
+            state = json.loads((tmp_path / "gemini_state.json").read_text())
+            assert state["shards"][0]["last_create_status"] == 429
+            return (
+                SimpleNamespace(
+                    name="batches/durable-status",
+                    display_name=self.display_name,
+                ),
+            )
+
+        def get(self, *, name):
+            return SimpleNamespace(
+                name=name,
+                state=SimpleNamespace(name="JOB_STATE_SUCCEEDED"),
+                dest=SimpleNamespace(file_name="files/output-1"),
+                error=None,
+            )
+
+    client = FakeClient([_response("GSE2", 2), _response("GSE10", 10)])
+    client.batches = DurableStatusBatches()
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    result = build_gemini_vectors(
+        _records(),
+        VARIANT,
+        tmp_path,
+        allow_paid=True,
+        concurrency=4,
+    )
+
+    assert result.usage["provider_job_ids"] == ["batches/durable-status"]
+
+
+def test_429_reconciliation_with_multiple_jobs_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    create_calls: list[str] = []
+
+    class DuplicateBatches:
+        def create_embeddings(self, *, model, src, config):
+            create_calls.append(config["display_name"])
+            raise QuotaError("quota response after duplicate creates")
+
+        def list(self):
+            return tuple(
+                SimpleNamespace(
+                    name=f"batches/job-{index}",
+                    display_name=create_calls[0],
+                )
+                for index in (1, 2)
+            )
+
+    client = SimpleNamespace(
+        files=FakeFiles([_response("GSE2", 2), _response("GSE10", 10)]),
+        batches=DuplicateBatches(),
+    )
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+
+    with pytest.raises(RuntimeError, match=r"found 2.*refusing to resubmit"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    assert len(create_calls) == 1
+
+
+def test_429_reconciliation_without_provider_identity_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    clock = FakeClock()
+    create_calls: list[str] = []
+
+    class MissingIdentityBatches:
+        def create_embeddings(self, *, model, src, config):
+            create_calls.append(config["display_name"])
+            if len(create_calls) == 1:
+                raise QuotaError("quota response after create")
+            raise AssertionError("matching provider work was resubmitted")
+
+        def list(self):
+            return (SimpleNamespace(display_name=create_calls[0]),)
+
+    client = SimpleNamespace(
+        files=FakeFiles([_response("GSE2", 2), _response("GSE10", 10)]),
+        batches=MissingIdentityBatches(),
+    )
+    monkeypatch.setattr(gemini, "_create_client", lambda key: client)
+    monkeypatch.setattr(gemini.time, "time", clock.time)
+    monkeypatch.setattr(gemini.time, "sleep", clock.sleep)
+
+    with pytest.raises(RuntimeError, match=r"no provider identity.*refusing"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    assert len(create_calls) == 1
+
+
+def test_non_429_create_failure_retains_intent_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    class FailingCreateBatches:
+        def create_embeddings(self, *, model, src, config):
+            raise RuntimeError("connection lost")
+
+    first = SimpleNamespace(
+        files=FakeFiles([_response("GSE2", 2), _response("GSE10", 10)]),
+        batches=FailingCreateBatches(),
+    )
+    monkeypatch.setattr(gemini, "_create_client", lambda key: first)
+
+    with pytest.raises(RuntimeError, match="connection lost"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    state = json.loads((tmp_path / "gemini_state.json").read_text())
+    persisted = state["shards"][0]
+    assert persisted["submission_display_name"]
+    assert persisted.get("job_name") is None
+
+    resumed_create_calls: list[dict[str, object]] = []
+
+    class NoMatchBatches:
+        def list(self):
+            return ()
+
+        def create_embeddings(self, **kwargs):
+            resumed_create_calls.append(kwargs)
+            raise AssertionError("ambiguous work was resubmitted")
+
+    resumed = SimpleNamespace(files=SimpleNamespace(), batches=NoMatchBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: resumed)
+
+    with pytest.raises(RuntimeError, match="cannot safely reconcile"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    assert resumed_create_calls == []
+
+
+def test_non_429_failure_after_quota_retry_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    estimate = prepare_gemini_requests(_records(), VARIANT, tmp_path)
+    state_path = tmp_path / "gemini_state.json"
+    state = gemini._load_state(state_path, estimate)
+    state["shards"][0].update(  # type: ignore[index,union-attr]
+        uploaded_file_name="files/input-1",
+        submission_display_name=None,
+        last_create_status=429,
+        submission_retry_count=1,
+        submission_retry_not_before=900.0,
+    )
+    gemini._atomic_json(state_path, state)
+    clock = FakeClock()
+
+    class FailedRetryBatches:
+        def create_embeddings(self, *, model, src, config):
+            raise RuntimeError("connection lost after retry")
+
+    first = SimpleNamespace(files=SimpleNamespace(), batches=FailedRetryBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: first)
+    monkeypatch.setattr(gemini.time, "time", clock.time)
+    monkeypatch.setattr(gemini.time, "sleep", clock.sleep)
+
+    with pytest.raises(RuntimeError, match="connection lost after retry"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    persisted = json.loads(state_path.read_text())["shards"][0]
+    assert persisted["submission_display_name"]
+    assert persisted["last_create_status"] is None
+
+    resumed_create_calls: list[dict[str, object]] = []
+
+    class NoMatchBatches:
+        def list(self):
+            return ()
+
+        def create_embeddings(self, **kwargs):
+            resumed_create_calls.append(kwargs)
+            raise AssertionError("ambiguous retried work was resubmitted")
+
+    resumed = SimpleNamespace(files=SimpleNamespace(), batches=NoMatchBatches())
+    monkeypatch.setattr(gemini, "_create_client", lambda key: resumed)
+
+    with pytest.raises(RuntimeError, match="cannot safely reconcile"):
+        build_gemini_vectors(
+            _records(),
+            VARIANT,
+            tmp_path,
+            allow_paid=True,
+            concurrency=4,
+        )
+
+    assert resumed_create_calls == []
 
 
 def test_batch_submission_uses_file_api_and_aligns_results_by_gse(

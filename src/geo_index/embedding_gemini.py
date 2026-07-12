@@ -23,6 +23,7 @@ BATCH_PRICE_PER_MILLION_TOKENS_USD = 0.10
 MAX_REQUESTS_PER_SHARD = 1_000
 MAX_REQUEST_FILE_BYTES = 100 * 1024 * 1024
 POLL_SECONDS = 30
+MAX_QUOTA_BACKOFF_SECONDS = 300
 TERMINAL_STATES = {
     "JOB_STATE_SUCCEEDED",
     "JOB_STATE_FAILED",
@@ -222,6 +223,9 @@ def _new_shard_state(shard: GeminiRequestShard) -> dict[str, object]:
         "gses": list(shard.gses),
         "uploaded_file_name": None,
         "submission_display_name": None,
+        "last_create_status": None,
+        "submission_retry_count": 0,
+        "submission_retry_not_before": None,
         "job_name": None,
         "job_state": None,
         "output_file_name": None,
@@ -319,12 +323,28 @@ def _display_name(base: str, shard: GeminiRequestShard, count: int) -> str:
     return base if count == 1 else f"{base}-{shard.index:05d}"
 
 
-def _reconcile_submission(client, display_name: str):
-    matches = [
+def _matching_submissions(client, display_name: str) -> list[object]:
+    return [
         job
         for job in client.batches.list()
         if getattr(job, "display_name", None) == display_name
     ]
+
+
+def _quota_backoff_seconds(retry_count: int) -> int:
+    return min(
+        POLL_SECONDS * (2 ** max(0, retry_count - 1)),
+        MAX_QUOTA_BACKOFF_SECONDS,
+    )
+
+
+def _error_status_code(exc: BaseException) -> int | None:
+    value = getattr(exc, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
+def _reconcile_submission(client, display_name: str):
+    matches = _matching_submissions(client, display_name)
     if len(matches) != 1 or not getattr(matches[0], "name", None):
         raise RuntimeError(
             f"Gemini submission {display_name!r} cannot safely reconcile to "
@@ -332,6 +352,39 @@ def _reconcile_submission(client, display_name: str):
             "resubmit potentially paid work"
         )
     return matches[0]
+
+
+def _reconcile_after_quota_failure(
+    client,
+    display_name: str,
+    raw_shard_state: dict[str, object],
+    state: dict[str, object],
+    state_path: Path,
+    *,
+    now_fn,
+    cause: BaseException | None,
+):
+    matches = _matching_submissions(client, display_name)
+    if len(matches) == 1:
+        if getattr(matches[0], "name", None):
+            return matches[0]
+        raise RuntimeError(
+            f"Gemini submission {display_name!r} matched one job with no "
+            "provider identity; refusing to resubmit"
+        ) from cause
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Gemini submission {display_name!r} cannot safely reconcile "
+            f"after 429 (found {len(matches)}); refusing to resubmit"
+        ) from cause
+    retry_count = int(raw_shard_state.get("submission_retry_count") or 0) + 1
+    raw_shard_state["submission_retry_count"] = retry_count
+    raw_shard_state["submission_retry_not_before"] = (
+        now_fn() + _quota_backoff_seconds(retry_count)
+    )
+    raw_shard_state["submission_display_name"] = None
+    _atomic_json(state_path, state)
+    return None
 
 
 def _result_path(temp_dir: Path, shard: GeminiRequestShard) -> Path:
@@ -408,22 +461,60 @@ def _submit_or_resume_shard(
 
     submission_display_name = raw_shard_state.get("submission_display_name")
     if submission_display_name:
-        job = _reconcile_submission(client, str(submission_display_name))
+        submission_display_name = str(submission_display_name)
+        if raw_shard_state.get("last_create_status") == 429:
+            job = _reconcile_after_quota_failure(
+                client,
+                submission_display_name,
+                raw_shard_state,
+                state,
+                state_path,
+                now_fn=now_fn,
+                cause=None,
+            )
+            if job is None:
+                return False
+        else:
+            job = _reconcile_submission(client, submission_display_name)
     else:
-        if had_persisted_upload:
+        retry_count = int(raw_shard_state.get("submission_retry_count") or 0)
+        retry_not_before = raw_shard_state.get("submission_retry_not_before")
+        if retry_not_before is not None and float(retry_not_before) > now_fn():
+            return False
+        if had_persisted_upload and retry_count == 0:
             raise RuntimeError(
                 "legacy Gemini submission state has an uploaded file but no job "
                 "or submission identity; refusing to resubmit potentially paid work"
             )
         submission_display_name = f"geo-gemini-embedding-2-{uuid4().hex}"
         raw_shard_state["submission_display_name"] = submission_display_name
+        raw_shard_state["last_create_status"] = None
         _atomic_json(state_path, state)
-        job = client.batches.create_embeddings(
-            model=variant.document_model_id,
-            src={"file_name": uploaded_file_name},
-            config={"display_name": submission_display_name},
-        )
+        try:
+            job = client.batches.create_embeddings(
+                model=variant.document_model_id,
+                src={"file_name": uploaded_file_name},
+                config={"display_name": submission_display_name},
+            )
+        except BaseException as exc:
+            if _error_status_code(exc) != 429:
+                raise
+            raw_shard_state["last_create_status"] = 429
+            _atomic_json(state_path, state)
+            job = _reconcile_after_quota_failure(
+                client,
+                submission_display_name,
+                raw_shard_state,
+                state,
+                state_path,
+                now_fn=now_fn,
+                cause=exc,
+            )
+            if job is None:
+                return False
     raw_shard_state["job_name"] = job.name
+    raw_shard_state["last_create_status"] = None
+    raw_shard_state["submission_retry_not_before"] = None
     _atomic_json(state_path, state)
     return True
 
@@ -437,9 +528,13 @@ def _run_batch_lifecycle(
     variant: EmbeddingVariant,
     *,
     concurrency: int,
-    sleep_fn=time.sleep,
-    now_fn=time.time,
+    sleep_fn=None,
+    now_fn=None,
 ) -> None:
+    if sleep_fn is None:
+        sleep_fn = time.sleep
+    if now_fn is None:
+        now_fn = time.time
     state_shards = state.get("shards")
     if not isinstance(state_shards, list):
         raise ValueError("invalid Gemini shard state")
