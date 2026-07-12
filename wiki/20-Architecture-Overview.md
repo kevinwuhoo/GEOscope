@@ -46,7 +46,7 @@ flowchart TB
 | Gemini embedding | Build or resume the complete canonical Gemini matrix | `embedding_artifacts/gemini_embedding_2_3072_v1/` |
 | Elasticsearch loading | Idempotently upsert stable GSE document IDs and audit coverage | `geo-series` index |
 | Retrieval | Exact get, BM25, 3,072-dimensional dense kNN, native RRF, filters, and facets | `SearchResponse` |
-| Clients | CLI, local comparison UI, and later MCP tools | Closed search/filter contract |
+| Clients | CLI, local comparison UI, and the private FastMCP service | Closed search/filter contract |
 
 ## Load-bearing decisions
 
@@ -66,6 +66,11 @@ flowchart TB
 5. **PostgreSQL is historical comparison code.** `pg_hybrid.py` and its tests
    remain for reproducibility, but no primary CLI, web, or Prefect path imports
    or connects to it. See [[26-Datastore-Postgres]].
+6. **MCP is a bounded Elasticsearch adapter, not another search stack.**
+   `McpSearchService` owns Elasticsearch readiness, facet-vocabulary validation,
+   lazy active-model query encoding, result hydration, and strict transport
+   conversion. FastMCP owns only tools, authentication, admission controls, and
+   lifecycle. See [[27-MCP-Interface]].
 
 ## Primary contracts
 
@@ -77,6 +82,9 @@ flowchart TB
 - Serve → `SearchResponse` with hits, scoped facets, and Elasticsearch
   provenance including mapping revision, active model, vector field, and
   dimensions.
+- MCP → strict bounded models for exactly `search_datasets`, `get_dataset`, and
+  `facet_values`; no raw Query DSL, index, vector field, or model selector is a
+  caller input.
 
 Related details: [[21-Ingestion-Pipeline]], [[23-Search-and-Retrieval]],
 [[24-Faceted-Search]], and [[27-MCP-Interface]].

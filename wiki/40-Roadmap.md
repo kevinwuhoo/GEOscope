@@ -31,8 +31,9 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
   [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 - **Facets:** organism, sex, assay category, and assay detail first. Tissue and
   hierarchy follow the tissue decision gate.
-- **Serve:** invite-only remote MCP server
-  (`search_datasets`, `get_dataset`, `facet_values`) over Streamable HTTP.
+- **Serve:** the invite-only FastMCP service is **implemented and packaged**
+  with `search_datasets`, `get_dataset`, and `facet_values` over Streamable
+  HTTP. Production hosting/OAuth registration remains.
 - **Eval:** start with a 16-query pooled human review; expand only after it proves
   useful.
 
@@ -51,9 +52,10 @@ Framing: this is a **spike**. Optimize for learning speed and a demoable end-to-
 4. [[46-Retrieval-Evaluation-Plan|Mini retrieval evaluation]] — pool BM25, dense,
    and hybrid results for 16 fixed queries and measure Recall@20, NDCG@10, and
    MRR@20 with reviewed qrels.
-5. [[47-MCP-Server-Plan|Private remote MCP server]] — expose search, exact GSE
-   lookup, and facet discovery over authenticated Streamable HTTP after Track 2's
-   contract is stable.
+5. [[47-MCP-Server-Plan|Private remote MCP server]] — **implemented in code**
+   with Elasticsearch search, exact GSE lookup, facet discovery, authentication,
+   HTTP guards, packaging, and a live MCP smoke; deploy the final HTTPS/OAuth
+   endpoint next.
 6. [[52-Embedding-Bakeoff-Runbook|Alternate embedding bake-off]] — compare BM25
    with BGE, MedCPT, Qwen, and full-dimension Gemini dense/hybrid pipelines using
    provider-neutral artifacts and reviewed GEO qrels.
@@ -113,11 +115,13 @@ depends on reviewed qrels; managed deployment and tissue mapping are separate.
 - [ ] Measure normalization precision/coverage vs. hand labels.
 
 ### Phase 3 — MCP + demo (1 wk)
-- [ ] Invite-only remote FastMCP server exposing the three stable v1 tools over
-  authenticated Streamable HTTP. →
+- [x] Implement and package the invite-only FastMCP server exposing the three
+  stable v1 tools over authenticated Streamable HTTP. →
   [[47-MCP-Server-Plan]]
+- [ ] Deploy the packaged service behind its public HTTPS edge, register the
+  production OAuth client/resource metadata, and invite the first users.
 - [ ] Drive it from Claude: expansion → search → drill-in → summary.
-- [ ] Load newly materialized SOFT records into local Elasticsearch with
+- [x] Load newly materialized SOFT records into local Elasticsearch with
   idempotent GSE-keyed upserts; do not add cloud provisioning to the demo.
 
 ### Later / v2 (not the spike)

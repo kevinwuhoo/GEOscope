@@ -379,6 +379,59 @@ pending Track 1's targeted persisted-value refresh.
 The series-aggregation caveat still applies: `human + female` means the GSE
 contains each value somewhere, not necessarily on the same GSM sample.
 
+## Status — 2026-07-12 (Elasticsearch-backed private MCP)
+
+The private FastMCP service was selectively migrated from the retained
+`codex/remote-mcp-first-draft` branch and merged on `main` in merge commit
+`75b3b38`. Its transport and security contract stayed stable while its online
+datastore changed from PostgreSQL to the primary Elasticsearch `geo-series`
+index.
+
+Implemented behavior:
+
+- exactly three read-only tools: `search_datasets`, `get_dataset`, and
+  `facet_values`;
+- stateless Streamable HTTP at `/mcp`, one Uvicorn worker, process health, and
+  Elasticsearch/index readiness;
+- JWT/JWKS signature and time validation, issuer/audience/`geo:read` checks, and
+  a stable-subject invitation allowlist;
+- Host/Origin protection, 256 KiB request bounds, body-read deadlines,
+  request-rate and concurrency admission, strict schemas, masked errors, and
+  sensitive-log redaction;
+- an `McpSearchService` adapter over `ElasticsearchSearchService` for exact,
+  BM25, dense, hybrid RRF, normalized filters, and disjunctive facets;
+- startup validation of the mapping revision, active vector field, and complete
+  bounded facet vocabularies; truncated vocabularies fail closed;
+- lazy deployment-selected query encoding with
+  `gemini_embedding_2_3072_v1` as the primary default and no caller model
+  selector;
+- bounded result hydration, deterministic truncation, GEO/PubMed links, and
+  retrieval provenance;
+- one-worker Docker packaging and an Elasticsearch-only deployment template.
+
+Verification on the merged tree:
+
+| Check | Result |
+|---|---:|
+| complete offline repository suite | 378 passed, 9 opt-in live tests skipped |
+| live primary Gemini MCP smoke | 1 passed |
+| Gemini query dimensions | 3,072 |
+| MCP tools listed by live client | 3 |
+| live calls | facet browse + hybrid search + exact GSE drill-in |
+
+The live smoke used `fastmcp.Client`, the configured Gemini provider, and the
+populated local Elasticsearch instance. It asserted the Gemini model key in
+output provenance. This verifies the code and local live integration, not the
+future public HTTPS edge or production OAuth registration.
+
+Authoritative implementation records:
+
+- `docs/superpowers/specs/2026-07-12-elasticsearch-mcp-migration-design.md`
+- `docs/superpowers/plans/2026-07-12-elasticsearch-mcp-migration.md`
+- [[27-MCP-Interface]] for the as-built interface and deployment boundary
+- [[47-MCP-Server-Plan]] for the historical Postgres-first plan and its current
+  implementation-status banner
+
 ## Sources
 
 - GEOmetadb dump (mirror; currency verified 2026-07-08 from file + `max(submission_date)`) — https://gbnci.cancer.gov/geo/GEOmetadb.sqlite.gz

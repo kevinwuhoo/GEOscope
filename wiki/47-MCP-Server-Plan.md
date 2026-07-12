@@ -1,9 +1,9 @@
 ---
 title: Private Remote MCP Server Plan
-tags: [mcp, fastmcp, search, api, postgres, oauth, plan, v1]
-status: implementation-plan
+tags: [mcp, fastmcp, search, api, elasticsearch, oauth, plan, v1]
+status: implemented-code-deployment-pending
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-12
 ---
 
 # 47 · Private Remote FastMCP Server Implementation Plan
@@ -20,6 +20,16 @@ active-variant provenance without exposing a model selector
 > remote MCP first draft selectively; do not merge its Postgres composition root
 > as-is.
 
+> **Implementation status (2026-07-12):** The selective migration is complete
+> and merged. The live service now uses `McpSearchService` over Elasticsearch,
+> defaults to `gemini_embedding_2_3072_v1`, and retains this plan's three-tool,
+> authentication, bounded-model, stateless-HTTP, and admission-control design.
+> The authoritative as-built design and plan are
+> `docs/superpowers/specs/2026-07-12-elasticsearch-mcp-migration-design.md` and
+> `docs/superpowers/plans/2026-07-12-elasticsearch-mcp-migration.md`. The task
+> bodies below preserve the original PostgreSQL plan as history; do not execute
+> its DSN, SQL, psycopg, or Postgres smoke steps. Production hosting remains.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use
@@ -35,9 +45,10 @@ authorization server issues JWTs; this service validates them through JWKS and
 then applies a stable-subject invite allowlist. The v1 deployment is stateless at
 the MCP transport layer and runs one application worker behind an HTTPS edge.
 
-**Tech Stack:** Python 3.11+, standalone `fastmcp>=3.4.4,<4`, Streamable HTTP,
-Pydantic, psycopg 3 connection pooling, Uvicorn, PostgreSQL/pgvector/`pg_search`,
-pytest + pytest-asyncio.
+**As-built stack:** Python 3.11+, standalone `fastmcp>=3.4.4,<4`, Streamable
+HTTP, Pydantic, Uvicorn, official Elasticsearch 9 client, Gemini query
+embeddings, pytest + pytest-asyncio. The original PostgreSQL stack remains only
+inside the historical task bodies below.
 
 ## Global Constraints
 

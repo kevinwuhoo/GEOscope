@@ -1,7 +1,7 @@
 ---
 title: GEO Metadata Index — Home (Map of Content)
 tags: [moc, geo, search, rag]
-status: planning
+status: working-prototype
 created: 2026-07-08
 ---
 
@@ -12,6 +12,13 @@ created: 2026-07-08
 > must load and audit Elasticsearch before the run succeeds. Elasticsearch is
 > the only primary online datastore; PostgreSQL remains historical comparison
 > code. Start with [[20-Architecture-Overview]] and [[21-Ingestion-Pipeline]].
+
+> **MCP implementation (2026-07-12):** The private FastMCP service is merged on
+> `main` with Elasticsearch-backed BM25/dense/hybrid retrieval, exact GSE lookup,
+> closed facets, Gemini query embeddings, JWT/JWKS invitation checks, bounded
+> HTTP admission, Docker packaging, and a live three-tool smoke. Hosting it
+> behind the final HTTPS/OAuth edge remains deployment work. See
+> [[27-MCP-Interface]] and [[47-MCP-Server-Plan]].
 
 > A system that **indexes and serves NCBI GEO metadata** so conceptual queries
 > can cross submitter vocabulary, while messy fields collapse onto controlled
@@ -50,7 +57,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[44-Normalization-Tests-and-Assay-Hardening-Plan]] — Track 1: tests + contextual assay rules + targeted assay refresh
 - [[45-Normalized-Filters-and-Facets-Plan]] — Track 2: query/facet layer over the populated organism, sex, and assay arrays
 - [[46-Retrieval-Evaluation-Plan]] — Track 3: 16-query pooled human evaluation, no trained model
-- [[47-MCP-Server-Plan]] — Track 4: invite-only remote FastMCP server with three stable tools
+- [[47-MCP-Server-Plan]] — historical Track 4 plan; the Elasticsearch-backed service is implemented and deployment remains
 - [[48-Alternate-Embedding-Bakeoff]] — approved proposal: one temporary column per model
 - [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] — resumable builds, loading, evaluation, and active-model integration
 - [[50-Coworker-Handoff-Prompts]] — copy-ready prompts for the remote MCP and embedding owners
@@ -76,8 +83,9 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
    lower-cost batch API. Then index BM25, dense vectors, filters, and facets in
    one **local Elasticsearch** container. The same scripts later point at a
    managed host.
-4. **Serve** hybrid search + facet counts + get-by-accession as an
-   **invite-only remote MCP server**.
+4. **Serve** hybrid search + facet counts + get-by-accession through the merged
+   **invite-only FastMCP service**; deploy the packaged ASGI app behind the
+   production HTTPS/OAuth edge.
 5. The **LLM client** (Claude, etc.) does query understanding, synonym expansion, and — because it's just calling tools — the summary and conversational answers for free.
 
 → Recommended v1 target and rationale live in [[40-Roadmap]].

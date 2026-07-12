@@ -28,7 +28,9 @@ A **metadata index + search service** over GEO that provides:
 - **Ontology normalization** — map free-text fields onto controlled ontology IDs so values are comparable and facetable. → [[22-Ontology-Normalization]]
 - **Faceted search** — filter/drill-down by organism, assay, tissue, disease, sample count, year… including **ontology-hierarchy** facets (pick "T cell" → get all descendant cell types). → [[24-Faceted-Search]]
 - **Keyword search** — exact matching for accessions, gene symbols, platform IDs (`GPL24676`). → hybrid with the above.
-- **An MCP interface** — so an LLM can drive the search and layer summarization/conversation on top. → [[27-MCP-Interface]]
+- **An implemented MCP interface** — three bounded Elasticsearch-backed tools
+  let an LLM drive search and layer summarization/conversation on top. The code
+  is complete; hosted deployment remains. → [[27-MCP-Interface]]
 
 ## North star
 
@@ -45,8 +47,8 @@ Two questions worth settling up front (you raised both):
 
 - Prove the *"single cell RNA" → all sc-technologies* retrieval on real GEO data.
 - Prove ontology normalization on 2–3 fields end to end (sex, organism, one hard one: tissue or assay).
-- One Elasticsearch index, hybrid search, basic facets, and an MCP server an
-  LLM client can call.
+- One Elasticsearch index, hybrid search, basic facets, and the implemented
+  three-tool FastMCP server an LLM client can call.
 - A small **eval set** so embedding/mapping choices are measured, not guessed. → [[25-Embeddings-and-Cost]]
 
 ## Non-goals (for now)

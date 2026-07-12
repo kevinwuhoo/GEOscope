@@ -7,10 +7,52 @@ tags: [mcp, rag, api, llm]
 
 ← [[Home]] · consumes [[23-Search-and-Retrieval]], [[24-Faceted-Search]]
 
-> **Implementation tranche:** [[47-MCP-Server-Plan]] starts with
-> `search_datasets`, `get_dataset`, and `facet_values` over an invite-only
-> remote Streamable HTTP endpoint. `expand_terms`, `resolve_ontology`, and
-> non-GSE lookup wait for the tissue mapper and broader record indexing.
+> **Implemented 2026-07-12:** `main` contains the complete private FastMCP
+> service with exactly `search_datasets`, `get_dataset`, and `facet_values` over
+> stateless Streamable HTTP. It uses Elasticsearch and the deployment-selected
+> query encoder; the primary default is `gemini_embedding_2_3072_v1`. The final
+> hosted HTTPS/OAuth deployment remains pending. `expand_terms`,
+> `resolve_ontology`, and non-GSE lookup remain deferred.
+
+## Current implementation
+
+| Responsibility | Implementation |
+|---|---|
+| Hosted settings | `src/geo_index/mcp_settings.py` composes fail-closed MCP and Elasticsearch environment settings; secrets are excluded from representations |
+| Authentication | `src/geo_index/mcp_auth.py` verifies JWT signature, expiry, activation time, issuer, audience, and `geo:read`, then requires an invited stable `sub` |
+| Wire contract | `src/geo_index/mcp_models.py` provides strict bounded Pydantic inputs and outputs |
+| Search adapter | `src/geo_index/mcp_search_service.py` wraps `ElasticsearchSearchService`, validates index/facet readiness, hydrates ranked GSEs, and maps provenance |
+| MCP/HTTP | `src/geo_index/mcp_server.py` registers the three tools, stateless `/mcp`, health/readiness routes, Host/Origin protection, request limits, rate/concurrency admission, and safe logging |
+| Packaging | `Dockerfile`, `.dockerignore`, and `deploy/geo-mcp.env.example` package one Uvicorn worker without PostgreSQL MCP configuration |
+
+The adapter performs no network or model I/O at Python import. Its lifespan
+creates the official Elasticsearch client, validates `geo-series`, the mapping
+revision, active vector field, and a complete bounded facet vocabulary, and
+closes the query encoder/client on shutdown. BM25, exact lookup, and blank facet
+browsing do not create a query encoder. Dense and hybrid calls lazily use the
+one deployment-selected encoder; callers cannot override it.
+
+Filter values remain OR-within/AND-across and are rejected before retrieval if
+they are absent from the closed startup vocabulary. The vocabulary load fails
+closed rather than silently truncating. Search outputs report mapping revision,
+active model, vector field, and mode in `retrieval_version`.
+
+### Verification evidence
+
+- the merged offline repository suite passed **378 tests** with only nine
+  explicitly opt-in live tests skipped;
+- the live MCP smoke connected through `fastmcp.Client`, listed the exact three
+  tools, created a **3,072-dimensional Gemini query embedding**, ran native
+  Elasticsearch hybrid retrieval and facets, returned ranked GSEs, and fetched
+  one result through `get_dataset`;
+- the same smoke asserted `gemini_embedding_2_3072_v1` in MCP output provenance;
+- HTTP tests cover signed/invited and uninvited identities, OAuth discovery,
+  strict schemas, stateless transport, Host/Origin rejection, body deadlines,
+  rate/concurrency bounds, health/readiness, and sensitive-log redaction.
+
+These checks prove the application and local live integration. They are not
+evidence of a public deployment, production identity-provider registration, or
+an HTTPS edge; those remain operational steps.
 
 ## Hosted v1 access
 
@@ -35,7 +77,7 @@ server-wide authorization checks
 [authorization](https://gofastmcp.com/servers/authorization)). Static bearer
 tokens remain development fixtures, not production invitations.
 
-The identity provider, hostname, and hosting platform are deployment choices.
+The identity provider, hostname, and hosting platform remain deployment choices.
 Public/anonymous access, self-service invitation, and multi-tenant administration
 are **(v2+)**.
 
@@ -127,6 +169,9 @@ Both are possible, but only the first is **(v1)**:
 - The current default is `gemini_embedding_2_3072_v1`; dense and hybrid calls
   create its query encoder lazily, while BM25 and exact lookup remain
   provider-free.
+- The reviewed implementation design and executable plan are
+  `docs/superpowers/specs/2026-07-12-elasticsearch-mcp-migration-design.md` and
+  `docs/superpowers/plans/2026-07-12-elasticsearch-mcp-migration.md`.
 
 → Milestone placement in [[40-Roadmap]].
 

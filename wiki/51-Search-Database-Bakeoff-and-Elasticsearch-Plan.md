@@ -267,26 +267,27 @@ Versioned indices and alias rollback are the future endpoint in
 - [ ] Reject dynamic field names and unknown embedding variants.
 - [ ] Add fake-client unit tests for mapping dimensions, GSE `_id`, partial bulk
   failures, retries, validation failure, and a no-duplicate second load.
-- [ ] Add an opt-in live test behind `GEO_TEST_ELASTIC=1`.
+- [x] Add opt-in live tests behind `GEO_TEST_ELASTIC=1`, including the
+  three-tool MCP smoke.
 
 ### Task 3 — Implement the backend-neutral search adapter
 
-- [ ] Add `src/geo_index/elasticsearch_search.py` implementing the existing
+- [x] Add `src/geo_index/elasticsearch_search.py` implementing the existing
   `SearchService` behavior for exact, BM25, dense, hybrid, filters, and facets.
-- [ ] Retain the current response models and validation bounds.
-- [ ] Encode only the deployment-selected query variant.
-- [ ] Test OR-within/AND-across filters and own-filter omission for every facet.
-- [ ] Test deterministic ordering and retrieval-version provenance.
+- [x] Retain the current response models and validation bounds.
+- [x] Encode only the deployment-selected query variant.
+- [x] Test OR-within/AND-across filters and own-filter omission for every facet.
+- [x] Test deterministic ordering and retrieval-version provenance.
 
 ### Task 4 — Migrate the web and remote MCP composition roots
 
-- [ ] Move backend construction behind environment configuration; imports must
+- [x] Move backend construction behind environment configuration; imports must
   not perform network/model I/O.
-- [ ] Reuse the FastMCP authentication, bounded models, and transport design from
+- [x] Reuse the FastMCP authentication, bounded models, and transport design from
   the `codex/remote-mcp-first-draft` branch, but replace its PostgreSQL search
   service with the Elastic adapter.
-- [ ] Keep exactly `search_datasets`, `get_dataset`, and `facet_values` in v1.
-- [ ] Add startup readiness checks for the `geo-series` index, active vector
+- [x] Keep exactly `search_datasets`, `get_dataset`, and `facet_values` in v1.
+- [x] Add startup readiness checks for the `geo-series` index, active vector
   field, fixed registry configuration, and query encoder.
 
 ### Task 5 — Cut over only after comparative verification
