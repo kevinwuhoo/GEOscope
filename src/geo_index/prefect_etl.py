@@ -122,8 +122,16 @@ def geo_soft_etl(
                 for job in batch
             )
             continue
-        created_gses.extend(result.created_gses)
-        race_skipped += len(result.skipped_gses)
+        reported_created = set(result.created_gses)
+        reported_skipped = set(result.skipped_gses)
+        committed_gses = [
+            job.gse
+            for job in batch
+            if job.gse in reported_created
+            or (job.gse in reported_skipped and job.destination.exists())
+        ]
+        created_gses.extend(committed_gses)
+        race_skipped += len(reported_skipped - set(committed_gses))
         failures.extend(_failure_dict(failure) for failure in result.failures)
 
     embedding_status: str | None = None

@@ -175,6 +175,49 @@ def test_flow_reports_partial_failures_and_passes_created_gses_as_replace_gses(
     ]
 
 
+def test_flow_reconciles_retry_commits_from_original_submitted_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _job(tmp_path, 2)
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda soft_root, records_root: DiscoveryResult(1, 0, (job,)),
+    )
+
+    class RetryFuture:
+        def result(self) -> BatchResult:
+            job.destination.parent.mkdir(parents=True, exist_ok=True)
+            job.destination.write_text("committed by prior attempt\n")
+            return BatchResult((), (job.gse,), ())
+
+    monkeypatch.setattr(
+        prefect_etl.parse_record_batch,
+        "submit",
+        lambda batch: RetryFuture(),
+    )
+    replace_sets: list[frozenset[str]] = []
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *args, replace_gses, **kwargs: (
+            replace_sets.append(replace_gses) or _fake_embedding_result()
+        ),
+    )
+
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        parse_batch_size=250,
+    )
+
+    assert report.created == 1
+    assert report.skipped == 0
+    assert report.created_gses == ("GSE2",)
+    assert replace_sets == [frozenset({"GSE2"})]
+
+
 def test_completed_record_causes_no_source_read_in_full_flow_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
