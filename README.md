@@ -135,10 +135,19 @@ input. The command cannot submit unless both `GEMINI_API_KEY` and
 `--allow-paid-gemini` are present:
 
 ```bash
+set -a
+source .env
+set +a
 uv run python -m geo_index.build_embedding_artifact \
   --model-key gemini_embedding_2_3072_v1 \
+  --gemini-concurrency 4 \
   --allow-paid-gemini
 ```
+
+`--gemini-concurrency` controls provider-side active batch jobs while one local
+coordinator remains the sole state writer. Its default is `1`. Do not launch
+multiple builder processes against the same temporary state directory. A rerun
+resumes persisted uploads and jobs and assembles results in canonical order.
 
 ## Rebuild the Postgres search database
 
