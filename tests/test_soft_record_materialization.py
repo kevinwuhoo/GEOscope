@@ -147,6 +147,50 @@ def test_parse_failure_leaves_no_final_or_temporary_record(tmp_path: Path) -> No
     assert not job.destination.with_suffix(".json.tmp").exists()
 
 
+def test_invalid_utf8_publishes_no_canonical_record(tmp_path: Path) -> None:
+    soft_root = tmp_path / "soft"
+    records_root = tmp_path / "records"
+    source = soft_root / "GSEnnn" / "GSE1_family.soft.gz"
+    source.parent.mkdir(parents=True)
+    with gzip.open(source, "wb") as handle:
+        handle.write(
+            b"^SERIES = GSE1\n"
+            b"!Series_geo_accession = GSE1\n"
+            b"!Series_title = invalid \xff title\n"
+        )
+    job = RecordJob("GSE1", source, record_path(records_root, "GSE1"), soft_root)
+
+    with pytest.raises(UnicodeDecodeError):
+        materialize_record(job)
+
+    assert not job.destination.exists()
+    assert not job.destination.with_suffix(".json.tmp").exists()
+
+
+def test_unterminated_retained_series_table_publishes_no_canonical_record(
+    tmp_path: Path,
+) -> None:
+    soft_root = tmp_path / "soft"
+    records_root = tmp_path / "records"
+    source = soft_root / "GSEnnn" / "GSE1_family.soft.gz"
+    source.parent.mkdir(parents=True)
+    with gzip.open(source, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "^SERIES = GSE1\n"
+            "!Series_geo_accession = GSE1\n"
+            "!Series_title = truncated table\n"
+            "!series_table_begin = Comparison values\n"
+            "ID_REF\tlog fold change\n"
+        )
+    job = RecordJob("GSE1", source, record_path(records_root, "GSE1"), soft_root)
+
+    with pytest.raises(SoftParseError, match="unterminated !series_table_begin"):
+        materialize_record(job)
+
+    assert not job.destination.exists()
+    assert not job.destination.with_suffix(".json.tmp").exists()
+
+
 def test_materialize_batch_keeps_successes_and_reports_failures(tmp_path: Path) -> None:
     soft_root = tmp_path / "soft"
     records_root = tmp_path / "records"

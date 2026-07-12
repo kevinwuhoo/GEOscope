@@ -347,7 +347,7 @@ def parse_soft_record(source: Path, *, soft_root: Path) -> dict[str, object]:
     current_attributes: AttributeMap | None = None
     in_series_table = False
 
-    with gzip.open(source, "rt", encoding="utf-8", errors="replace") as handle:
+    with gzip.open(source, "rt", encoding="utf-8", errors="strict") as handle:
         for line_number, raw_line in enumerate(handle, 1):
             line = raw_line.rstrip("\r\n")
             if in_series_table:
@@ -399,6 +399,8 @@ def parse_soft_record(source: Path, *, soft_root: Path) -> dict[str, object]:
                     )
                 current_attributes.setdefault(key, []).append(value)
 
+    if in_series_table:
+        raise SoftParseError(f"{source}: unterminated !series_table_begin")
     if series_attributes is None or series_header is None:
         raise SoftParseError("missing ^SERIES block")
     series_accessions = series_attributes.get("Series_geo_accession", [])
