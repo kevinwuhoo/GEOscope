@@ -20,6 +20,7 @@ from .elasticsearch_config import (
     create_client,
 )
 from .elasticsearch_loader import LoadFailedError, LoadReport, load_index
+from .elasticsearch_sources import load_artifact
 from .soft_records import (
     BatchResult,
     MaterializeFailure,
@@ -220,13 +221,18 @@ def geo_soft_etl(
     if embedding_error is None:
         client = None
         try:
+            gemini_spec = VECTOR_FIELDS[DEFAULT_EMBEDDING_MODEL_KEY]
+            load_artifact(
+                resolved_artifacts_root / DEFAULT_EMBEDDING_MODEL_KEY,
+                gemini_spec,
+            )
             settings = ElasticsearchSettings.from_env()
             client = create_client(settings)
             load_report = load_index(
                 client,
                 records_root=records_root,
                 artifacts_root=resolved_artifacts_root,
-                model_keys=(DEFAULT_EMBEDDING_MODEL_KEY,),
+                model_keys=tuple(VECTOR_FIELDS),
                 batch_size=elasticsearch_batch_size,
                 max_item_retries=elasticsearch_max_item_retries,
             )
@@ -237,6 +243,12 @@ def geo_soft_etl(
                 elasticsearch_document_count,
                 elasticsearch_vector_count,
             ) = _elasticsearch_metrics(load_report)
+            vector_count = load_report.vector_coverage.get(gemini_spec.field, 0)
+            if vector_count != load_report.document_count:
+                raise ValueError(
+                    "incomplete Gemini vector coverage: "
+                    f"{vector_count}/{load_report.document_count}"
+                )
             _validate_elasticsearch_audit(load_report)
             elasticsearch_status = "indexed"
         except LoadFailedError as exc:

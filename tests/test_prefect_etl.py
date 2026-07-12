@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 import gzip
 import json
 import shutil
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import geo_index.prefect_etl as prefect_etl
+from geo_index.elasticsearch_config import VECTOR_FIELDS
 from geo_index.prefect_etl import EtlReport, geo_soft_etl, main
 from geo_index.elasticsearch_loader import (
     BulkFailure,
@@ -78,7 +79,7 @@ def _fake_load_report(**changes) -> LoadReport:
         document_count=2,
         vector_coverage={"embedding_gemini_3072": 2},
     )
-    return replace(report, **changes)
+    return dataclasses.replace(report, **changes)
 
 
 @pytest.fixture(autouse=True)
@@ -98,6 +99,12 @@ def fake_elasticsearch_stage(monkeypatch: pytest.MonkeyPatch):
         raising=False,
     )
     monkeypatch.setattr(prefect_etl, "create_client", fake_client, raising=False)
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_artifact",
+        lambda *_args: object(),
+        raising=False,
+    )
     monkeypatch.setattr(
         prefect_etl,
         "load_index",
@@ -461,7 +468,7 @@ def test_embedding_failure_is_reported_and_makes_cli_result_unsuccessful(
     assert report.succeeded is False
 
 
-def test_flow_loads_only_gemini_artifact_after_embedding_and_records_audit(
+def test_flow_loads_all_available_artifacts_after_gemini_and_records_audit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fake_elasticsearch_stage,
@@ -490,6 +497,13 @@ def test_flow_loads_only_gemini_artifact_after_embedding_and_records_audit(
     monkeypatch.setattr(prefect_etl, "load_index", fake_load)
     records_root = tmp_path / "processed" / "series_records"
     artifacts_root = tmp_path / "custom-artifacts"
+    validated: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_artifact",
+        lambda path, spec: validated.append((path, spec.model_key)) or object(),
+        raising=False,
+    )
 
     report = geo_soft_etl.fn(
         soft_root=tmp_path,
@@ -505,10 +519,16 @@ def test_flow_loads_only_gemini_artifact_after_embedding_and_records_audit(
         {
             "records_root": records_root,
             "artifacts_root": artifacts_root,
-            "model_keys": ("gemini_embedding_2_3072_v1",),
+            "model_keys": tuple(VECTOR_FIELDS),
             "batch_size": 17,
             "max_item_retries": 4,
         }
+    ]
+    assert validated == [
+        (
+            artifacts_root / "gemini_embedding_2_3072_v1",
+            "gemini_embedding_2_3072_v1",
+        )
     ]
     assert report.elasticsearch_status == "indexed"
     assert report.elasticsearch_attempted == 2
@@ -579,7 +599,7 @@ def test_embedding_failure_does_not_create_elasticsearch_client(
     assert fake_elasticsearch_stage == []
 
 
-def test_incomplete_elasticsearch_audit_fails_closed_with_observed_metrics(
+def test_incomplete_gemini_coverage_fails_and_closes_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fake_elasticsearch_stage,
@@ -592,14 +612,24 @@ def test_incomplete_elasticsearch_audit_fails_closed_with_observed_metrics(
     monkeypatch.setattr(
         prefect_etl,
         "build_missing_embeddings",
-        lambda *args, **kwargs: _fake_embedding_result(),
+        lambda *_args, **_kwargs: _fake_embedding_result("skipped"),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_artifact",
+        lambda *_args: object(),
+        raising=False,
+    )
+    incomplete = _fake_load_report()
+    incomplete = dataclasses.replace(
+        incomplete,
+        document_count=2,
+        vector_coverage={"embedding_gemini_3072": 1},
     )
     monkeypatch.setattr(
         prefect_etl,
         "load_index",
-        lambda *args, **kwargs: _fake_load_report(
-            vector_coverage={"embedding_gemini_3072": 1}
-        ),
+        lambda *_args, **_kwargs: incomplete,
     )
 
     report = geo_soft_etl.fn(
@@ -609,12 +639,48 @@ def test_incomplete_elasticsearch_audit_fails_closed_with_observed_metrics(
     )
 
     assert report.elasticsearch_status == "failed"
-    assert "Gemini vector coverage 1 != 2" in report.elasticsearch_error
-    assert report.elasticsearch_attempted == 2
-    assert report.elasticsearch_document_count == 2
-    assert report.elasticsearch_vector_count == 1
+    assert report.elasticsearch_error == (
+        "ValueError: incomplete Gemini vector coverage: 1/2"
+    )
     assert report.succeeded is False
     assert fake_elasticsearch_stage[0].closed is True
+
+
+def test_missing_gemini_artifact_prevents_elasticsearch_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        prefect_etl,
+        "discover_records",
+        lambda _soft_root, _records_root: DiscoveryResult(0, 0, ()),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "build_missing_embeddings",
+        lambda *_args, **_kwargs: _fake_embedding_result("skipped"),
+    )
+    monkeypatch.setattr(
+        prefect_etl,
+        "load_artifact",
+        lambda *_args: (_ for _ in ()).throw(ValueError("missing artifact")),
+        raising=False,
+    )
+    created: list[object] = []
+    monkeypatch.setattr(
+        prefect_etl,
+        "create_client",
+        lambda settings: created.append(settings),
+    )
+
+    report = geo_soft_etl.fn(
+        soft_root=tmp_path,
+        records_root=tmp_path / "records",
+        allow_paid_gemini=True,
+    )
+
+    assert report.elasticsearch_error == "ValueError: missing artifact"
+    assert created == []
 
 
 def test_bulk_failure_preserves_partial_elasticsearch_metrics(
