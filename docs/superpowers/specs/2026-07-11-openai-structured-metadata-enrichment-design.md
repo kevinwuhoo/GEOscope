@@ -1,7 +1,7 @@
 ---
 title: OpenAI Structured Metadata Enrichment
 tags: [prefect, openai, gpt-5.6, structured-output, normalization, facets]
-status: awaiting-written-review
+status: approved
 created: 2026-07-11
 updated: 2026-07-11
 ---
@@ -594,14 +594,20 @@ Elasticsearch assembly.
 
 ### Reviewed set
 
-Build a 500-GSE reviewed set:
+Build a 500-GSE reviewed set from a frozen, locally materialized canonical
+corpus:
 
-- 100 random GSEs from each of 2000-2005, 2006-2010, 2011-2015, 2016-2020,
-  and 2021-2024 using seed `20260711`;
+- 100 deterministic random GSEs from each of 2000-2005, 2006-2010,
+  2011-2015, 2016-2020, and 2021-2024 using seed `20260711`;
 - preserve the already recorded accession selection where available;
 - add a separate stress slice of the 50 largest, multi-channel, and
   metadata-diverse GSEs; and
 - annotate evidence and absence, not only normalized labels.
+
+Selection starts only after the active local SOFT ingestion finishes and the
+canonical Prefect ETL catches up. It does not initiate an additional fetch. The
+selection manifest records the frozen canonical inventory hash, count, and
+year coverage and fails closed if any stratum lacks 100 eligible local records.
 
 ### Model comparison
 
