@@ -16,6 +16,12 @@ tags: [geo, overview]
 
 ## What we're building
 
+The current prototype uses **Elasticsearch as its primary online datastore and
+search service**, with `gemini_embedding_2_3072_v1` providing 3,072-dimensional
+dense vectors. The earlier PostgreSQL implementation remains only as a
+historical comparison because pgvector's `vector` type is limited to 2,000
+dimensions. → [[20-Architecture-Overview]]
+
 A **metadata index + search service** over GEO that provides:
 
 - **Semantic / vector search** — meaning-based retrieval so conceptually-equivalent studies co-retrieve regardless of wording. → [[23-Search-and-Retrieval]]
@@ -39,7 +45,8 @@ Two questions worth settling up front (you raised both):
 
 - Prove the *"single cell RNA" → all sc-technologies* retrieval on real GEO data.
 - Prove ontology normalization on 2–3 fields end to end (sex, organism, one hard one: tissue or assay).
-- One Postgres, hybrid search, basic facets, an MCP server Claude can call.
+- One Elasticsearch index, hybrid search, basic facets, and an MCP server an
+  LLM client can call.
 - A small **eval set** so embedding/mapping choices are measured, not guessed. → [[25-Embeddings-and-Cost]]
 
 ## Non-goals (for now)
@@ -52,7 +59,8 @@ Two questions worth settling up front (you raised both):
 ## Constraints (from you)
 
 - **Prototype / spike**, not production.
-- **Postgres-first**; open to a high-performance **open embedding model** if it's competitive.
+- **Elasticsearch-first** with Gemini 3,072-dimensional embeddings; retain the
+  measured PostgreSQL and open-model experiments for reproducibility.
 - **Cost comes out of pocket** → estimate embedding cost; prefer cheap where quality is equal. (Spoiler: embedding all of GEO once is **single-digit dollars** — see [[25-Embeddings-and-Cost]]. Cost is *not* the constraint; quality and effort are.)
 
 ## Prior art, in one line

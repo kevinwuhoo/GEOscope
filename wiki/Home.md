@@ -7,6 +7,12 @@ created: 2026-07-08
 
 # 🧬 GEO Metadata Index
 
+> **Current primary path (2026-07-12):** Prefect materializes canonical GSE
+> records, builds/resumes `gemini_embedding_2_3072_v1` (3,072 dimensions), and
+> must load and audit Elasticsearch before the run succeeds. Elasticsearch is
+> the only primary online datastore; PostgreSQL remains historical comparison
+> code. Start with [[20-Architecture-Overview]] and [[21-Ingestion-Pipeline]].
+
 > A system that **indexes and serves NCBI GEO metadata** so conceptual queries
 > can cross submitter vocabulary, while messy fields collapse onto controlled
 > values that support precise filters and facets. The current v1 normalizes
@@ -31,7 +37,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[24-Faceted-Search]] — facet model, ontology-backed hierarchical facets
 - [[25-Embeddings-and-Cost]] — model options, measured runtime/storage, and the eval plan
 - [[28-Embedding-Granularity]] — per-field vs whole-document embedding (field→mechanism routing)
-- [[26-Datastore-Postgres]] — implemented pgvector + ParadeDB baseline (historical deployment choice)
+- [[26-Datastore-Postgres]] — historical pgvector + ParadeDB baseline (retained code, not a primary path)
 - [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — database bakeoff and the local-first Elasticsearch-only plan
 - [[27-MCP-Interface]] — the MCP server, its tools, and "the LLM is the RAG loop"
 

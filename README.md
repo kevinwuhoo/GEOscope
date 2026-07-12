@@ -88,11 +88,10 @@ words if the desired series is not shown.
 
 ## Canonical SOFT records and embedding artifacts
 
-Materialize one complete canonical JSON record per stripped family SOFT file:
-
-```bash
-uv run geo-soft-etl
-```
+`geo-soft-etl` now owns canonical materialization, paid Gemini embedding,
+Elasticsearch loading, and the final audit as one required flow. Configure and
+start those services before invoking it; follow the executable
+**Elasticsearch primary path** below.
 
 Existing records under `data/processed/series_records/<bucket>/` are terminal
 and skipped without reading their source. Delete one record explicitly to
@@ -149,9 +148,55 @@ coordinator remains the sole state writer. Its default is `1`. Do not launch
 multiple builder processes against the same temporary state directory. A rerun
 resumes persisted uploads and jobs and assembles results in canonical order.
 
-## Rebuild the Postgres search database
+## Elasticsearch primary path
 
-The **v1** search database is reproducible from the GEOmetadb SQLite file and
+Elasticsearch is the primary online datastore and retrieval backend. The
+required embedding is `gemini_embedding_2_3072_v1` (`gemini-embedding-2`,
+3,072 dimensions), stored in Elasticsearch as `embedding_gemini_3072`.
+PostgreSQL cannot store this vector in pgvector's 2,000-dimensional `vector`
+type, so it is retained only as a historical comparison implementation.
+
+Configure the local or managed Elasticsearch endpoint and Gemini credentials:
+
+```bash
+cp .env.elasticsearch.example .env.elasticsearch
+# Edit ELASTICSEARCH_PASSWORD before starting.
+docker compose --env-file .env.elasticsearch \
+  -f docker-compose.elasticsearch.yml up -d
+set -a
+source .env.elasticsearch
+set +a
+export GEMINI_API_KEY=...
+```
+
+Run the complete required Prefect path—canonical records, resumable Gemini
+artifact, idempotent Elasticsearch upsert, and index/vector audit:
+
+```bash
+uv run geo-soft-etl --allow-paid-gemini
+```
+
+The flag is intentionally required before the flow may submit paid Gemini
+batch work. A run is unsuccessful if record parsing, embedding, Elasticsearch
+loading, or the final audit fails; completed records and artifacts remain safe
+to reuse on retry.
+
+Search the indexed corpus or launch the comparison UI:
+
+```bash
+uv run geo-search "human single-cell immune atlas" --mode hybrid --topk 15
+uv run geo-web
+```
+
+`geo-search` and `geo-web` default to Gemini through
+`ELASTICSEARCH_ACTIVE_MODEL=gemini_embedding_2_3072_v1`. BM25-only searches do
+not call Gemini. Dense and hybrid searches create query embeddings through the
+Gemini API.
+
+## Historical PostgreSQL baseline
+
+The earlier **v1** Postgres search database remains reproducible for historical
+comparison from the GEOmetadb SQLite file and
 the generated JSONL/embedding artifacts. Build those artifacts first:
 
 ```bash
@@ -191,7 +236,7 @@ uv run python -m geo_index.pg_hybrid filter-index
 Filters are series-level: selecting values across fields means the GSE contains
 each value somewhere, not that one GSM sample contains all of them.
 
-## Local Elasticsearch foundation
+## Local Elasticsearch service
 
 The prototype Elasticsearch service is pinned to 9.4.2, binds only to
 `127.0.0.1:9200`, persists its data in a named Docker volume, and enables a
@@ -223,9 +268,9 @@ set +a
 GEO_TEST_ELASTIC=1 uv run pytest tests/test_elasticsearch_live.py -v
 ```
 
-The loader is independent of Prefect and model execution. After the canonical
-record tree and at least one canonical model artifact are complete, load them
-with:
+The primary Prefect flow invokes the loader automatically. The standalone
+loader remains available for evaluation, repair, or an explicitly separated
+operation after the canonical record tree and selected artifacts are complete:
 
 ```bash
 uv run geo-elasticsearch-load \
@@ -236,8 +281,9 @@ uv run geo-elasticsearch-load \
 
 Run the identical command a second time to prove the document count is
 unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
-second load replaces the same documents. Real-corpus ingestion is intentionally
-deferred until the ETL and per-model artifacts are complete.
+second load replaces the same documents. On the primary path,
+`geo-soft-etl --allow-paid-gemini` performs this same idempotent operation for
+the Gemini artifact and includes its audit in the terminal flow report.
 
 After BGE, MedCPT, and Qwen have full vector coverage, run the guarded read-only
 comparison. It generates real query embeddings, exercises BM25+dense native RRF

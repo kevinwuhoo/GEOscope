@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 
 INDEX_NAME = "geo-series"
+DEFAULT_ACTIVE_MODEL_KEY = "gemini_embedding_2_3072_v1"
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ class ElasticsearchSettings:
             raise ValueError("Elasticsearch credentials are required")
 
         active_model_key = source.get(
-            "ELASTICSEARCH_ACTIVE_MODEL", "bge_small_v15"
+            "ELASTICSEARCH_ACTIVE_MODEL", DEFAULT_ACTIVE_MODEL_KEY
         ).strip()
         if active_model_key not in VECTOR_FIELDS:
             raise ValueError(f"unknown active model: {active_model_key}")

@@ -1,14 +1,13 @@
-"""In-memory semantic search over the embedded series — a retrieval sanity test.
+"""Legacy in-memory semantic search over the original BGE artifact.
 
 Loads the vectors from ``geo-embed`` and does brute-force cosine top-k (fine at
 223k × 384). This is the *test* harness for the core premise — that a query
 like "single cell RNA" pulls back studies using 10x / Drop-seq / Smart-seq2 /
-SPLiT-seq even when they never say "single cell" — BEFORE we invest in Postgres
-+ pgvector + pg_search. It is not the production retrieval path.
+SPLiT-seq even when they never say "single cell". It is not the primary
+retrieval path; use ``geo-search`` for Elasticsearch.
 
 Usage:
-    uv run geo-search "single cell RNA of human immune cells"
-    uv run geo-search "spatial transcriptomics of brain" --topk 15
+    uv run python -m geo_index.search_test "single cell RNA of human immune cells"
 """
 
 from __future__ import annotations

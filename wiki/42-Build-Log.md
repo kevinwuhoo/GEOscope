@@ -6,6 +6,12 @@ created: 2026-07-08
 
 # 42 · Build Log & Findings
 
+> **Current architecture update (2026-07-12):** The primary path is now the
+> fail-closed Prefect chain from canonical SOFT records through
+> `gemini_embedding_2_3072_v1` (3,072 dimensions) into Elasticsearch. The
+> Postgres measurements below remain historical evidence and its code remains
+> available, but current CLI/web/ETL code targets Elasticsearch.
+
 ← [[Home]] · plan in [[40-Roadmap]] · decisions in [[41-Open-Questions]]
 
 A running record of what we've actually built, what we tried, and what the data
@@ -228,7 +234,7 @@ Pipeline built so far (all in `src/geo_index/`, driven by `uv run …`):
 | — · **bulk metadata** | — | `data/external/GEOmetadb.sqlite` (18 GB) | **GEOmetadb dump** |
 | 3 · series docs **(v1)** | `geo-build-series-docs` | `data/processed/geo_series.jsonl` (222,961) | GEOmetadb |
 | 4 · embeddings **(v1)** | `geo-embed` | `embeddings.npy` (223k × 384) | `bge-small-en-v1.5`, local/MPS |
-| 5 · search test | `geo-search "<query>"` | ranked results | brute-force cosine (in-memory) |
+| 5 · search test | `python -m geo_index.search_test "<query>"` | ranked results | historical brute-force cosine (in-memory) |
 
 Corpus health: 100% have a summary, 99% `overall_design`, 97% aggregated
 sample characteristics. 8.47M samples rolled up to their series.

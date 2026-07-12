@@ -61,7 +61,7 @@
 <body>
 <header>
   <h1>GEO dataset search — keyword vs. semantic hybrid</h1>
-  <div class="sub">Left: what NCBI GEO's own keyword search returns. Right: our BM25 + embedding hybrid over the same 222,961 series.</div>
+  <div class="sub">Left: what NCBI GEO's own keyword search returns. Right: Elasticsearch BM25 + Gemini dense RRF over canonical GEO metadata.</div>
 </header>
 
 <div class="bar">
@@ -85,7 +85,7 @@
     <div id="geo"><div class="empty">Run a search to compare.</div></div>
   </div>
   <div class="col">
-    <h2><span class="dot ours"></span>Our hybrid <span class="count" id="oursCount"></span></h2>
+    <h2><span class="dot ours"></span>Elasticsearch + Gemini <span class="count" id="oursCount"></span></h2>
     <div id="ours"><div class="empty">Run a search to compare.</div></div>
   </div>
 </div>

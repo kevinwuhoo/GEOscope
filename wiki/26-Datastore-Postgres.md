@@ -5,6 +5,12 @@ tags: [postgres, pgvector, paradedb, schema]
 
 # 26 · Datastore — One Postgres
 
+> **Historical implementation:** retained for reproducibility and comparison,
+> but superseded as the primary path on 2026-07-12. Elasticsearch now owns
+> indexing and retrieval because the selected Gemini embeddings have 3,072
+> dimensions, above pgvector's 2,000-dimensional `vector` limit. See
+> [[20-Architecture-Overview]].
+
 ← [[Home]] · serves [[23-Search-and-Retrieval]], [[24-Faceted-Search]]
 
 > **Status update (2026-07-10):** This page documents the implemented and

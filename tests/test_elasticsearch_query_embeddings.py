@@ -5,6 +5,7 @@ import pytest
 
 from geo_index.elasticsearch_query_embeddings import (
     QueryEncoderInfo,
+    _GeminiQueryEncoder,
     _SentenceTransformerQueryEncoder,
     create_query_encoder,
     format_query,
@@ -22,13 +23,65 @@ def test_format_query_uses_each_fixed_registry_template() -> None:
         "Instruct: Given a web search query, retrieve relevant passages that "
         "answer the query\nQuery: immune cells"
     )
+    assert format_query("gemini_embedding_2_3072_v1", "immune cells") == (
+        "task: search result | query: immune cells"
+    )
 
 
-def test_format_query_rejects_blank_and_noncomparison_models() -> None:
+def test_format_query_rejects_blank_query() -> None:
     with pytest.raises(ValueError, match="blank query"):
         format_query("bge_small_v15", "  ")
-    with pytest.raises(ValueError, match="comparison model"):
-        format_query("gemini_embedding_2_3072_v1", "immune cells")
+
+
+class _FakeGeminiModels:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def embed_content(self, **kwargs):
+        self.calls.append(kwargs)
+        embedding = type("Embedding", (), {"values": [1.0] * 3072})()
+        return type("Response", (), {"embeddings": [embedding]})()
+
+
+class _FakeGeminiClient:
+    def __init__(self) -> None:
+        self.models = _FakeGeminiModels()
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_gemini_query_encoder_uses_retrieval_query_and_3072_dimensions() -> None:
+    variant = get_variant("gemini_embedding_2_3072_v1")
+    client = _FakeGeminiClient()
+    encoder = _GeminiQueryEncoder(variant, api_key="gemini-key", client=client)
+
+    vector = encoder.encode("immune cells")
+
+    assert client.models.calls == [
+        {
+            "model": "gemini-embedding-2",
+            "contents": "task: search result | query: immune cells",
+            "config": {
+                "task_type": "RETRIEVAL_QUERY",
+                "output_dimensionality": 3072,
+            },
+        }
+    ]
+    assert vector.shape == (3072,)
+    assert vector.dtype == np.float32
+    assert np.linalg.norm(vector) == pytest.approx(1.0)
+    encoder.close()
+    assert client.closed
+
+
+def test_gemini_query_encoder_requires_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        _GeminiQueryEncoder(get_variant("gemini_embedding_2_3072_v1"))
 
 
 def test_validate_query_vector_converts_normalizes_and_makes_contiguous() -> None:
@@ -112,9 +165,12 @@ def test_create_query_encoder_routes_fixed_model_families(
 
     sentence = object()
     medcpt = object()
+    gemini = object()
     monkeypatch.setattr(module, "_SentenceTransformerQueryEncoder", lambda _: sentence)
     monkeypatch.setattr(module, "_MedCPTQueryEncoder", lambda _: medcpt)
+    monkeypatch.setattr(module, "_GeminiQueryEncoder", lambda _: gemini)
 
     assert create_query_encoder("bge_small_v15") is sentence
     assert create_query_encoder("qwen3_06b_1024_v1") is sentence
     assert create_query_encoder("medcpt_v1") is medcpt
+    assert create_query_encoder("gemini_embedding_2_3072_v1") is gemini

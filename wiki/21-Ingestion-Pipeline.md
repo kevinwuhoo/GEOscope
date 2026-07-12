@@ -9,6 +9,12 @@ tags: [ingestion, pipeline, etl]
 
 ## Goal
 
+> **Current primary path (2026-07-12):** `geo-soft-etl` is a required Prefect
+> chain from stripped SOFT through canonical records and the complete
+> `gemini_embedding_2_3072_v1` artifact into Elasticsearch. It succeeds only
+> after the `geo-series` index and `embedding_gemini_3072` coverage are audited.
+> Existing canonical records and provider state remain resumable after failure.
+
 Maintain a reproducible series-level metadata corpus. For the fixed v1 spike,
 the chosen source is the 222,961-GSE GEOmetadb snapshot already materialized as
 `data/processed/geo_series.jsonl`. A metadata-only top-up from its 2024-02-29
@@ -22,7 +28,7 @@ cutoff to current GEO is a later freshness release.
 > canonical version and uses output existence as completion; daily manifests and
 > source-change detection are deferred to [[54-Incremental-Corpus-Future-State]].
 
-## Current v1 path
+## Historical GEOmetadb baseline path
 
 1. Read `data/external/GEOmetadb.sqlite`.
 2. Aggregate GSE rows plus distinct GSM organism/molecule/source/characteristic
@@ -36,6 +42,19 @@ This decision and its measured source tradeoff are recorded in
 [[42-Build-Log#What we tried (and what we chose)]].
 
 ## Current SOFT → canonical-record path
+
+The operator entry point owns the complete primary chain:
+
+```bash
+uv run geo-soft-etl --allow-paid-gemini
+```
+
+After materialization, the flow builds or resumes
+`embedding_artifacts/gemini_embedding_2_3072_v1`, upserts that model into
+Elasticsearch `geo-series`, refreshes once, and audits document count plus
+`embedding_gemini_3072` coverage. Any parse, embedding, connection, bulk-item,
+or audit failure makes the run unsuccessful. Stable GSE `_id` values and
+durable local artifacts make the complete operation safe to retry.
 
 The crawler and table stripper already produce metadata-only family SOFT files
 under `data/processed/soft_meta/`. At the 2026-07-11 checkpoint there were
