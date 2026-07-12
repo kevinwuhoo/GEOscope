@@ -163,8 +163,10 @@ Use a fake client that records file uploads, batch submissions, polls, and
 downloads. Assert the guard rejects before client construction, each request
 has a stable GSE custom ID and 3,072 output dimension, resume does not resubmit
 a stored successful shard, response identity is exact, missing/duplicate rows
-fail, the conservative UTF-8 preflight stays below the model token limit, and
-no adapter path exposes or calls synchronous `embed_content` or `countTokens`.
+fail, complete formatted title and `embed_text` survive exactly (including
+multibyte Unicode and inputs beyond 8,000 UTF-8 bytes), provider row errors are
+reported without publishing an artifact, and no adapter path exposes or calls
+synchronous `embed_content` or `count_tokens`.
 
 - [ ] **Step 3: Run Gemini tests and confirm RED**
 
@@ -174,11 +176,16 @@ Expected: collection fails because the adapter does not exist.
 
 - [ ] **Step 4: Implement deterministic requests, state, resume, and assembly**
 
-Write request JSONL and state JSON atomically. Print estimated tokens and batch
-charge before checking authorization. Require the paid flag and
-`GEMINI_API_KEY`, submit/upload only missing shards, poll stored job IDs, download
-terminal results, validate custom IDs, assemble numeric-GSE order, and return
-usage/job/truncation metadata.
+Write full-input request JSONL and state JSON atomically. The 1,000-request and
+100 MiB limits are transport-sharding limits, not document-truncation limits.
+Do not make an exact `count_tokens` call: that would add a separate synchronous
+provider request per document. Print an informational byte-derived token and
+batch-charge upper bound before checking authorization. Require the paid flag
+and `GEMINI_API_KEY`, submit/upload only missing shards, poll stored job IDs,
+download terminal results, validate custom IDs, assemble numeric-GSE order, and
+return usage/job/truncation metadata with `truncation_count=0`. Provider
+token-limit or per-row errors fail the build while preserving request, state,
+and result files.
 
 - [ ] **Step 5: Dry-run without credentials and commit**
 
@@ -280,9 +287,10 @@ encoding.
 
 - [ ] **Step 7: Verify Gemini code without paid execution**
 
-Generate deterministic request shards and the token/cost estimate. Confirm the
-paid/key guard before client construction. Do not upload, submit, or poll a real
-job.
+Generate deterministic full-input request shards and the informational
+byte-derived token/cost upper bound. Confirm every discovered record is present,
+`truncation_count=0`, and the paid/key guard runs before client construction.
+Do not call synchronous `count_tokens`, or upload, submit, or poll a real job.
 
 - [ ] **Step 8: Run focused and full verification**
 

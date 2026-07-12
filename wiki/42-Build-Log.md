@@ -102,18 +102,35 @@ deviation, not silent truncation.
 
 Gemini `gemini-embedding-2` support is implemented as resumable bounded
 file-based batches with deterministic keyed JSONL shards, schema-v2 per-shard
-provider state, a conservative 8,000-byte UTF-8 preflight, a pre-submit
-upper-bound token/cost estimate, an explicit paid-work guard, and aligned result
-assembly. It was **not submitted** because no API key was provided. Tests use a
-fake provider and prove completed shards are not resubmitted; there is no
-synchronous embedding or token-count fallback.
+provider state, an explicit paid-work guard, and aligned result assembly. Each
+request preserves the complete formatted title and `embed_text`, including
+multibyte Unicode. The 1,000-request and 100 MiB shard limits bound transport
+files; they are not document-truncation limits. Provider token-limit or per-row
+errors fail the build and preserve request, state, and result files for
+diagnosis and resume. Tests use a fake provider and prove completed shards are
+not resubmitted; there is no synchronous embedding fallback.
 
-A no-key, no-paid-flag preparation over all 249,736 canonical records produced
-250 shards (249×1,000 requests plus 736), totaling 498,458,769 bytes; the largest
-shard was 2,374,577 bytes, below the 100 MiB bound. The conservative estimate
-was at most 471,805,889 tokens / $47.1806, with 2,129 documents preflight-
-truncated. Preparation took 194.83 seconds and 4,984,848,384 bytes maximum RSS,
-then stopped at the authorization guard before client construction.
+Exact `count_tokens` is intentionally not used in the default corpus build: it
+would require a separate synchronous provider request for every document. The
+pre-submit byte-derived token and cost upper bounds are informational only, not
+provider token counts or an acceptance guarantee.
+
+The fresh full-corpus, no-key, no-paid-flag preparation command was:
+
+```bash
+env -u GEMINI_API_KEY /usr/bin/time -l uv run python -m geo_index.build_embedding_artifact --records-root /Users/kwu/projects/geo-metadata-index/data/processed/series_records --output-root /private/tmp/geo-gemini-full-input-dryrun --model-key gemini_embedding_2_3072_v1
+```
+
+It prepared all 249,736 discovered records/requests in 250 JSONL shards (250
+files confirmed), totaling 554,359,680 bytes; the largest shard was 7,563,216
+bytes, below the 100 MiB transport bound. The informational estimate was at
+most 527,662,048 tokens / $52.7662, with `truncation_count=0`. Preparation took
+193.42 seconds elapsed and 4,442,210,304 bytes maximum RSS. It then exited 1
+with the expected `GeminiAuthorizationError: Gemini batch submission requires
+allow_paid_gemini=True`. No provider submission occurred: the guard raised
+before API-key lookup and client construction, and the isolated output root
+contained no `gemini_state.json`, result files, provider IDs, or final embedding
+artifact.
 
 ## Status — 2026-07-10 (normalization and assay hardening)
 

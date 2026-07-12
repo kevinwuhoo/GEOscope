@@ -120,11 +120,19 @@ uv run python -m geo_index.adopt_embeddings --model-key bge_small_v15
 ```
 
 Gemini corpus embeddings use only bounded asynchronous Google batch/file API
-shards (1,000 requests and at most 100 MiB each). Per-shard state makes uploads,
-jobs, and downloads resumable. Documents use a conservative 8,000-byte UTF-8
-preflight below the 8,192-token model limit without synchronous token-count
-calls. The command prints an upper-bound estimate but cannot submit unless both
-`GEMINI_API_KEY` and `--allow-paid-gemini` are present:
+shards. The 1,000-request and 100 MiB limits bound transport files; they do not
+truncate documents. Every request preserves the complete formatted title and
+`embed_text`, including multibyte Unicode. Provider token-limit or per-row
+errors fail the build while preserving request, state, and result files for
+diagnosis and resume. Per-shard state makes uploads, jobs, and downloads
+resumable.
+
+The default corpus build intentionally does not call exact `count_tokens`,
+which would add a separate synchronous provider request for every document.
+Its byte-derived token and cost upper bounds are informational only: they are
+neither provider token counts nor proof that the provider will accept an
+input. The command cannot submit unless both `GEMINI_API_KEY` and
+`--allow-paid-gemini` are present:
 
 ```bash
 uv run python -m geo_index.build_embedding_artifact \
