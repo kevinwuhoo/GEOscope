@@ -342,6 +342,38 @@ def test_run_comparison_executes_full_hybrid_and_diagnostic_paths() -> None:
         assert call["bucket_limit"] == 10
 
 
+class _MissingAssayAlternativeService(_RecordingService):
+    def search(self, query: str, **kwargs):
+        response = super().search(query, **kwargs)
+        filters = kwargs.get("filters") or SearchFilters()
+        if (
+            not query.strip()
+            and filters.organism_ids == ("NCBITaxon:9606",)
+            and filters.assay_categories == ("expression (array)",)
+        ):
+            response.facets["assay_categories"] = FacetResult(
+                field="assay_categories",
+                buckets=(FacetBucket("expression (array)", "expression (array)", 5),),
+                scope="all_matches",
+                candidate_count=None,
+            )
+        return response
+
+
+def test_run_comparison_requires_assay_own_filter_omission() -> None:
+    cases = (load_query_cases(Path("eval/elasticsearch_live_queries.jsonl"))[0],)
+
+    with pytest.raises(ValueError, match="assay facet did not omit its own filter"):
+        run_comparison(
+            _FakeInspectionClient(),
+            cases,
+            encoder_factory=_FakeEncoder,
+            service_factory=lambda _client, *, active_model_key, encode_query: (
+                _MissingAssayAlternativeService(active_model_key)
+            ),
+        )
+
+
 def _comparison_run():
     cases = (load_query_cases(Path("eval/elasticsearch_live_queries.jsonl"))[0],)
     return run_comparison(

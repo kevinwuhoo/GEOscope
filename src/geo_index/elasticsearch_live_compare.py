@@ -275,6 +275,11 @@ def run_comparison(
     }
     if "NCBITaxon:10090" not in organism_values:
         raise ValueError("organism facet did not omit its own filter")
+    assay_values = {
+        bucket.value for bucket in own_probe.facets["assay_categories"].buckets
+    }
+    if not assay_values - set(own_filter.assay_categories):
+        raise ValueError("assay facet did not omit its own filter")
 
     bm25_by_query: dict[str, SearchResponse] = {}
     for case in cases:
