@@ -71,9 +71,9 @@ consistent across every consumer.
 | Human interface | Built and deployed a responsive React/FastAPI comparison experience at [geoscope.kevinformatics.com](https://geoscope.kevinformatics.com). |
 | Agent interface | Built a FastMCP service exposing exactly three read-only tools: `search_datasets`, `get_dataset`, and `facet_values`. |
 
-At this checkpoint, the offline verification suite passes **391 Python tests**
-(with nine opt-in live integrations skipped), and the frontend suite passes all
-**seven tests**.
+At this checkpoint, the offline verification suite passes **481 Python tests**
+(with ten opt-in live integrations skipped), and the frontend suite passes all
+**eight tests**.
 
 ## Methods
 
@@ -136,10 +136,11 @@ Elasticsearch provides the shared online search layer:
 - **Filters and facets** operate on normalized organism, sex, and assay arrays.
   Values are ORed within a field and ANDed across fields; each facet omits its
   own active filter when counting alternatives.
-- **Unified retrieval** concurrently gathers 40 Elasticsearch candidates and
-  20 native NCBI GEO candidates, merges them by GSE accession, prefers the
-  richer local metadata, and records whether each result came from
-  Elasticsearch, NCBI, or both.
+- **Unified retrieval** concurrently gathers up to 100 Elasticsearch candidates
+  and up to 100 native NCBI GEO candidates, merges them by GSE accession,
+  prefers the richer local metadata, and records whether each result came from
+  Elasticsearch, NCBI, or both. The local pool has a floor of 40 and grows with
+  the caller's requested result limit before both sources reach their cap.
 - **LLM reranking** uses GPT-5.6 Luna with low reasoning effort to select and
   order the final top 10 from the merged candidate set. Exact GSE accession
   lookups normalize the identifier, check the local index first, fall back to
@@ -229,6 +230,28 @@ queries retain Elasticsearch ordering if an optional NCBI or LLM call fails.
 Because this is implemented in the shared MCP/search layer, the website and MCP
 clients receive the same final top 10 rather than maintaining separate ranking
 logic.
+
+NCBI-only results are partial live records, not canonical documents ingested
+online into Elasticsearch. They can participate in the final ranking, but
+fields absent from the E-utilities summary remain explicitly unavailable.
+
+The checked-in evaluation corpus compares an Elasticsearch-only baseline with
+the unified GPT-5.6 Luna run. It reports candidate Recall@40, final nDCG@10 and
+MRR, constraint violations, NCBI-only recovery, latency, fallback rate, token
+usage, and cost using caller-supplied current prices. Production should start
+with `GEO_RERANK_ENABLED=false`; enabling it requires `OPENAI_API_KEY`, and
+startup rejects an enabled configuration without the key or with an unsupported
+model, reasoning effort, candidate bound, or timeout.
+
+Our staged decision rule is evidence-driven: improve candidate generation when
+relevant studies are absent from the candidate pool; tune reranking when they
+are present but misordered; and add query understanding only if unmodified NCBI
+recall or explicit constraint handling remains inadequate after reranker
+evaluation. The current integration uses the official
+[GPT-5.6 Luna model](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+and the Responses API
+[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+contract. A different reranking model can be evaluated as a separate migration.
 
 ### Ontology-normalization experiments
 

@@ -67,6 +67,34 @@ services:
         value: "${GEMINI_API_KEY}"
         scope: RUN_TIME
         type: SECRET
+      - key: OPENAI_API_KEY
+        value: "${OPENAI_API_KEY}"
+        scope: RUN_TIME
+        type: SECRET
+      - key: GEO_RERANK_ENABLED
+        value: "${GEO_RERANK_ENABLED}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_RERANK_MODEL
+        value: "${GEO_RERANK_MODEL}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_RERANK_REASONING_EFFORT
+        value: "${GEO_RERANK_REASONING_EFFORT}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_RERANK_CANDIDATE_LIMIT
+        value: "${GEO_RERANK_CANDIDATE_LIMIT}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_RERANK_TIMEOUT_SECONDS
+        value: "${GEO_RERANK_TIMEOUT_SECONDS}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_NCBI_TIMEOUT_SECONDS
+        value: "${GEO_NCBI_TIMEOUT_SECONDS}"
+        scope: RUN_TIME
+        type: GENERAL
       - key: GEO_MCP_PUBLIC_BASE_URL
         value: https://geoscope.kevinformatics.com
         scope: RUN_TIME

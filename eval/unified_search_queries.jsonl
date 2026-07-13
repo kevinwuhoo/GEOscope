@@ -1,0 +1,8 @@
+{"query_id":"exact_gse_310900","query":"GSE310900","filters":{},"judgments":{"GSE310900":3},"constraints":{}}
+{"query_id":"mouse_endurance_insulin","query":"mouse skeletal muscle gene expression after endurance exercise in insulin resistance","filters":{},"judgments":{"GSE11803":3,"GSE302911":2,"GSE126001":2,"GSE178262":2},"constraints":{"organism_ids":["NCBITaxon:10090"]}}
+{"query_id":"human_breast_neoadjuvant","query":"human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data","filters":{},"judgments":{"GSE310900":3},"constraints":{"organism_ids":["NCBITaxon:9606"]}}
+{"query_id":"control_childhood_malaria","query":"whole blood transcriptomics of children with severe malaria","filters":{},"judgments":{"GSE1124":3},"constraints":{}}
+{"query_id":"human_tumor_exhausted_t_cells","query":"single-cell RNA sequencing of exhausted CD8 T cells in human solid tumors","filters":{"organism_ids":["NCBITaxon:9606"],"assay_labels":["scRNA-seq"]},"judgments":{"GSE244433":3,"GSE335452":3},"constraints":{"organism_ids":["NCBITaxon:9606"],"assay_labels":["scRNA-seq"]}}
+{"query_id":"mouse_brain_spatial_injury","query":"spatial transcriptomics of mouse hippocampus after traumatic brain injury","filters":{"organism_ids":["NCBITaxon:10090"]},"judgments":{"GSE282909":3,"GSE230253":2,"GSE101901":2},"constraints":{"organism_ids":["NCBITaxon:10090"]}}
+{"query_id":"crispr_interferon_t_cells","query":"CRISPR knockout screen for regulators of interferon response in T cells","filters":{},"judgments":{"GSE140717":3,"GSE144142":2,"GSE199813":2},"constraints":{}}
+{"query_id":"ncbi_zero_control","query":"zzqxjv nonlexical geoscope retrieval sentinel","filters":{},"judgments":{},"constraints":{},"expected_ncbi_count":0}

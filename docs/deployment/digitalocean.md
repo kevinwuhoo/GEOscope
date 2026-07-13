@@ -117,7 +117,7 @@ ${EDITOR:-vi} deploy/app-platform.env
 set -a
 . ./deploy/app-platform.env
 set +a
-envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY}' \
+envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${OPENAI_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_REASONING_EFFORT} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
   <.do/app.yaml.tmpl >.do/app.yaml
 doctl apps spec validate .do/app.yaml
 doctl apps list --format ID,Spec.Name,DefaultIngress
@@ -135,6 +135,50 @@ Set Google Gemini project quotas to at most 60 embedding requests/minute and
 The anonymous demo uses one process-wide token bucket at 100 requests/second
 with burst 100, plus a 20-request concurrency cap. These are global safeguards,
 not per-user quotas. MCP request bodies remain capped at 256 KB.
+
+### Safe unified-search rollout
+
+Deploy first with `GEO_RERANK_ENABLED=false`. The shared search layer still
+retrieves up to 100 Elasticsearch and 100 NCBI candidates, merges them, and
+falls back to deterministic Elasticsearch-first ordering without calling the
+reranker. NCBI-only results are partial live records from E-utilities, not
+online-ingested canonical Elasticsearch documents; unavailable metadata stays
+marked unavailable.
+
+Startup validates the complete search-quality configuration. Enabling
+reranking requires `OPENAI_API_KEY`; an absent key, a model other than
+`gpt-5.6-luna`, reasoning effort other than `low`, or an invalid candidate or
+timeout bound prevents startup. Keep the OpenAI key in App Platform as a secret
+and never write it to the generated spec or a report.
+
+With live Elasticsearch and NCBI access configured, explicitly opt in to the
+provider smoke and then record baseline versus Luna metrics. Supply current
+prices at run time rather than committing a price assumption:
+
+```bash
+GEO_TEST_OPENAI=1 uv run pytest \
+  tests/test_reranker_live.py -m provider_integration -q
+
+GEO_RERANK_ENABLED=true uv run geo-search-eval \
+  eval/unified_search_queries.jsonl \
+  --output eval/unified_search_report.json \
+  --compare-baseline \
+  --input-cost-per-million "$CURRENT_LUNA_INPUT_COST_PER_MILLION" \
+  --output-cost-per-million "$CURRENT_LUNA_OUTPUT_COST_PER_MILLION"
+```
+
+Keep `eval/unified_search_report.json` uncommitted until its values are reviewed.
+Enable reranking only after the baseline versus Luna Recall@40, nDCG@10, MRR,
+constraint violations, NCBI-only recovery, p50/p95 latency, fallback rate,
+token use, and estimated cost are recorded. Improve candidate generation when
+relevant records are absent; tune reranking when they are present but
+misordered; propose query understanding only when unmodified NCBI recall or
+explicit constraint handling remains inadequate after that evaluation.
+
+The integration follows the official
+[GPT-5.6 Luna model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+and the Responses API
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 ## 4. DNS and public verification
 

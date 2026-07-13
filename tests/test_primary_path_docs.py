@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 
@@ -91,3 +92,59 @@ def test_canonical_production_pipeline_is_gemini_only_and_operational() -> None:
         "wiki/21-Ingestion-Pipeline.md",
     ):
         assert "[[57-Canonical-Production-Pipeline]]" in _read(path), path
+
+
+def test_unified_search_rollout_is_documented_and_configurable() -> None:
+    required_environment = (
+        "OPENAI_API_KEY=",
+        "GEO_RERANK_ENABLED=false",
+        "GEO_RERANK_MODEL=gpt-5.6-luna",
+        "GEO_RERANK_REASONING_EFFORT=low",
+        "GEO_RERANK_CANDIDATE_LIMIT=40",
+        "GEO_RERANK_TIMEOUT_SECONDS=8",
+        "GEO_NCBI_TIMEOUT_SECONDS=5",
+    )
+    for path in ("deploy/geo-mcp.env.example", "deploy/app-platform.env.example"):
+        environment = _read(path)
+        for setting in required_environment:
+            assert setting in environment, f"{path}: {setting}"
+
+    deployment = _read("docs/deployment/digitalocean.md")
+    for phrase in (
+        "GEO_RERANK_ENABLED=false",
+        "GEO_TEST_OPENAI=1",
+        "geo-search-eval",
+        "partial live records",
+        "baseline versus Luna",
+        "up to 100 Elasticsearch and 100 NCBI candidates",
+    ):
+        assert phrase in deployment, phrase
+
+    readme = _read("README.md")
+    for phrase in (
+        "up to 100 Elasticsearch candidates",
+        "up to 100 native NCBI GEO candidates",
+        "GPT-5.6 Luna",
+        "query understanding",
+        "Structured Outputs",
+    ):
+        assert phrase in readme, phrase
+
+    project = tomllib.loads(_read("pyproject.toml"))
+    assert project["project"]["scripts"]["geo-search-eval"] == (
+        "geo_index.search_eval:main"
+    )
+    markers = project["tool"]["pytest"]["ini_options"]["markers"]
+    assert any(marker.startswith("provider_integration:") for marker in markers)
+
+    app_spec = _read(".do/app.yaml.tmpl")
+    for key in (
+        "OPENAI_API_KEY",
+        "GEO_RERANK_ENABLED",
+        "GEO_RERANK_MODEL",
+        "GEO_RERANK_REASONING_EFFORT",
+        "GEO_RERANK_CANDIDATE_LIMIT",
+        "GEO_RERANK_TIMEOUT_SECONDS",
+        "GEO_NCBI_TIMEOUT_SECONDS",
+    ):
+        assert f"key: {key}" in app_spec, key
