@@ -14,7 +14,7 @@ credentialed and reachable only on Droplet loopback and the private VPC.
 | VPC/datacenter | `default-sfo3` / `sfo3` |
 | Public domain | `geoscope.kevinformatics.com` |
 | Elasticsearch | `9.4.2`, index `geo-series` |
-| Required corpus | `249736` documents and Gemini vectors |
+| Required corpus | `288904` documents and Gemini vectors |
 
 The Droplet keeps its provider-assigned public address because an existing
 standard Droplet cannot be converted to private-only. Elasticsearch is never
@@ -89,9 +89,9 @@ uv run geo-elasticsearch-load \
 jq -e '
   .server_version == "9.4.2" and
   .mapping_revision == "geo-series-v1" and
-  .document_count == 249736 and
+  .document_count == 288904 and
   .failures == [] and
-  .vector_coverage.embedding_gemini_3072 == 249736
+  .vector_coverage.embedding_gemini_3072 == 288904
 ' data/processed/elasticsearch_load_report.production.json
 ```
 

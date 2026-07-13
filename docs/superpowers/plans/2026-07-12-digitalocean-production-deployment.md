@@ -4,7 +4,7 @@
 
 **Goal:** Serve the complete GEOscope corpus at `https://geoscope.kevinformatics.com` through one anonymous App Platform FastAPI/FastMCP service backed by a private, dedicated Elasticsearch Droplet.
 
-**Architecture:** One slim ASGI container serves the React build, browser API, health endpoints, and a mounted anonymous FastMCP endpoint. DigitalOcean App Platform runs that stateless container in `sfo` and reaches a pinned single-node Elasticsearch 9.4.2 container at `10.124.0.2` over the `default-sfo3` VPC. The initial 249,736-document index is streamed from the existing local canonical records and embedding artifacts through an SSH tunnel to the Droplet's loopback listener.
+**Architecture:** One slim ASGI container serves the React build, browser API, health endpoints, and a mounted anonymous FastMCP endpoint. DigitalOcean App Platform runs that stateless container in `sfo` and reaches a pinned single-node Elasticsearch 9.4.2 container at `10.124.0.2` over the `default-sfo3` VPC. The initial 288,904-document index is streamed from the existing local canonical records and Gemini embedding artifact through an SSH tunnel to the Droplet's loopback listener.
 
 **Tech Stack:** Python 3.11, FastAPI, FastMCP 3, Uvicorn, React 19, Vite 8, pnpm, Elasticsearch 9.4.2, Docker Compose, DigitalOcean App Platform, Ubuntu 24.04, pytest, Vitest.
 
@@ -744,7 +744,7 @@ Expected: `/healthz` returns 200, `/readyz` returns 503 while the index is empty
 - Use: `data/processed/embedding_artifacts`
 
 **Interfaces:**
-- Consumes: the local 249,736 canonical documents and four aligned registered vector artifacts.
+- Consumes: the local 288,904 canonical documents and aligned Gemini vector artifact.
 - Produces: a live `geo-series` index with mapping revision `geo-series-v1` and complete Gemini vector coverage.
 
 - [ ] **Step 1: Start a resilient SSH tunnel**
@@ -770,7 +770,7 @@ set +a
 ELASTICSEARCH_URL=http://127.0.0.1:9201 uv run geo-elasticsearch-load
 ```
 
-Expected: loader reports `attempted=249736`, `succeeded=249736`, no failures, and index `geo-series`.
+Expected: loader reports `attempted=288904`, `succeeded=288904`, no failures, and index `geo-series`.
 
 - [ ] **Step 3: Run the primary audit through the tunnel**
 
@@ -794,7 +794,7 @@ finally:
 '
 ```
 
-Expected: document count 249,736; mapping revision `geo-series-v1`; `embedding_gemini_3072` coverage 249,736; cluster yellow or green with no initializing shards.
+Expected: document count 288,904; mapping revision `geo-series-v1`; `embedding_gemini_3072` coverage 288,904; cluster yellow or green with no initializing shards.
 
 - [ ] **Step 4: Restart Elasticsearch and prove persistence**
 

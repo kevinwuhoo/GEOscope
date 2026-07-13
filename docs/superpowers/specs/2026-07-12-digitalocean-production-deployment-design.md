@@ -180,7 +180,7 @@ without opening 9200 publicly.
 
 ## Full-corpus initialization
 
-The deployment contains all 249,736 currently audited GEO series. The existing
+The deployment contains all 288,904 currently audited GEO series. The existing
 local canonical records and aligned embedding artifacts remain the source of
 truth for the first load; the 264 GiB raw workspace is not copied to the
 Droplet.
@@ -193,7 +193,7 @@ Initial loading uses this flow:
    loopback Elasticsearch listener.
 3. Run the existing idempotent Elasticsearch loader locally against the
    forwarded endpoint, streaming canonical documents and registered vectors.
-4. Run the existing index audit and require exactly 249,736 documents, the
+4. Run the existing index audit and require exactly 288,904 documents, the
    expected mapping revision, and complete `embedding_gemini_3072` coverage.
 5. Exercise BM25, dense, hybrid, exact lookup, filters, and facets through the
    private endpoint before enabling the public application.
@@ -255,7 +255,7 @@ Implementation is accepted only after:
   applies persistent data and host settings, and contains no container resource
   cap;
 - restarting and replacing the Elasticsearch container preserves the index;
-- the live audit reports 249,736 documents and complete Gemini vector coverage;
+- the live audit reports 288,904 documents and complete Gemini vector coverage;
 - public `/healthz`, `/readyz`, website, browser search, and anonymous MCP tool
   calls work at `https://geoscope.kevinformatics.com`;
 - a dense or hybrid request successfully reaches Gemini and private
