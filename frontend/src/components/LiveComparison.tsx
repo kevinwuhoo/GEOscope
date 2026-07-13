@@ -10,6 +10,12 @@ const examples = [
 ];
 
 
+function ncbiGeoSearchUrl(query: string) {
+  const params = new URLSearchParams({ term: `${query} AND gse[ETYP]` });
+  return `https://www.ncbi.nlm.nih.gov/gds/?${params.toString()}`;
+}
+
+
 function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?: boolean }) {
   const title = result.title ?? "Untitled NCBI GEO series";
   return (
@@ -107,9 +113,12 @@ export function LiveComparison() {
     <section className="section live-demo" id="live-demo" aria-labelledby="demo-title">
       <div className="demo-intro">
         <div>
-          <h2 id="demo-title">Compare retrieval, result by result.</h2>
+          <h2 id="demo-title">Search the same research question two ways.</h2>
         </div>
-        <p>See the difference for yourself. GEOscope results on the left, NCBI GEO results on the right.</p>
+        <p>
+          Enter a research question, then compare GEOscope’s hybrid metadata search
+          with the literal keyword results from NCBI GEO.
+        </p>
       </div>
 
       <form className="search-console" role="search" onSubmit={runSearch}>
@@ -150,7 +159,16 @@ export function LiveComparison() {
             </div>
             <div className="result-column__header result-column__header--native">
               <div><span className="source-shape source-shape--geo" />NCBI GEO keyword search</div>
-              <span>{data.geo.count === null ? "unavailable" : `${data.geo.count.toLocaleString()} total`}</span>
+              <div className="native-search-actions">
+                <span>{data.geo.count === null ? "unavailable" : `${data.geo.count.toLocaleString()} total`}</span>
+                <a
+                  href={ncbiGeoSearchUrl(data.query)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open this search on NCBI GEO ↗
+                </a>
+              </div>
             </div>
           </div>
           <div className="comparison-results">
