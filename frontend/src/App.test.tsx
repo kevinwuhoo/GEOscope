@@ -305,7 +305,7 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
     screen.getByText(/found by both geoscope and displayed ncbi results/i),
   ).toBeInTheDocument();
   expect(
-    screen.getByText(/not in the displayed ncbi top 20/i),
+    screen.getByText(/not in this ncbi candidate set \(up to 100\)/i),
   ).toBeInTheDocument();
   const pair = screen.getByText("GSE123").closest(".comparison-row");
   expect(pair).not.toBeNull();

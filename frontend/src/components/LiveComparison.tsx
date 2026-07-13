@@ -43,7 +43,7 @@ function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?:
           )}
           {inNative === false && (
             <span className="result-source-badge result-source-badge--miss">
-              Not in the displayed NCBI top 20
+              Not in this NCBI candidate set (up to 100)
             </span>
           )}
         </div>

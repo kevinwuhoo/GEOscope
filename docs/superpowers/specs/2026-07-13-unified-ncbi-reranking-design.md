@@ -108,7 +108,7 @@ filters but request a deeper pool for reranking.
 Run a live E-utilities search for the same user query, restricted to GEO Series,
 concurrently with Elasticsearch retrieval.
 
-- Request up to 20 native candidates for natural-language queries.
+- Request up to 100 native candidates for natural-language queries.
 - Preserve native order and total count for the marketing comparison.
 - Fetch ESummary metadata required for candidate display and reranking.
 - Normalize taxon and study-type values through existing deterministic
@@ -267,8 +267,8 @@ The marketing demo uses the same final ranked results as MCP and requests ten by
 default. Its right-hand native GEO column uses the native candidate list from
 the same shared execution; it must not issue another NCBI request. Membership
 badges are derived from the shared native candidate/accession data rather than a
-separate membership query. Because only the top 20 native candidates are
-fetched, the UI must describe absence as "not in the displayed NCBI top 20" and
+separate membership query. Because at most 100 native candidates are fetched,
+the UI must describe absence as "not in this NCBI candidate set (up to 100)" and
 must not claim that a record is absent from the complete native result set. The
 UI identifies NCBI-only results in the final GEOscope column so partial metadata
 is understandable.

@@ -157,3 +157,6 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
     assert "Sonnet 5 migration is deferred until after the Luna baseline" in (
         internal_design
     )
+    assert "Request up to 100 native candidates" in internal_design
+    assert "not in this NCBI candidate set (up to 100)" in internal_design
+    assert "top 20" not in internal_design
