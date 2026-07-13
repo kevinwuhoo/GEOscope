@@ -501,6 +501,27 @@ def test_exhausted_budget_raises_safe_timeout_without_another_call() -> None:
     assert "provider" not in str(captured.value).lower()
 
 
+def test_payload_construction_consumes_deadline_before_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+    original = reranker_module._provider_message
+
+    def slow_provider_message(*args: object, **kwargs: object) -> str:
+        clock.advance(5)
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reranker_module, "_provider_message", slow_provider_message)
+    client = Client(message([{"gse": "GSE1", "relevance_score": 91}]))
+
+    with pytest.raises(TimeoutError, match="reranker request timed out"):
+        make_reranker(
+            client, timeout_seconds=5, clock=clock
+        ).rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert client.messages.call_count == 0
+
+
 @pytest.mark.parametrize("status_code", [408, 409, 429, 500, 529, 599])
 def test_retryable_http_status_receives_one_retry(status_code: int) -> None:
     client = ScriptedClient(
@@ -546,8 +567,14 @@ def test_reranker_bounds_candidate_text_before_the_provider_call() -> None:
     assert len(payload["candidates"][0]["summary"]) == 800
 
 
-def test_worst_case_union_uses_compact_message_within_exact_byte_budget() -> None:
+def test_compact_message_retains_complete_organism_evidence_and_every_gse() -> None:
     long_value = "🧬" * 256
+    matching_ids = (
+        "NCBITaxon:10090",
+        "NCBITaxon:10116",
+        "NCBITaxon:9606",
+    )
+    full_taxon = "Homo sapiens " + ("human taxon evidence " * 8)
     candidates = tuple(
         replace(
             candidate(f"GSE{index}", index)
@@ -556,8 +583,8 @@ def test_worst_case_union_uses_compact_message_within_exact_byte_budget() -> Non
             title="🧬" * 500,
             snippet="🧬" * 1_000,
             study_type="🧬" * 200,
-            organism_ids=tuple(long_value for _ in range(100)),
-            taxon="🧬" * 256,
+            organism_ids=(matching_ids if index == 1 else ("NCBITaxon:10090",)),
+            taxon=(full_taxon if index == 1 else "Mus musculus"),
             assay_categories=tuple(long_value for _ in range(100)),
             assay_labels=tuple(long_value for _ in range(100)),
         )
@@ -581,10 +608,13 @@ def test_worst_case_union_uses_compact_message_within_exact_byte_budget() -> Non
     assert isinstance(content, str)
     assert len(content.encode("utf-8")) <= 1_000_000
     payload = json.loads(content)
+    assert payload["representation"] == "compact"
     supplied_ids = [item.gse for item in candidates]
     retained_ids = [item["gse"] for item in payload["candidates"]]
     assert retained_ids == supplied_ids
     assert len(retained_ids) == len(set(retained_ids)) == 200
+    assert payload["candidates"][0]["organism_ids"] == list(matching_ids)
+    assert payload["candidates"][0]["taxon"] == full_taxon
     assert all(
         item["organism_ids"]
         and item["assay_categories"]
@@ -592,6 +622,30 @@ def test_worst_case_union_uses_compact_message_within_exact_byte_budget() -> Non
         and item["source"] in {"elasticsearch", "ncbi"}
         for item in payload["candidates"]
     )
+
+
+def test_complete_organism_evidence_that_cannot_fit_skips_provider() -> None:
+    maximum_organism_id = "NCBITaxon:" + ("1" * 246)
+    organism_ids = tuple(maximum_organism_id for _ in range(100))
+    candidates = tuple(
+        replace(
+            candidate(f"GSE{index}", index)
+            if index <= 100
+            else ncbi_candidate(f"GSE{index}", index - 100),
+            organism_ids=organism_ids,
+            taxon="t" * 256,
+            assay_categories=("transcriptomics",),
+            assay_labels=("RNA-seq",),
+        )
+        for index in range(1, 201)
+    )
+    client = Client(message([]))
+
+    with pytest.raises(RerankInputTooLargeError) as captured:
+        make_reranker(client).rerank("human studies", candidates, limit=50)
+
+    assert str(captured.value) == "reranker input exceeds size limit"
+    assert client.messages.call_count == 0
 
 
 def test_identifiers_that_cannot_fit_fail_safely_before_provider_call() -> None:

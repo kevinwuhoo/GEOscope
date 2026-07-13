@@ -71,7 +71,7 @@ class InvalidRerankOutputError(RerankResponseError):
 
 
 class RerankInputTooLargeError(ValueError):
-    """The bounded provider message cannot retain all candidate identifiers."""
+    """The bounded provider message cannot retain complete safe evidence."""
 
 
 class RankingItem(BaseModel):
@@ -123,10 +123,8 @@ def _compact_candidate_payload(candidate: SearchCandidate) -> dict[str, object]:
         "title": _compact_text(candidate.title, 160),
         "summary": _compact_text(candidate.snippet, 256),
         "study_type": _compact_text(candidate.study_type, 80),
-        "organism_ids": _compact_array(
-            candidate.organism_ids, items=2, characters=64
-        ),
-        "taxon": _compact_text(candidate.taxon, 80),
+        "organism_ids": list(candidate.organism_ids),
+        "taxon": candidate.taxon,
         "assay_categories": _compact_array(
             candidate.assay_categories, items=2, characters=64
         ),
@@ -169,16 +167,6 @@ def _provider_message(
     if len(compact.encode("utf-8")) <= MAX_PROVIDER_INPUT_BYTES:
         return compact
 
-    identifiers = _serialize_payload(
-        {
-            "query": compact_query,
-            "requested_results": limit,
-            "representation": "identifiers",
-            "candidates": [{"gse": candidate.gse} for candidate in candidates],
-        }
-    )
-    if len(identifiers.encode("utf-8")) <= MAX_PROVIDER_INPUT_BYTES:
-        return identifiers
     raise RerankInputTooLargeError("reranker input exceeds size limit")
 
 
@@ -257,17 +245,21 @@ class AnthropicReranker:
     def rerank(
         self, query: str, candidates: Sequence[SearchCandidate], *, limit: int
     ) -> RerankResult:
+        deadline = self._clock() + self._timeout_seconds
         if not candidates:
             return RerankResult(scores={}, input_tokens=0, output_tokens=0)
         if not 1 <= limit <= 50:
             raise ValueError("rerank result limit must be between 1 and 50")
+        content = _provider_message(query, candidates, limit=limit)
+        if self._clock() >= deadline:
+            raise TimeoutError("reranker request timed out")
         request = {
             "model": self.model,
             "system": _INSTRUCTIONS,
             "messages": [
                 {
                     "role": "user",
-                    "content": _provider_message(query, candidates, limit=limit),
+                    "content": content,
                 }
             ],
             "thinking": {"type": self.thinking},
@@ -280,7 +272,6 @@ class AnthropicReranker:
             },
             "max_tokens": min(8_000, max(1_000, len(candidates) * 40)),
         }
-        deadline = self._clock() + self._timeout_seconds
         response: object | None = None
         for attempt in range(2):
             remaining = deadline - self._clock()
