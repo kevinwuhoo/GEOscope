@@ -152,8 +152,9 @@ class FakeNativeSource:
 
 
 class FakeReranker:
-    model = "gpt-5.6-luna"
+    model = "claude-sonnet-5"
     reasoning_effort = "low"
+    thinking = "disabled"
 
     def __init__(
         self,
@@ -323,7 +324,7 @@ def _service(
         return domain
 
     active_quality = quality or SearchQualitySettings(
-        openai_api_key="test-key" if reranker is not None else None,
+        anthropic_api_key="test-key" if reranker is not None else None,
         rerank_enabled=reranker is not None,
     )
 
@@ -396,7 +397,9 @@ def test_reranker_startup_failure_closes_ncbi_and_client() -> None:
     events: list[str] = []
     client = _Client(close_events=events)
     native = FakeNativeSource(close_events=events)
-    quality = SearchQualitySettings(openai_api_key="test-key", rerank_enabled=True)
+    quality = SearchQualitySettings(
+        anthropic_api_key="test-key", rerank_enabled=True
+    )
     service = McpSearchService(
         elasticsearch=SETTINGS,
         client_factory=lambda settings: client,
@@ -418,6 +421,39 @@ def test_reranker_startup_failure_closes_ncbi_and_client() -> None:
     assert not service.is_open
     assert service._ncbi_source is None
     assert service._reranker is None
+
+
+def test_default_reranker_factory_constructs_approved_sonnet_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: dict[str, object] = {}
+    reranker = FakeReranker()
+
+    def reranker_factory(**kwargs: object) -> FakeReranker:
+        constructed.update(kwargs)
+        return reranker
+
+    monkeypatch.setattr(
+        mcp_search, "AnthropicReranker", reranker_factory, raising=False
+    )
+    quality = SearchQualitySettings(
+        anthropic_api_key="test-anthropic-key",
+        rerank_enabled=True,
+        rerank_timeout_seconds=3.5,
+    )
+    service, _, _, _, _ = _service(quality=quality)
+
+    service.open()
+
+    assert constructed == {
+        "api_key": "test-anthropic-key",
+        "model": "claude-sonnet-5",
+        "reasoning_effort": "low",
+        "thinking": "disabled",
+        "timeout_seconds": 3.5,
+    }
+    service.close()
+    assert reranker.closed
 
 
 def test_close_attempts_every_resource_when_reranker_close_fails() -> None:
@@ -511,8 +547,9 @@ def test_close_waits_for_inflight_search_and_rejects_new_operations() -> None:
     provenance = executions[0].output.provenance
     assert provenance.rerank_attempted is True
     assert provenance.rerank_applied is True
-    assert provenance.rerank_model == "gpt-5.6-luna"
+    assert provenance.rerank_model == "claude-sonnet-5"
     assert provenance.rerank_reasoning_effort == "low"
+    assert provenance.rerank_thinking == "disabled"
     assert reranker.closed
     assert native.closed
     assert encoder.closed
@@ -617,6 +654,8 @@ def test_exact_indexed_gse_bypasses_embedding_search_ncbi_and_reranking() -> Non
     assert service._reranker.rerank_calls == []
     assert output.retrieval_version == "geo-series-v1:exact-accession"
     assert output.embedding_variant is None
+    assert output.provenance.rerank_model is None
+    assert output.provenance.rerank_thinking is None
 
 
 def test_exact_gse_missing_locally_uses_ncbi_without_reranking() -> None:
@@ -728,8 +767,10 @@ def test_natural_search_requests_deep_pool_merges_and_reranks_top_ten() -> None:
     assert execution.output.results[0].source == "ncbi"
     assert execution.output.results[0].score == 100
     assert execution.output.provenance.rerank_applied is True
-    assert execution.output.provenance.rerank_model == "gpt-5.6-luna"
+    assert execution.output.provenance.rerank_attempted is True
+    assert execution.output.provenance.rerank_model == "claude-sonnet-5"
     assert execution.output.provenance.rerank_reasoning_effort == "low"
+    assert execution.output.provenance.rerank_thinking == "disabled"
     assert execution.output.provenance.rerank_input_tokens == 123
     assert execution.output.provenance.rerank_output_tokens == 45
     assert execution.native is native.search_result
@@ -739,7 +780,7 @@ def test_natural_search_requests_deep_pool_merges_and_reranks_top_ten() -> None:
 def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
     service, _, _, _, _ = _service(
         native=FakeNativeSource(error=TimeoutError("NCBI timeout")),
-        reranker=FakeReranker(error=RuntimeError("OpenAI unavailable")),
+        reranker=FakeReranker(error=RuntimeError("Anthropic unavailable")),
     )
     service.open()
 
@@ -750,7 +791,9 @@ def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
     assert [result.original_rank for result in output.results] == list(range(1, 11))
     assert output.provenance.rerank_applied is False
     assert output.provenance.rerank_attempted is True
-    assert output.provenance.rerank_model == "gpt-5.6-luna"
+    assert output.provenance.rerank_model == "claude-sonnet-5"
+    assert output.provenance.rerank_reasoning_effort == "low"
+    assert output.provenance.rerank_thinking == "disabled"
     assert output.provenance.rerank_input_tokens == 0
     assert output.provenance.rerank_output_tokens == 0
     assert output.provenance.degradation == ["ncbi_timeout", "rerank_error"]

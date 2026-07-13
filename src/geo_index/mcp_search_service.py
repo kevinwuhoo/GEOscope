@@ -14,7 +14,6 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 
 import httpx
 import numpy as np
-from openai import APITimeoutError
 from pydantic import ValidationError
 
 from .elasticsearch_config import (
@@ -48,8 +47,8 @@ from .ncbi_search import (
     NcbiCandidateSource,
 )
 from .reranker import (
+    AnthropicReranker,
     InvalidRerankOutputError,
-    OpenAIReranker,
     RerankRefusalError,
     RerankResult,
     RerankResponseError,
@@ -113,6 +112,7 @@ class NativeSource(Protocol):
 class CandidateReranker(Protocol):
     model: str
     reasoning_effort: str
+    thinking: str
 
     def rerank(
         self, query: str, candidates: Sequence[SearchCandidate], *, limit: int
@@ -174,7 +174,7 @@ def _ncbi_error_category(exc: BaseException) -> NativeError:
 
 
 def _rerank_error_category(exc: BaseException) -> DegradationCategory:
-    if _has_cause(exc, (APITimeoutError, TimeoutError, httpx.TimeoutException)):
+    if _has_cause(exc, (TimeoutError, httpx.TimeoutException)):
         return "rerank_timeout"
     if isinstance(exc, RerankRefusalError):
         return "rerank_refusal"
@@ -305,10 +305,11 @@ class McpSearchService:
             )
         )
         self._reranker_factory = reranker_factory or (
-            lambda settings: OpenAIReranker(
-                api_key=settings.openai_api_key or "",
+            lambda settings: AnthropicReranker(
+                api_key=settings.anthropic_api_key or "",
                 model=settings.rerank_model,
                 reasoning_effort=settings.reasoning_effort,
+                thinking=settings.thinking,
                 timeout_seconds=settings.rerank_timeout_seconds,
             )
         )
@@ -817,6 +818,7 @@ class McpSearchService:
                 rerank_applied=False,
                 rerank_model=None,
                 rerank_reasoning_effort=None,
+                rerank_thinking=None,
                 rerank_input_tokens=0,
                 rerank_output_tokens=0,
                 latency=SearchLatencyOutput(
@@ -974,6 +976,11 @@ class McpSearchService:
                 ),
                 rerank_reasoning_effort=(
                     cast(Any, self._reranker.reasoning_effort)
+                    if rerank_attempted and self._reranker
+                    else None
+                ),
+                rerank_thinking=(
+                    cast(Any, self._reranker.thinking)
                     if rerank_attempted and self._reranker
                     else None
                 ),

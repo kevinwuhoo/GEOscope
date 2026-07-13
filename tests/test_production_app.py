@@ -303,7 +303,7 @@ def test_default_factory_constructs_the_shared_quality_aware_service(
         "GEO_MCP_ALLOWED_HOSTS", "geoscope.kevinformatics.com"
     )
     monkeypatch.setenv("GEO_RERANK_ENABLED", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     monkeypatch.setattr(
         "geo_index.production_app.McpSearchService.from_settings", from_settings
     )
@@ -312,6 +312,6 @@ def test_default_factory_constructs_the_shared_quality_aware_service(
 
     assert app.state.search_service is constructed["service"]
     assert app.state.search_service.quality == SearchQualitySettings(
-        openai_api_key="test-openai-key",
+        anthropic_api_key="test-anthropic-key",
         rerank_enabled=True,
     )

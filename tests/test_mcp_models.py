@@ -88,8 +88,9 @@ def _provenance() -> SearchProvenanceOutput:
         merged_candidates=55,
         rerank_attempted=True,
         rerank_applied=True,
-        rerank_model="gpt-5.6-luna",
+        rerank_model="claude-sonnet-5",
         rerank_reasoning_effort="low",
+        rerank_thinking="disabled",
         rerank_input_tokens=1200,
         rerank_output_tokens=400,
         latency=SearchLatencyOutput(
@@ -159,6 +160,7 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
                 "rerank_applied": True,
                 "rerank_model": None,
                 "rerank_reasoning_effort": None,
+                "rerank_thinking": None,
             },
             id="applied-without-attempt",
         ),
@@ -168,6 +170,7 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
                 "rerank_applied": False,
                 "rerank_model": None,
                 "rerank_reasoning_effort": "low",
+                "rerank_thinking": "disabled",
             },
             id="attempt-without-model",
         ),
@@ -175,8 +178,9 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
             {
                 "rerank_attempted": False,
                 "rerank_applied": False,
-                "rerank_model": "gpt-5.6-luna",
+                "rerank_model": "claude-sonnet-5",
                 "rerank_reasoning_effort": None,
+                "rerank_thinking": None,
             },
             id="model-without-attempt",
         ),
@@ -184,8 +188,9 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
             {
                 "rerank_attempted": True,
                 "rerank_applied": False,
-                "rerank_model": "gpt-5.6-luna",
+                "rerank_model": "claude-sonnet-5",
                 "rerank_reasoning_effort": None,
+                "rerank_thinking": "disabled",
             },
             id="attempt-without-effort",
         ),
@@ -195,8 +200,29 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
                 "rerank_applied": False,
                 "rerank_model": None,
                 "rerank_reasoning_effort": "low",
+                "rerank_thinking": None,
             },
             id="effort-without-attempt",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": True,
+                "rerank_applied": False,
+                "rerank_model": "claude-sonnet-5",
+                "rerank_reasoning_effort": "low",
+                "rerank_thinking": None,
+            },
+            id="attempt-without-thinking",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": False,
+                "rerank_applied": False,
+                "rerank_model": None,
+                "rerank_reasoning_effort": None,
+                "rerank_thinking": "disabled",
+            },
+            id="thinking-without-attempt",
         ),
     ],
 )
@@ -205,6 +231,14 @@ def test_provenance_rejects_inconsistent_reranker_state(
 ) -> None:
     values = _provenance().model_dump()
     values.update(overrides)
+
+    with pytest.raises(ValidationError):
+        SearchProvenanceOutput(**values)
+
+
+def test_provenance_rejects_unapproved_rerank_thinking_value() -> None:
+    values = _provenance().model_dump()
+    values["rerank_thinking"] = "enabled"
 
     with pytest.raises(ValidationError):
         SearchProvenanceOutput(**values)

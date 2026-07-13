@@ -58,7 +58,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires the local GEO Postgres database",
     "elastic_integration: requires local Elasticsearch and GEO_TEST_ELASTIC=1",
-    "provider_integration: requires GEO_TEST_OPENAI=1 and live provider credentials",
+    "provider_integration: requires GEO_TEST_ANTHROPIC=1 and live provider credentials",
 ]
 
 [dependency-groups]

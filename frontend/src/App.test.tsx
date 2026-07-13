@@ -103,8 +103,9 @@ const demoResponse = {
       merged_candidates: 200,
       rerank_attempted: true,
       rerank_applied: true,
-      rerank_model: "gpt-5.6-luna",
+      rerank_model: "claude-sonnet-5",
       rerank_reasoning_effort: "low",
+      rerank_thinking: "disabled",
       rerank_input_tokens: 123,
       rerank_output_tokens: 45,
       latency: {

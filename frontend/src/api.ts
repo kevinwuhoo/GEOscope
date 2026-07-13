@@ -40,6 +40,7 @@ const provenanceSchema = z.object({
   rerank_applied: z.boolean(),
   rerank_model: z.string().min(1).max(256).nullable(),
   rerank_reasoning_effort: z.literal("low").nullable(),
+  rerank_thinking: z.literal("disabled").nullable(),
   rerank_input_tokens: z.number().int().nonnegative(),
   rerank_output_tokens: z.number().int().nonnegative(),
   latency: z.object({

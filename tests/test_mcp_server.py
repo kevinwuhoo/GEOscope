@@ -80,6 +80,7 @@ def _provenance() -> SearchProvenanceOutput:
         rerank_applied=False,
         rerank_model=None,
         rerank_reasoning_effort=None,
+        rerank_thinking=None,
         rerank_input_tokens=0,
         rerank_output_tokens=0,
         latency=SearchLatencyOutput(

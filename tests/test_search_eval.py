@@ -145,8 +145,9 @@ def _execution(
             merged_candidates=len(candidates),
             rerank_attempted=rerank_attempted,
             rerank_applied=rerank_applied,
-            rerank_model="gpt-5.6-luna" if rerank_attempted else None,
+            rerank_model="claude-sonnet-5" if rerank_attempted else None,
             rerank_reasoning_effort="low" if rerank_attempted else None,
+            rerank_thinking="disabled" if rerank_attempted else None,
             rerank_input_tokens=tokens[0],
             rerank_output_tokens=tokens[1],
             latency=SearchLatencyOutput(
@@ -223,7 +224,7 @@ def _write_cases(path: Path) -> None:
     )
 
 
-def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
+def test_evaluation_compares_baseline_and_sonnet_with_candidate_and_final_metrics(
     tmp_path: Path,
 ) -> None:
     cases_path = tmp_path / "cases.jsonl"
@@ -245,7 +246,7 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
             ),
         }
     )
-    luna = _Service(
+    sonnet = _Service(
         {
             "candidate recall query": _execution(
                 query="candidate recall query",
@@ -289,7 +290,7 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
         compare_baseline=True,
         input_cost_per_million=1.0,
         output_cost_per_million=2.0,
-        service_factories={"baseline": lambda: baseline, "luna": lambda: luna},
+        service_factories={"baseline": lambda: baseline, "sonnet": lambda: sonnet},
     )
 
     persisted = json.loads(output_path.read_text(encoding="utf-8"))
@@ -299,16 +300,18 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
         "ncbi": 100,
         "merged": 200,
     }
-    assert set(report["runs"]) == {"baseline", "luna"}
+    assert set(report["runs"]) == {"baseline", "sonnet"}
     assert report["runs"]["baseline"]["configuration"] == {
         "rerank_enabled": False,
         "model": None,
         "reasoning_effort": None,
+        "thinking": None,
     }
-    assert report["runs"]["luna"]["configuration"] == {
+    assert report["runs"]["sonnet"]["configuration"] == {
         "rerank_enabled": True,
-        "model": "gpt-5.6-luna",
+        "model": "claude-sonnet-5",
         "reasoning_effort": "low",
+        "thinking": "disabled",
     }
     baseline_case = report["runs"]["baseline"]["cases"][0]
     assert baseline_case["candidate_ids"] == ["GSE1", "GSE2"]
@@ -321,38 +324,53 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
     assert baseline_aggregate["mean_recall_at_40"] == 1.0
     assert baseline_aggregate["mean_ndcg_at_10"] == 0.0
     assert baseline_aggregate["mean_mrr"] == 0.0
-    luna_aggregate = report["runs"]["luna"]["aggregate"]
-    assert luna_aggregate["constraint_violations"] == 1
-    assert luna_aggregate["ncbi_only_recovery"] == 1
-    assert luna_aggregate["native_count_mismatches"] == 1
-    assert luna_aggregate["fallback_rate"] == 0.5
-    assert luna_aggregate["rerank_attempted_count"] == 2
-    assert luna_aggregate["rerank_applied_count"] == 1
-    assert luna_aggregate["degradation_rate"] == 0.5
-    assert luna_aggregate["relevance_case_count"] == 1
-    assert luna_aggregate["mean_recall_at_40"] == 1.0
-    assert luna_aggregate["mean_ndcg_at_10"] == 1.0
-    assert luna_aggregate["mean_mrr"] == 1.0
-    assert luna_aggregate["rerank_input_tokens"] == 500
-    assert luna_aggregate["rerank_output_tokens"] == 100
-    assert luna_aggregate["estimated_cost"] == 0.0007
+    sonnet_aggregate = report["runs"]["sonnet"]["aggregate"]
+    assert sonnet_aggregate["constraint_violations"] == 1
+    assert sonnet_aggregate["ncbi_only_recovery"] == 1
+    assert sonnet_aggregate["native_count_mismatches"] == 1
+    assert sonnet_aggregate["fallback_rate"] == 0.5
+    assert sonnet_aggregate["rerank_attempted_count"] == 2
+    assert sonnet_aggregate["rerank_applied_count"] == 1
+    assert sonnet_aggregate["degradation_rate"] == 0.5
+    assert sonnet_aggregate["relevance_case_count"] == 1
+    assert sonnet_aggregate["mean_recall_at_40"] == 1.0
+    assert sonnet_aggregate["mean_ndcg_at_10"] == 1.0
+    assert sonnet_aggregate["mean_mrr"] == 1.0
+    assert sonnet_aggregate["rerank_input_tokens"] == 500
+    assert sonnet_aggregate["rerank_output_tokens"] == 100
+    assert sonnet_aggregate["estimated_cost"] == 0.0007
     # Elasticsearch and NCBI retrieval run concurrently, so wall latency is the
     # slower source plus reranking rather than the sum of both source timings.
-    assert luna_aggregate["latency_ms"] == {"p50": 55.0, "p95": 59.5}
+    assert sonnet_aggregate["latency_ms"] == {"p50": 55.0, "p95": 59.5}
     assert baseline.open_calls == baseline.close_calls == 1
-    assert luna.open_calls == luna.close_calls == 1
-    assert all(call[2] == 10 for call in baseline.search_calls + luna.search_calls)
+    assert sonnet.open_calls == sonnet.close_calls == 1
+    assert all(call[2] == 10 for call in baseline.search_calls + sonnet.search_calls)
 
 
 @pytest.mark.parametrize(
     "quality_env",
     [
         {},
-        {"GEO_RERANK_ENABLED": "true", "OPENAI_API_KEY": "   "},
+        {"GEO_RERANK_ENABLED": "true"},
+        {
+            "GEO_RERANK_ENABLED": "true",
+            "ANTHROPIC_API_KEY": "test-anthropic-key",
+            "GEO_RERANK_MODEL": "claude-opus-4-1",
+        },
+        {
+            "GEO_RERANK_ENABLED": "true",
+            "ANTHROPIC_API_KEY": "test-anthropic-key",
+            "GEO_RERANK_EFFORT": "high",
+        },
+        {
+            "GEO_RERANK_ENABLED": "true",
+            "ANTHROPIC_API_KEY": "test-anthropic-key",
+            "GEO_RERANK_THINKING": "enabled",
+        },
     ],
-    ids=["disabled", "invalid-key"],
+    ids=["disabled", "missing-key", "wrong-model", "wrong-effort", "wrong-thinking"],
 )
-def test_default_luna_evaluation_rejects_disabled_or_invalid_configuration(
+def test_default_sonnet_evaluation_rejects_disabled_or_invalid_configuration(
     tmp_path: Path, quality_env: dict[str, str]
 ) -> None:
     cases_path = tmp_path / "cases.jsonl"
@@ -363,7 +381,7 @@ def test_default_luna_evaluation_rejects_disabled_or_invalid_configuration(
         **quality_env,
     }
 
-    with pytest.raises(ValueError, match="rerank|OPENAI_API_KEY"):
+    with pytest.raises(ValueError, match="rerank|ANTHROPIC_API_KEY|GEO_RERANK"):
         run_evaluation(
             cases_path=cases_path,
             output_path=tmp_path / "report.json",
@@ -376,7 +394,7 @@ def test_default_luna_evaluation_rejects_disabled_or_invalid_configuration(
     assert not (tmp_path / "report.json").exists()
 
 
-def test_default_luna_evaluation_requires_at_least_one_actual_rerank_attempt(
+def test_default_sonnet_evaluation_requires_at_least_one_actual_rerank_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cases_path = tmp_path / "cases.jsonl"
@@ -404,14 +422,14 @@ def test_default_luna_evaluation_requires_at_least_one_actual_rerank_attempt(
             )
         },
         quality=SearchQualitySettings(
-            openai_api_key="sk-test-key",
+            anthropic_api_key="test-anthropic-key",
             rerank_enabled=True,
         ),
     )
     monkeypatch.setattr(
         search_eval_module,
         "_default_service_factories",
-        lambda **kwargs: {"luna": lambda: service},
+        lambda **kwargs: {"sonnet": lambda: service},
     )
 
     with pytest.raises(ValueError, match="actual rerank attempt"):
@@ -470,10 +488,10 @@ def test_evaluator_reports_full_merged_pool_and_judged_candidate_source_ranks(
         compare_baseline=False,
         input_cost_per_million=0,
         output_cost_per_million=0,
-        service_factories={"luna": lambda: service},
+        service_factories={"sonnet": lambda: service},
     )
 
-    case = report["runs"]["luna"]["cases"][0]
+    case = report["runs"]["sonnet"]["cases"][0]
     assert len(case["merged_candidate_ids"]) == 101
     assert case["recall_at_40"] == 0.0
     assert case["merged_pool_recall"] == 1.0
@@ -488,7 +506,7 @@ def test_evaluator_reports_full_merged_pool_and_judged_candidate_source_ranks(
         "ncbi_rank": 100,
         "final_rank": None,
     }
-    assert report["runs"]["luna"]["aggregate"][
+    assert report["runs"]["sonnet"]["aggregate"][
         "mean_merged_pool_recall"
     ] == 1.0
 
@@ -515,7 +533,7 @@ def test_evaluation_closes_every_opened_service_and_preserves_work_error(
         },
         close_error=RuntimeError("baseline close failed"),
     )
-    luna = _Service({}, close_error=RuntimeError("luna close failed"))
+    sonnet = _Service({}, close_error=RuntimeError("sonnet close failed"))
 
     with pytest.raises(KeyError, match="candidate recall query"):
         run_evaluation(
@@ -524,11 +542,11 @@ def test_evaluation_closes_every_opened_service_and_preserves_work_error(
             compare_baseline=True,
             input_cost_per_million=0,
             output_cost_per_million=0,
-            service_factories={"baseline": lambda: baseline, "luna": lambda: luna},
+            service_factories={"baseline": lambda: baseline, "sonnet": lambda: sonnet},
         )
 
     assert baseline.close_calls == 1
-    assert luna.close_calls == 1
+    assert sonnet.close_calls == 1
 
 
 def test_exact_accession_latency_sums_sequential_local_and_ncbi_phases(
@@ -574,13 +592,13 @@ def test_exact_accession_latency_sums_sequential_local_and_ncbi_phases(
         compare_baseline=False,
         input_cost_per_million=0,
         output_cost_per_million=0,
-        service_factories={"luna": lambda: service},
+        service_factories={"sonnet": lambda: service},
     )
 
-    case = report["runs"]["luna"]["cases"][0]
+    case = report["runs"]["sonnet"]["cases"][0]
     assert case["exact_accession"] is True
     assert case["latency_ms"]["total"] == 30
-    assert report["runs"]["luna"]["aggregate"]["latency_ms"] == {
+    assert report["runs"]["sonnet"]["aggregate"]["latency_ms"] == {
         "p50": 30.0,
         "p95": 30.0,
     }
@@ -625,10 +643,10 @@ def test_evaluator_prices_observed_usage_for_unusable_provider_responses(
         compare_baseline=False,
         input_cost_per_million=1.0,
         output_cost_per_million=2.0,
-        service_factories={"luna": lambda: service},
+        service_factories={"sonnet": lambda: service},
     )
 
-    aggregate = report["runs"]["luna"]["aggregate"]
+    aggregate = report["runs"]["sonnet"]["aggregate"]
     assert aggregate["case_count"] == 1
     assert aggregate["relevance_case_count"] == 0
     assert aggregate["fallback_rate"] == 1.0
@@ -682,7 +700,7 @@ def test_case_parser_rejects_unbounded_or_unknown_input_before_opening_services(
             compare_baseline=False,
             input_cost_per_million=0,
             output_cost_per_million=0,
-            service_factories={"luna": factory},
+            service_factories={"sonnet": factory},
         )
 
     assert opened is False

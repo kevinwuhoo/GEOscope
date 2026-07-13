@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from geo_index.reranker import OpenAIReranker
+from geo_index.reranker import AnthropicReranker
 from geo_index.search_candidates import SearchCandidate
 from geo_index.search_eval import estimated_cost
 
@@ -35,16 +35,17 @@ def _candidate(gse: str, rank: int, taxon: str, organism_id: str) -> SearchCandi
 
 
 @pytest.mark.provider_integration
-def test_live_luna_accepts_the_strict_complete_ranking_schema() -> None:
-    if os.environ.get("GEO_TEST_OPENAI") != "1":
-        pytest.skip("set GEO_TEST_OPENAI=1 to permit the live provider call")
-    api_key = os.environ.get("OPENAI_API_KEY")
+def test_live_sonnet_accepts_the_strict_complete_ranking_schema() -> None:
+    if os.environ.get("GEO_TEST_ANTHROPIC") != "1":
+        pytest.skip("set GEO_TEST_ANTHROPIC=1 to permit the live provider call")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        pytest.skip("OPENAI_API_KEY is not configured")
-    reranker = OpenAIReranker(
+        pytest.skip("ANTHROPIC_API_KEY is not configured")
+    reranker = AnthropicReranker(
         api_key=api_key,
-        model="gpt-5.6-luna",
+        model="claude-sonnet-5",
         reasoning_effort="low",
+        thinking="disabled",
         timeout_seconds=30,
     )
     candidates = (
@@ -64,27 +65,28 @@ def test_live_luna_accepts_the_strict_complete_ranking_schema() -> None:
 
 
 @pytest.mark.provider_integration
-def test_live_luna_reranks_maximum_two_hundred_candidate_pool(
+def test_live_sonnet_reranks_maximum_two_hundred_candidate_pool(
     record_property,
 ) -> None:
-    if os.environ.get("GEO_TEST_OPENAI") != "1":
-        pytest.skip("set GEO_TEST_OPENAI=1 to permit the live provider call")
-    api_key = os.environ.get("OPENAI_API_KEY")
+    if os.environ.get("GEO_TEST_ANTHROPIC") != "1":
+        pytest.skip("set GEO_TEST_ANTHROPIC=1 to permit the live provider call")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        pytest.skip("OPENAI_API_KEY is not configured")
+        pytest.skip("ANTHROPIC_API_KEY is not configured")
     input_price = float(
-        os.environ.get("GEO_TEST_OPENAI_INPUT_COST_PER_MILLION", "0")
+        os.environ.get("GEO_TEST_ANTHROPIC_INPUT_COST_PER_MILLION", "0")
     )
     output_price = float(
-        os.environ.get("GEO_TEST_OPENAI_OUTPUT_COST_PER_MILLION", "0")
+        os.environ.get("GEO_TEST_ANTHROPIC_OUTPUT_COST_PER_MILLION", "0")
     )
     max_latency_seconds = float(
-        os.environ.get("GEO_TEST_OPENAI_MAX_LATENCY_SECONDS", "120")
+        os.environ.get("GEO_TEST_ANTHROPIC_MAX_LATENCY_SECONDS", "120")
     )
-    reranker = OpenAIReranker(
+    reranker = AnthropicReranker(
         api_key=api_key,
-        model="gpt-5.6-luna",
+        model="claude-sonnet-5",
         reasoning_effort="low",
+        thinking="disabled",
         timeout_seconds=max_latency_seconds,
     )
     local = tuple(

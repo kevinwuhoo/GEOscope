@@ -27,8 +27,9 @@ function responseWithCounts(ncbiCandidates: number, mergedCandidates: number) {
         merged_candidates: mergedCandidates,
         rerank_attempted: true,
         rerank_applied: true,
-        rerank_model: "gpt-5.6-luna",
+        rerank_model: "claude-sonnet-5",
         rerank_reasoning_effort: "low",
+        rerank_thinking: "disabled",
         rerank_input_tokens: 1000,
         rerank_output_tokens: 200,
         latency: { elasticsearch_ms: 10, ncbi_ms: 20, reranker_ms: 30 },
@@ -54,6 +55,18 @@ test("accepts the shared 100 NCBI and 200 merged candidate maxima", async () => 
 
   expect(response.geoscope.provenance.ncbi_candidates).toBe(100);
   expect(response.geoscope.provenance.merged_candidates).toBe(200);
+  expect(response.geoscope.provenance.rerank_thinking).toBe("disabled");
+});
+
+
+test("rejects rerank thinking values outside the approved contract", async () => {
+  const response = responseWithCounts(100, 200);
+  response.geoscope.provenance.rerank_thinking = "enabled";
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify(response), { status: 200 }),
+  );
+
+  await expect(searchDemo("mouse exercise")).rejects.toThrow();
 });
 
 

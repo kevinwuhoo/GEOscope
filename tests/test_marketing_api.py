@@ -112,6 +112,7 @@ def _search_output() -> SearchDatasetsOutput:
             rerank_applied=False,
             rerank_model=None,
             rerank_reasoning_effort=None,
+            rerank_thinking=None,
             rerank_input_tokens=0,
             rerank_output_tokens=0,
             latency=SearchLatencyOutput(
@@ -349,7 +350,7 @@ def test_demo_search_accepts_the_shared_explicit_limit_range() -> None:
     assert [call["limit"] for call in service.execution_calls] == [1, 50]
 
 
-def test_standalone_factory_enables_the_same_luna_quality_settings(
+def test_standalone_factory_enables_the_same_sonnet_quality_settings(
     monkeypatch,
 ) -> None:
     service = _DemoService()
@@ -363,7 +364,7 @@ def test_standalone_factory_enables_the_same_luna_quality_settings(
     monkeypatch.setenv("ELASTICSEARCH_USERNAME", "elastic")
     monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "secret")
     monkeypatch.setenv("GEO_RERANK_ENABLED", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     monkeypatch.setattr("geo_index.marketing_api.McpSearchService", service_factory)
 
     app = create_app()
@@ -371,7 +372,7 @@ def test_standalone_factory_enables_the_same_luna_quality_settings(
         assert client.get("/api/health").status_code == 200
 
     assert constructed["quality"] == SearchQualitySettings(
-        openai_api_key="test-openai-key",
+        anthropic_api_key="test-anthropic-key",
         rerank_enabled=True,
     )
 
