@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -11,13 +13,21 @@ class Eutils:
         self.retmaxes: list[int] = []
         self.closed = False
 
-    def esearch(self, db: str, term: str) -> SimpleNamespace:
+    def esearch(
+        self, db: str, term: str, *, deadline: float | None = None
+    ) -> SimpleNamespace:
         assert db == "gds"
         self.terms.append(term)
         return SimpleNamespace(count=2)
 
     def esummary_page(
-        self, db: str, search: object, retstart: int, retmax: int
+        self,
+        db: str,
+        search: object,
+        retstart: int,
+        retmax: int,
+        *,
+        deadline: float | None = None,
     ) -> dict[str, object]:
         assert (db, retstart) == ("gds", 0)
         self.retmaxes.append(retmax)
@@ -60,13 +70,21 @@ def test_search_returns_normalized_series_candidates() -> None:
 
 def test_search_preserves_query_and_caps_candidates_in_native_order() -> None:
     class ManyEutils(Eutils):
-        def esearch(self, db: str, term: str) -> SimpleNamespace:
+        def esearch(
+            self, db: str, term: str, *, deadline: float | None = None
+        ) -> SimpleNamespace:
             assert db == "gds"
             self.terms.append(term)
             return SimpleNamespace(count=25)
 
         def esummary_page(
-            self, db: str, search: object, retstart: int, retmax: int
+            self,
+            db: str,
+            search: object,
+            retstart: int,
+            retmax: int,
+            *,
+            deadline: float | None = None,
         ) -> dict[str, object]:
             assert (db, retstart) == ("gds", 0)
             self.retmaxes.append(retmax)
@@ -100,7 +118,13 @@ def test_search_preserves_query_and_caps_candidates_in_native_order() -> None:
 def test_search_rejects_non_series_and_malformed_accessions() -> None:
     class InvalidEutils(Eutils):
         def esummary_page(
-            self, db: str, search: object, retstart: int, retmax: int
+            self,
+            db: str,
+            search: object,
+            retstart: int,
+            retmax: int,
+            *,
+            deadline: float | None = None,
         ) -> dict[str, object]:
             return {
                 "uids": ["1", "2", "3", "4", "5"],
@@ -119,7 +143,13 @@ def test_search_rejects_non_series_and_malformed_accessions() -> None:
 def test_unknown_esummary_metadata_is_unavailable_not_absent() -> None:
     class SparseEutils(Eutils):
         def esummary_page(
-            self, db: str, search: object, retstart: int, retmax: int
+            self,
+            db: str,
+            search: object,
+            retstart: int,
+            retmax: int,
+            *,
+            deadline: float | None = None,
         ) -> dict[str, object]:
             return {
                 "uids": ["1"],
@@ -145,12 +175,20 @@ def test_search_rejects_limits_outside_the_bounded_pool(limit: int) -> None:
 
 def test_search_with_no_native_results_skips_esummary() -> None:
     class EmptyEutils(Eutils):
-        def esearch(self, db: str, term: str) -> SimpleNamespace:
+        def esearch(
+            self, db: str, term: str, *, deadline: float | None = None
+        ) -> SimpleNamespace:
             self.terms.append(term)
             return SimpleNamespace(count=0)
 
         def esummary_page(
-            self, db: str, search: object, retstart: int, retmax: int
+            self,
+            db: str,
+            search: object,
+            retstart: int,
+            retmax: int,
+            *,
+            deadline: float | None = None,
         ) -> dict[str, object]:
             raise AssertionError("esummary must not be called for an empty search")
 
@@ -173,7 +211,13 @@ def test_exact_lookup_requires_the_requested_accession() -> None:
 def test_exact_lookup_does_not_accept_a_different_series() -> None:
     class MismatchedEutils(Eutils):
         def esummary_page(
-            self, db: str, search: object, retstart: int, retmax: int
+            self,
+            db: str,
+            search: object,
+            retstart: int,
+            retmax: int,
+            *,
+            deadline: float | None = None,
         ) -> dict[str, object]:
             return {
                 "uids": ["1"],
@@ -209,3 +253,84 @@ def test_close_owns_the_eutils_client() -> None:
     source = NcbiCandidateSource(eutils)
     source.close()
     assert eutils.closed
+
+
+def test_multiple_searches_can_use_the_thread_safe_client_concurrently() -> None:
+    class ConcurrentEutils(Eutils):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = threading.Barrier(2)
+
+        def esearch(
+            self, db: str, term: str, *, deadline: float | None = None
+        ) -> SimpleNamespace:
+            self.entered.wait(timeout=1)
+            return SimpleNamespace(count=0)
+
+    source = NcbiCandidateSource(
+        ConcurrentEutils(), timeout_seconds=2, max_concurrent_requests=2
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(source.search, ("one", "two")))
+
+    assert results == [
+        NativeSearchResult(count=0, candidates=()),
+        NativeSearchResult(count=0, candidates=()),
+    ]
+
+
+def test_concurrency_queue_timeout_uses_the_overall_search_deadline() -> None:
+    class RejectingGate:
+        def __init__(self) -> None:
+            self.timeouts: list[float] = []
+
+        def acquire(self, *, timeout: float) -> bool:
+            self.timeouts.append(timeout)
+            return False
+
+        def release(self) -> None:
+            raise AssertionError("an unacquired gate must not be released")
+
+    gate = RejectingGate()
+    source = NcbiCandidateSource(
+        Eutils(), timeout_seconds=3, concurrency_gate=gate
+    )
+
+    with pytest.raises(TimeoutError, match="NCBI concurrency gate"):
+        source.search("queued")
+
+    assert len(gate.timeouts) == 1
+    assert 0 < gate.timeouts[0] <= 3
+
+
+def test_close_waits_for_an_active_request_before_closing_the_client() -> None:
+    class BlockingEutils(Eutils):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def esearch(
+            self, db: str, term: str, *, deadline: float | None = None
+        ) -> SimpleNamespace:
+            self.entered.set()
+            assert self.release.wait(timeout=1)
+            assert not self.closed
+            return SimpleNamespace(count=0)
+
+    eutils = BlockingEutils()
+    source = NcbiCandidateSource(eutils, timeout_seconds=2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        search = executor.submit(source.search, "active")
+        assert eutils.entered.wait(timeout=1)
+        close = executor.submit(source.close)
+        assert not close.done()
+        assert not eutils.closed
+        eutils.release.set()
+        assert search.result() == NativeSearchResult(count=0, candidates=())
+        close.result()
+
+    assert eutils.closed
+    with pytest.raises(RuntimeError, match="closed"):
+        source.search("too late")

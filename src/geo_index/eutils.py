@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -50,15 +51,21 @@ class EutilsClient:
     email: str | None = field(default_factory=lambda: os.environ.get("NCBI_EMAIL"))
     max_retries: int = 5
     timeout: float = 60.0
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
+    sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
 
     _client: httpx.Client = field(init=False, repr=False)
     _min_interval: float = field(init=False)
-    _last_request_at: float = field(init=False, default=0.0)
+    _next_request_at: float = field(init=False, default=0.0)
+    _rate_lock: threading.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # 10 req/s with a key, 3 without. Leave a little headroom.
         rate = 9.0 if self.api_key else 2.5
         self._min_interval = 1.0 / rate
+        self._rate_lock = threading.Lock()
+        # httpx.Client is intentionally shared: HTTPX documents Client as
+        # thread-safe. Only the rate-accounting state above needs a lock.
         self._client = httpx.Client(base_url=BASE_URL, timeout=self.timeout)
 
     def __enter__(self) -> "EutilsClient":
@@ -80,19 +87,49 @@ class EutilsClient:
             params["email"] = self.email
         return params
 
-    def _throttle(self) -> None:
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-        self._last_request_at = time.monotonic()
+    def _throttle(self, *, deadline: float | None = None) -> None:
+        """Reserve one policy-compliant request slot, then wait lock-free."""
 
-    def _get(self, path: str, params: dict[str, Any]) -> httpx.Response:
+        with self._rate_lock:
+            now = self.clock()
+            request_at = max(now, self._next_request_at)
+            if deadline is not None and request_at >= deadline:
+                raise TimeoutError("NCBI rate gate acquisition timed out")
+            self._next_request_at = request_at + self._min_interval
+        wait_seconds = request_at - now
+        if wait_seconds > 0:
+            self.sleep(wait_seconds)
+
+    def _request_timeout(self, deadline: float | None) -> float:
+        if deadline is None:
+            return self.timeout
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            raise TimeoutError("NCBI request deadline expired")
+        return min(self.timeout, remaining)
+
+    def _backoff(self, seconds: float, deadline: float | None) -> None:
+        if deadline is not None and self.clock() + seconds >= deadline:
+            raise TimeoutError("NCBI retry deadline expired")
+        self.sleep(seconds)
+
+    def _get(
+        self,
+        path: str,
+        params: dict[str, Any],
+        *,
+        deadline: float | None = None,
+    ) -> httpx.Response:
         merged = {**self._common_params(), **params}
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
-            self._throttle()
+            self._throttle(deadline=deadline)
             try:
-                resp = self._client.get(path, params=merged)
+                resp = self._client.get(
+                    path,
+                    params=merged,
+                    timeout=self._request_timeout(deadline),
+                )
                 if resp.status_code in RETRY_STATUSES:
                     raise httpx.HTTPStatusError(
                         f"retryable status {resp.status_code}",
@@ -105,14 +142,16 @@ class EutilsClient:
                 last_exc = exc
                 # Exponential backoff: 1, 2, 4, 8 ... seconds.
                 if attempt < self.max_retries - 1:
-                    time.sleep(2.0**attempt)
+                    self._backoff(2.0**attempt, deadline)
         raise RuntimeError(
             f"E-utilities request failed after {self.max_retries} attempts: {path}"
         ) from last_exc
 
     # -- public API --------------------------------------------------------
 
-    def esearch(self, db: str, term: str) -> SearchResult:
+    def esearch(
+        self, db: str, term: str, *, deadline: float | None = None
+    ) -> SearchResult:
         """Run ``esearch`` with history; return count + WebEnv/query_key.
 
         We use history rather than pulling the full UID list so we can page
@@ -121,6 +160,7 @@ class EutilsClient:
         resp = self._get(
             "/esearch.fcgi",
             {"db": db, "term": term, "usehistory": "y", "retmode": "json"},
+            deadline=deadline,
         )
         payload = resp.json()["esearchresult"]
         return SearchResult(
@@ -129,16 +169,30 @@ class EutilsClient:
             query_key=payload["querykey"],
         )
 
-    def esearch_ids(self, db: str, term: str, retmax: int = 200) -> list[str]:
+    def esearch_ids(
+        self,
+        db: str,
+        term: str,
+        retmax: int = 200,
+        *,
+        deadline: float | None = None,
+    ) -> list[str]:
         """Run ``esearch`` and return the matching UID list (no history)."""
         resp = self._get(
             "/esearch.fcgi",
             {"db": db, "term": term, "retmode": "json", "retmax": str(retmax)},
+            deadline=deadline,
         )
         return list(resp.json()["esearchresult"].get("idlist", []))
 
     def esummary_page(
-        self, db: str, search: SearchResult, retstart: int, retmax: int
+        self,
+        db: str,
+        search: SearchResult,
+        retstart: int,
+        retmax: int,
+        *,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """Fetch one page of ``esummary`` docs (JSON) from a history result.
 
@@ -155,7 +209,9 @@ class EutilsClient:
         }
         last: object = None
         for attempt in range(self.max_retries):
-            payload = self._get("/esummary.fcgi", params).json()
+            payload = self._get(
+                "/esummary.fcgi", params, deadline=deadline
+            ).json()
             if isinstance(payload, dict) and "result" in payload:
                 return payload["result"]
             err = ""
@@ -173,8 +229,16 @@ class EutilsClient:
                     )
                     return {"uids": []}
                 half = retmax // 2
-                left = self.esummary_page(db, search, retstart, half)
-                right = self.esummary_page(db, search, retstart + half, retmax - half)
+                left = self.esummary_page(
+                    db, search, retstart, half, deadline=deadline
+                )
+                right = self.esummary_page(
+                    db,
+                    search,
+                    retstart + half,
+                    retmax - half,
+                    deadline=deadline,
+                )
                 merged: dict[str, Any] = {
                     "uids": list(left.get("uids", [])) + list(right.get("uids", []))
                 }
@@ -186,7 +250,7 @@ class EutilsClient:
             # Otherwise a transient error envelope — back off and retry.
             last = payload
             if attempt < self.max_retries - 1:
-                time.sleep(2.0**attempt)
+                self._backoff(2.0**attempt, deadline)
         raise RuntimeError(
             f"esummary returned no 'result' after {self.max_retries} attempts "
             f"(retstart={retstart}): {str(last)[:200]}"

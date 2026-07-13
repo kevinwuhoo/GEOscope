@@ -300,7 +300,8 @@ class McpSearchService:
         self._readiness_check = readiness_check
         self._ncbi_source_factory = ncbi_source_factory or (
             lambda timeout: NcbiCandidateSource(
-                EutilsClient(timeout=timeout, max_retries=1)
+                EutilsClient(timeout=timeout, max_retries=1),
+                timeout_seconds=timeout,
             )
         )
         self._reranker_factory = reranker_factory or (

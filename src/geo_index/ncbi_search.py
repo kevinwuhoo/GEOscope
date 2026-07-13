@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Iterator, Literal, Protocol
 
 from .eutils import EutilsClient, SearchResult
 from .normalize import map_assay, map_organisms
@@ -17,11 +19,19 @@ NativeError = Literal["ncbi_timeout", "ncbi_error"]
 
 
 class EutilsProtocol(Protocol):
-    def esearch(self, db: str, term: str) -> SearchResult:
+    def esearch(
+        self, db: str, term: str, *, deadline: float | None = None
+    ) -> SearchResult:
         raise NotImplementedError
 
     def esummary_page(
-        self, db: str, search: SearchResult, retstart: int, retmax: int
+        self,
+        db: str,
+        search: SearchResult,
+        retstart: int,
+        retmax: int,
+        *,
+        deadline: float | None = None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -41,13 +51,69 @@ class NativeSearchResult:
 
 
 class NcbiCandidateSource:
-    def __init__(self, client: EutilsProtocol | None = None) -> None:
+    def __init__(
+        self,
+        client: EutilsProtocol | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        max_concurrent_requests: int = 4,
+        concurrency_gate: object | None = None,
+        clock=time.monotonic,
+    ) -> None:
+        if max_concurrent_requests <= 0:
+            raise ValueError("max_concurrent_requests must be positive")
         self._client = client or EutilsClient()
-        self._lock = threading.Lock()
+        configured_timeout = timeout_seconds
+        if configured_timeout is None:
+            configured_timeout = float(getattr(self._client, "timeout", 5.0))
+        if configured_timeout <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self._timeout_seconds = configured_timeout
+        self._clock = clock
+        self._gate = concurrency_gate or threading.BoundedSemaphore(
+            max_concurrent_requests
+        )
+        self._state = threading.Condition()
+        self._active_requests = 0
+        self._closing = False
+        self._closed = False
 
     def close(self) -> None:
-        with self._lock:
+        with self._state:
+            while self._closing:
+                self._state.wait()
+            if self._closed:
+                return
+            self._closing = True
+            while self._active_requests:
+                self._state.wait()
+        try:
             self._client.close()
+        finally:
+            with self._state:
+                self._closed = True
+                self._closing = False
+                self._state.notify_all()
+
+    @contextmanager
+    def _operation(self, deadline: float) -> Iterator[None]:
+        with self._state:
+            if self._closing or self._closed:
+                raise RuntimeError("NCBI candidate source is closed")
+            self._active_requests += 1
+        acquired = False
+        try:
+            remaining = deadline - self._clock()
+            if remaining <= 0 or not self._gate.acquire(timeout=remaining):
+                raise TimeoutError("NCBI concurrency gate acquisition timed out")
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                self._gate.release()
+            with self._state:
+                self._active_requests -= 1
+                self._state.notify_all()
 
     @staticmethod
     def _candidate(raw: object, rank: int) -> SearchCandidate | None:
@@ -91,8 +157,9 @@ class NcbiCandidateSource:
         )
 
     def _search_term(self, term: str, limit: int) -> NativeSearchResult:
-        with self._lock:
-            search = self._client.esearch("gds", term)
+        deadline = self._clock() + self._timeout_seconds
+        with self._operation(deadline):
+            search = self._client.esearch("gds", term, deadline=deadline)
             if search.count == 0:
                 return NativeSearchResult(count=0, candidates=())
             page = self._client.esummary_page(
@@ -100,6 +167,7 @@ class NcbiCandidateSource:
                 search,
                 0,
                 min(max(limit * 3, limit), MAX_SOURCE_CANDIDATES),
+                deadline=deadline,
             )
         candidates: list[SearchCandidate] = []
         for uid in page.get("uids", []):
