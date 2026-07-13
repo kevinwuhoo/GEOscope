@@ -259,7 +259,30 @@ def _percentile(values: Sequence[int], percentile: float) -> float:
 def _case_report(case: EvaluationCase, execution: SearchExecution) -> dict[str, Any]:
     provenance = execution.output.provenance
     candidate_ids = [candidate.gse for candidate in execution.candidates[:40]]
+    merged_candidates = execution.candidates[:MAX_MERGED_CANDIDATES]
+    merged_candidate_ids = [candidate.gse for candidate in merged_candidates]
     final_ids = [result.gse for result in execution.output.results[:10]]
+    merged_ranks = {
+        candidate.gse: rank for rank, candidate in enumerate(merged_candidates, 1)
+    }
+    final_ranks = {gse: rank for rank, gse in enumerate(final_ids, 1)}
+    candidates_by_gse = {candidate.gse: candidate for candidate in merged_candidates}
+    judged_candidates: dict[str, dict[str, Any]] = {}
+    for gse, grade in case.judgments.items():
+        candidate = candidates_by_gse.get(gse)
+        judged_candidates[gse] = {
+            "grade": grade,
+            "present_in_recall_at_40": gse in candidate_ids,
+            "present_in_merged_pool": candidate is not None,
+            "present_in_final_results": gse in final_ranks,
+            "merged_rank": merged_ranks.get(gse),
+            "source": candidate.source if candidate is not None else None,
+            "elasticsearch_rank": (
+                candidate.original_rank if candidate is not None else None
+            ),
+            "ncbi_rank": candidate.native_rank if candidate is not None else None,
+            "final_rank": final_ranks.get(gse),
+        }
     expected_matches = (
         None
         if case.expected_ncbi_count is None
@@ -270,8 +293,13 @@ def _case_report(case: EvaluationCase, execution: SearchExecution) -> dict[str, 
         "exact_accession": provenance.exact_accession,
         "relevance_judged": any(grade > 0 for grade in case.judgments.values()),
         "candidate_ids": candidate_ids,
+        "merged_candidate_ids": merged_candidate_ids,
         "final_ids": final_ids,
         "recall_at_40": recall_at(candidate_ids, case.judgments, 40),
+        "merged_pool_recall": recall_at(
+            merged_candidate_ids, case.judgments, MAX_MERGED_CANDIDATES
+        ),
+        "judged_candidates": judged_candidates,
         "ndcg_at_10": ndcg_at(final_ids, case.judgments, 10),
         "mrr": reciprocal_rank(final_ids, case.judgments),
         "constraint_violations": _constraint_violations(
@@ -307,6 +335,8 @@ def _case_report(case: EvaluationCase, execution: SearchExecution) -> dict[str, 
         "degradation": list(provenance.degradation),
         "rerank_attempted": provenance.rerank_attempted,
         "rerank_applied": provenance.rerank_applied,
+        "rerank_model": provenance.rerank_model,
+        "rerank_reasoning_effort": provenance.rerank_reasoning_effort,
         "rerank_input_tokens": provenance.rerank_input_tokens,
         "rerank_output_tokens": provenance.rerank_output_tokens,
     }
@@ -335,6 +365,7 @@ def _aggregate(
         "case_count": count,
         "relevance_case_count": relevance_count,
         "mean_recall_at_40": relevance_mean("recall_at_40"),
+        "mean_merged_pool_recall": relevance_mean("merged_pool_recall"),
         "mean_ndcg_at_10": relevance_mean("ndcg_at_10"),
         "mean_mrr": relevance_mean("mrr"),
         "constraint_violations": sum(
@@ -351,6 +382,8 @@ def _aggregate(
             for case in cases
         )
         / count,
+        "rerank_attempted_count": sum(case["rerank_attempted"] for case in cases),
+        "rerank_applied_count": sum(case["rerank_applied"] for case in cases),
         "latency_ms": {
             "p50": _percentile(latencies, 0.50),
             "p95": _percentile(latencies, 0.95),
@@ -408,6 +441,10 @@ def _default_service_factories(
 ) -> dict[str, Callable[[], EvaluationService]]:
     elasticsearch = ElasticsearchSettings.from_env(env)
     quality = SearchQualitySettings.from_env(env)
+    if not quality.rerank_enabled:
+        raise ValueError(
+            "Luna evaluation requires GEO_RERANK_ENABLED=true and OPENAI_API_KEY"
+        )
     factories: dict[str, Callable[[], EvaluationService]] = {
         "luna": lambda: McpSearchService(
             elasticsearch=elasticsearch,
@@ -428,6 +465,36 @@ def _default_service_factories(
     return factories
 
 
+def _effective_configuration(
+    *,
+    label: str,
+    service: EvaluationService,
+    cases: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    quality = getattr(service, "quality", None)
+    if isinstance(quality, SearchQualitySettings):
+        enabled = quality.rerank_enabled
+        return {
+            "rerank_enabled": enabled,
+            "model": quality.rerank_model if enabled else None,
+            "reasoning_effort": quality.reasoning_effort if enabled else None,
+        }
+    if label == "baseline":
+        return {
+            "rerank_enabled": False,
+            "model": None,
+            "reasoning_effort": None,
+        }
+    attempted = [case for case in cases if case["rerank_attempted"]]
+    models = {case["rerank_model"] for case in attempted}
+    efforts = {case["rerank_reasoning_effort"] for case in attempted}
+    return {
+        "rerank_enabled": bool(attempted),
+        "model": next(iter(models)) if len(models) == 1 else None,
+        "reasoning_effort": next(iter(efforts)) if len(efforts) == 1 else None,
+    }
+
+
 def run_evaluation(
     *,
     cases_path: Path,
@@ -445,6 +512,7 @@ def run_evaluation(
         output_cost_per_million=output_cost_per_million,
     )
     cases = load_cases(cases_path)
+    uses_default_factories = service_factories is None
     factories = dict(
         service_factories
         or _default_service_factories(
@@ -459,6 +527,7 @@ def run_evaluation(
     services = {label: factories[label]() for label in labels}
     opened: list[EvaluationService] = []
     runs: dict[str, dict[str, Any]] = {}
+    failure: BaseException | None = None
     try:
         for label in labels:
             services[label].open()
@@ -476,6 +545,11 @@ def run_evaluation(
                 for case in cases
             ]
             runs[label] = {
+                "configuration": _effective_configuration(
+                    label=label,
+                    service=services[label],
+                    cases=case_reports,
+                ),
                 "aggregate": _aggregate(
                     case_reports,
                     input_cost_per_million=input_cost_per_million,
@@ -483,9 +557,21 @@ def run_evaluation(
                 ),
                 "cases": case_reports,
             }
-    finally:
-        for service in reversed(opened):
+    except BaseException as exc:
+        failure = exc
+    for service in reversed(opened):
+        try:
             service.close()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+    if (
+        uses_default_factories
+        and runs["luna"]["aggregate"]["rerank_attempted_count"] < 1
+    ):
+        raise ValueError("Luna evaluation requires at least one actual rerank attempt")
 
     report: dict[str, Any] = {
         "schema_version": "unified-search-eval-v1",

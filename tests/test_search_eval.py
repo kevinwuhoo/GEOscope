@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import geo_index.search_eval as search_eval_module
 from geo_index.mcp_models import (
     DatasetSummary,
     FacetResultOutput,
@@ -14,6 +15,7 @@ from geo_index.mcp_models import (
     SearchProvenanceOutput,
 )
 from geo_index.mcp_search_service import SearchExecution
+from geo_index.mcp_settings import SearchQualitySettings
 from geo_index.ncbi_search import NativeSearchResult
 from geo_index.search_candidates import SearchCandidate
 from geo_index.search_eval import (
@@ -169,8 +171,16 @@ def _execution(
 
 
 class _Service:
-    def __init__(self, executions: dict[str, SearchExecution]) -> None:
+    def __init__(
+        self,
+        executions: dict[str, SearchExecution],
+        *,
+        quality: SearchQualitySettings | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
         self.executions = executions
+        self.quality = quality
+        self.close_error = close_error
         self.open_calls = 0
         self.close_calls = 0
         self.search_calls: list[tuple[str, SearchFilters, int]] = []
@@ -180,6 +190,8 @@ class _Service:
 
     def close(self) -> None:
         self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
 
     def search_execution(
         self, *, query: str, filters: SearchFilters, limit: int
@@ -288,6 +300,16 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
         "merged": 200,
     }
     assert set(report["runs"]) == {"baseline", "luna"}
+    assert report["runs"]["baseline"]["configuration"] == {
+        "rerank_enabled": False,
+        "model": None,
+        "reasoning_effort": None,
+    }
+    assert report["runs"]["luna"]["configuration"] == {
+        "rerank_enabled": True,
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "low",
+    }
     baseline_case = report["runs"]["baseline"]["cases"][0]
     assert baseline_case["candidate_ids"] == ["GSE1", "GSE2"]
     assert baseline_case["final_ids"] == ["GSE1"]
@@ -304,6 +326,8 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
     assert luna_aggregate["ncbi_only_recovery"] == 1
     assert luna_aggregate["native_count_mismatches"] == 1
     assert luna_aggregate["fallback_rate"] == 0.5
+    assert luna_aggregate["rerank_attempted_count"] == 2
+    assert luna_aggregate["rerank_applied_count"] == 1
     assert luna_aggregate["degradation_rate"] == 0.5
     assert luna_aggregate["relevance_case_count"] == 1
     assert luna_aggregate["mean_recall_at_40"] == 1.0
@@ -318,6 +342,193 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
     assert baseline.open_calls == baseline.close_calls == 1
     assert luna.open_calls == luna.close_calls == 1
     assert all(call[2] == 10 for call in baseline.search_calls + luna.search_calls)
+
+
+@pytest.mark.parametrize(
+    "quality_env",
+    [
+        {},
+        {"GEO_RERANK_ENABLED": "true", "OPENAI_API_KEY": "   "},
+    ],
+    ids=["disabled", "invalid-key"],
+)
+def test_default_luna_evaluation_rejects_disabled_or_invalid_configuration(
+    tmp_path: Path, quality_env: dict[str, str]
+) -> None:
+    cases_path = tmp_path / "cases.jsonl"
+    _write_cases(cases_path)
+    env = {
+        "ELASTICSEARCH_URL": "https://elastic.test:9200",
+        "ELASTICSEARCH_API_KEY": "test-elastic-key",
+        **quality_env,
+    }
+
+    with pytest.raises(ValueError, match="rerank|OPENAI_API_KEY"):
+        run_evaluation(
+            cases_path=cases_path,
+            output_path=tmp_path / "report.json",
+            compare_baseline=True,
+            input_cost_per_million=0,
+            output_cost_per_million=0,
+            env=env,
+        )
+
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_default_luna_evaluation_requires_at_least_one_actual_rerank_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases_path = tmp_path / "cases.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "query_id": "exact_only",
+                "query": "GSE310900",
+                "filters": {},
+                "judgments": {"GSE310900": 3},
+                "constraints": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = _Service(
+        {
+            "GSE310900": _execution(
+                query="GSE310900",
+                candidates=(_candidate("GSE310900"),),
+                results=[_summary("GSE310900", 1)],
+                native_count=0,
+                exact_accession=True,
+            )
+        },
+        quality=SearchQualitySettings(
+            openai_api_key="sk-test-key",
+            rerank_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(
+        search_eval_module,
+        "_default_service_factories",
+        lambda **kwargs: {"luna": lambda: service},
+    )
+
+    with pytest.raises(ValueError, match="actual rerank attempt"):
+        run_evaluation(
+            cases_path=cases_path,
+            output_path=tmp_path / "report.json",
+            compare_baseline=False,
+            input_cost_per_million=0,
+            output_cost_per_million=0,
+            env={},
+        )
+
+    assert service.close_calls == 1
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_evaluator_reports_full_merged_pool_and_judged_candidate_source_ranks(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "cases.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "query_id": "deep_native_relevant",
+                "query": "deep native relevant query",
+                "filters": {},
+                "judgments": {"GSE200": 3},
+                "constraints": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    local = tuple(
+        _candidate(f"GSE{index}", original_rank=index) for index in range(1, 101)
+    )
+    native = _candidate(
+        "GSE200", source="ncbi", original_rank=None, native_rank=100
+    )
+    service = _Service(
+        {
+            "deep native relevant query": _execution(
+                query="deep native relevant query",
+                candidates=(*local, native),
+                results=[_summary("GSE1", 1)],
+                native_count=100,
+                rerank_attempted=True,
+                rerank_applied=True,
+            )
+        }
+    )
+
+    report = run_evaluation(
+        cases_path=cases_path,
+        output_path=tmp_path / "report.json",
+        compare_baseline=False,
+        input_cost_per_million=0,
+        output_cost_per_million=0,
+        service_factories={"luna": lambda: service},
+    )
+
+    case = report["runs"]["luna"]["cases"][0]
+    assert len(case["merged_candidate_ids"]) == 101
+    assert case["recall_at_40"] == 0.0
+    assert case["merged_pool_recall"] == 1.0
+    assert case["judged_candidates"]["GSE200"] == {
+        "grade": 3,
+        "present_in_recall_at_40": False,
+        "present_in_merged_pool": True,
+        "present_in_final_results": False,
+        "merged_rank": 101,
+        "source": "ncbi",
+        "elasticsearch_rank": None,
+        "ncbi_rank": 100,
+        "final_rank": None,
+    }
+    assert report["runs"]["luna"]["aggregate"][
+        "mean_merged_pool_recall"
+    ] == 1.0
+
+
+def test_evaluation_closes_every_opened_service_and_preserves_work_error(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "cases.jsonl"
+    _write_cases(cases_path)
+    baseline = _Service(
+        {
+            "candidate recall query": _execution(
+                query="candidate recall query",
+                candidates=(_candidate("GSE1"),),
+                results=[_summary("GSE1", 1)],
+                native_count=0,
+            ),
+            "native count query": _execution(
+                query="native count query",
+                candidates=(_candidate("GSE2"),),
+                results=[_summary("GSE2", 1)],
+                native_count=0,
+            ),
+        },
+        close_error=RuntimeError("baseline close failed"),
+    )
+    luna = _Service({}, close_error=RuntimeError("luna close failed"))
+
+    with pytest.raises(KeyError, match="candidate recall query"):
+        run_evaluation(
+            cases_path=cases_path,
+            output_path=tmp_path / "report.json",
+            compare_baseline=True,
+            input_cost_per_million=0,
+            output_cost_per_million=0,
+            service_factories={"baseline": lambda: baseline, "luna": lambda: luna},
+        )
+
+    assert baseline.close_calls == 1
+    assert luna.close_calls == 1
 
 
 def test_exact_accession_latency_sums_sequential_local_and_ncbi_phases(

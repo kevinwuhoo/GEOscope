@@ -756,7 +756,7 @@ def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
     assert output.provenance.degradation == ["ncbi_timeout", "rerank_error"]
 
 
-def test_limit_fifty_reranks_complete_bounded_source_union_before_slicing() -> None:
+def test_limit_fifty_reranks_nonoverlapping_100_plus_100_union_before_slicing() -> None:
     local_documents = {
         f"GSE{index}": _document(f"GSE{index}") for index in range(1, 101)
     }
@@ -765,8 +765,8 @@ def test_limit_fifty_reranks_complete_bounded_source_union_before_slicing() -> N
         for index in range(1, 101)
     )
     native_candidates = tuple(
-        _native_candidate(f"GSE{index}", index - 50)
-        for index in range(51, 151)
+        _native_candidate(f"GSE{index}", index - 100)
+        for index in range(101, 201)
     )
     native = FakeNativeSource(
         search_result=NativeSearchResult(
@@ -775,7 +775,7 @@ def test_limit_fifty_reranks_complete_bounded_source_union_before_slicing() -> N
         )
     )
     reranker = FakeReranker(
-        scores={f"GSE{index}": (151 - index) % 101 for index in range(1, 151)}
+        scores={f"GSE{index}": 201 - index for index in range(1, 201)}
     )
     service, _, domain, _, _ = _service(
         client=_Client(local_documents),
@@ -794,15 +794,15 @@ def test_limit_fifty_reranks_complete_bounded_source_union_before_slicing() -> N
     assert domain.search_calls[0]["topk"] == 100
     assert native.search_calls == [("mouse endurance exercise", 100)]
     reranked_candidates = reranker.rerank_calls[0][1]
-    assert len(reranked_candidates) == 150
+    assert len(reranked_candidates) == 200
     assert {candidate.gse for candidate in reranked_candidates} == {
-        f"GSE{index}" for index in range(1, 151)
+        f"GSE{index}" for index in range(1, 201)
     }
     assert len(execution.output.results) == 50
     assert execution.output.provenance.elasticsearch_candidates == 100
     assert execution.output.provenance.ncbi_candidates == 100
-    assert execution.output.provenance.merged_candidates == 150
-    assert len(execution.candidates) == 150
+    assert execution.output.provenance.merged_candidates == 200
+    assert len(execution.candidates) == 200
 
 
 @pytest.mark.parametrize(

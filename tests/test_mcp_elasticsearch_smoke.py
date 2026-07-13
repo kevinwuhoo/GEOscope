@@ -56,7 +56,7 @@ async def test_live_elasticsearch_serves_all_three_mcp_tools() -> None:
         assert rows
         exact = await client.call_tool(
             "search_datasets",
-            {"query": f"  {rows[0]['gse'].lower()}  ", "mode": mode, "limit": 3},
+            {"query": f"  {rows[0]['gse'].lower()}  ", "limit": 3},
         )
         assert exact.is_error is False
         assert [row["gse"] for row in exact.structured_content["results"]] == [

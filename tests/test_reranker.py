@@ -132,6 +132,28 @@ def test_reranker_uses_luna_low_reasoning_and_strict_schema_once() -> None:
     assert [item["gse"] for item in payload["candidates"]] == ["GSE1", "GSE2"]
 
 
+def test_reranker_schema_and_output_budget_cover_two_hundred_candidates() -> None:
+    candidates = tuple(candidate(f"GSE{index}", index) for index in range(1, 201))
+    client = Client(
+        {
+            "rankings": [
+                {"gse": item.gse, "relevance_score": 100 - (index % 101)}
+                for index, item in enumerate(candidates)
+            ]
+        }
+    )
+    reranker = make_reranker(client)
+
+    result = reranker.rerank("maximum candidate pool", candidates, limit=50)
+
+    assert len(result.scores) == 200
+    assert client.responses.kwargs is not None
+    assert client.responses.kwargs["max_output_tokens"] == 8_000
+    schema = client.responses.kwargs["text"]["format"]["schema"]  # type: ignore[index]
+    rankings = schema["properties"]["rankings"]  # type: ignore[index]
+    assert rankings["minItems"] == rankings["maxItems"] == 200
+
+
 @pytest.mark.parametrize(
     "rankings",
     [
