@@ -89,7 +89,6 @@ def _search_output() -> SearchDatasetsOutput:
     return SearchDatasetsOutput(
         query="transcriptomes of individual cells",
         filters=SearchFiltersInput(),
-        mode="hybrid",
         limit=5,
         retrieval_version="geo-series-v1:gemini:embedding:hybrid",
         embedding_variant="gemini_embedding_2_3072_v1",

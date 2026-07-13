@@ -394,7 +394,6 @@ class McpSearchService:
         return SearchDatasetsOutput(
             query=query,
             filters=SearchFiltersInput(**filters.as_dict()),
-            mode="hybrid",
             limit=limit,
             retrieval_version=_retrieval_version(response.provenance),
             embedding_variant=self.elasticsearch.active_model_key,

@@ -18,7 +18,6 @@ from pydantic import (
 from .search_models import FACET_FIELDS, SearchFilters
 
 
-SearchMode = Literal["hybrid", "bm25", "dense"]
 FacetFieldName = Literal[
     "organism_ids", "sex_ids", "assay_categories", "assay_labels"
 ]
@@ -84,7 +83,6 @@ def _normalized_query(value: str) -> str:
 class SearchDatasetsInput(_StrictInputModel):
     query: str
     filters: SearchFiltersInput = Field(default_factory=SearchFiltersInput)
-    mode: SearchMode = "hybrid"
     limit: int = Field(default=15, ge=1, le=50)
 
     @field_validator("query", mode="after")
@@ -109,7 +107,6 @@ class FacetValuesInput(_StrictInputModel):
     field: FacetFieldName
     query: str | None = None
     filters: SearchFiltersInput = Field(default_factory=SearchFiltersInput)
-    mode: SearchMode = "hybrid"
     limit: int = Field(default=50, ge=1, le=50)
 
     @field_validator("query", mode="after")
@@ -178,7 +175,6 @@ class FacetResultOutput(_StrictOutputModel):
 class SearchDatasetsOutput(_StrictOutputModel):
     query: Annotated[str, Field(min_length=1, max_length=1000)]
     filters: SearchFiltersInput
-    mode: SearchMode
     limit: int = Field(ge=1, le=50)
     retrieval_version: BoundedVersion
     embedding_variant: BoundedValue | None

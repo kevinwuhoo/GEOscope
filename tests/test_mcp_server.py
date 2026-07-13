@@ -109,7 +109,6 @@ class FakeService:
         return SearchDatasetsOutput(
             query=kwargs["query"],
             filters=SearchFiltersInput(**kwargs["filters"].as_dict()),
-            mode=kwargs["mode"],
             limit=kwargs["limit"],
             retrieval_version="geo-series-v1:gemini:embedding_gemini_3072:hybrid",
             embedding_variant="gemini_embedding_2_3072_v1",
@@ -155,6 +154,8 @@ async def test_exact_tool_list_annotations_and_stable_schema(mcp) -> None:
         assert tool.annotations.readOnlyHint is True
         assert tool.annotations.idempotentHint is True
         assert tool.annotations.openWorldHint is False
+        assert "mode" not in tool.inputSchema.get("properties", {})
+        assert "mode" not in (tool.outputSchema or {}).get("properties", {})
         schema = str(tool.inputSchema)
         assert "embedding_variant" not in schema
         assert "deep" not in schema
@@ -189,15 +190,18 @@ async def test_all_tools_delegate_normalized_inputs(
     assert fake_service.search_calls[0]["filters"] == SearchFilters(
         organism_ids=("NCBITaxon:9606",)
     )
+    assert "mode" not in fake_service.search_calls[0]
     assert detail.structured_content["found"] is True
     assert fake_service.detail_calls == ["GSE123"]
     assert facet.structured_content["scope"] == "all_matches"
     assert fake_service.facet_calls[0]["query"] is None
+    assert "mode" not in fake_service.facet_calls[0]
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
+        {"query": "x", "mode": "hybrid"},
         {"query": "x", "limit": "5"},
         {"query": "x", "filters": {"invented": ["x"]}},
         {"query": " ", "limit": 5},

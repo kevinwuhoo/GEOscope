@@ -25,7 +25,6 @@ from .mcp_models import (
     SearchDatasetsInput,
     SearchDatasetsOutput,
     SearchFiltersInput,
-    SearchMode,
 )
 from .mcp_search_service import McpSearchService, UnknownFilterValueError
 from .mcp_settings import MCP_PATH, McpSettings
@@ -285,18 +284,16 @@ def create_mcp(
         ctx: Context,
         query: str | None = None,
         filters: SearchFiltersInput | None = None,
-        mode: SearchMode = "hybrid",
         limit: int = 50,
     ) -> FacetValuesOutput:
         request = FacetValuesInput(
             field=field, query=query,
-            filters=filters or SearchFiltersInput(), mode=mode, limit=limit,
+            filters=filters or SearchFiltersInput(), limit=limit,
         )
         try:
             response = _service_from_context(ctx).facet_values(
                 field=request.field, query=request.query,
-                filters=request.filters.to_domain(), mode=request.mode,
-                limit=request.limit,
+                filters=request.filters.to_domain(), limit=request.limit,
             )
         except UnknownFilterValueError as exc:
             raise ToolError(
@@ -315,17 +312,16 @@ def create_mcp(
         query: str,
         ctx: Context,
         filters: SearchFiltersInput | None = None,
-        mode: SearchMode = "hybrid",
         limit: int = 15,
     ) -> SearchDatasetsOutput:
         request = SearchDatasetsInput(
             query=query, filters=filters or SearchFiltersInput(),
-            mode=mode, limit=limit,
+            limit=limit,
         )
         try:
             response = _service_from_context(ctx).search_datasets(
                 query=request.query, filters=request.filters.to_domain(),
-                mode=request.mode, limit=request.limit,
+                limit=request.limit,
             )
         except UnknownFilterValueError as exc:
             raise ToolError(
