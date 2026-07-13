@@ -49,7 +49,7 @@ def _search_output() -> SearchDatasetsOutput:
     return SearchDatasetsOutput(
         query="transcriptomes of individual cells",
         filters=SearchFiltersInput(),
-        limit=5,
+        limit=10,
         retrieval_version="geo-series-v1:gemini:embedding:hybrid",
         embedding_variant="gemini_embedding_2_3072_v1",
         results=[
@@ -241,7 +241,6 @@ async def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> N
             "/api/demo/search",
             params={
                 "q": " transcriptomes of individual cells ",
-                "limit": "5",
             },
         )
 
@@ -283,10 +282,11 @@ async def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> N
         {
             "query": "transcriptomes of individual cells",
             "filters": SearchFilters(),
-            "limit": 5,
+            "limit": 10,
         }
     ]
     assert len(service.search_calls) == 1
+    assert service.search_calls[0]["limit"] == 10
 
 
 def test_demo_search_ignores_legacy_mode_query_parameter() -> None:
@@ -334,13 +334,19 @@ def test_demo_search_accepts_the_shared_explicit_limit_range() -> None:
 
     with TestClient(app) as client:
         assert client.get(
-            "/api/demo/search", params={"q": "immune cells", "limit": "20"}
+            "/api/demo/search", params={"q": "immune cells", "limit": "1"}
         ).status_code == 200
         assert client.get(
-            "/api/demo/search", params={"q": "immune cells", "limit": "21"}
+            "/api/demo/search", params={"q": "immune cells", "limit": "50"}
+        ).status_code == 200
+        assert client.get(
+            "/api/demo/search", params={"q": "immune cells", "limit": "0"}
+        ).status_code == 422
+        assert client.get(
+            "/api/demo/search", params={"q": "immune cells", "limit": "51"}
         ).status_code == 422
 
-    assert service.execution_calls[0]["limit"] == 20
+    assert [call["limit"] for call in service.execution_calls] == [1, 50]
 
 
 def test_standalone_factory_enables_the_same_luna_quality_settings(

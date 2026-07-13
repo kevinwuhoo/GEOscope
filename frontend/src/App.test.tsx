@@ -27,7 +27,7 @@ const demoResponse = {
       assay_categories: [],
       assay_labels: [],
     },
-    limit: 8,
+    limit: 10,
     retrieval_version: "geo-series-v1:gemini:embedding:hybrid",
     embedding_variant: "gemini_embedding_2_3072_v1",
     results: [
@@ -294,7 +294,7 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   expect(requestUrl.searchParams.get("q")).toBe(
     "transcriptomes of individual cells",
   );
-  expect(requestUrl.searchParams.get("limit")).toBe("8");
+  expect(requestUrl.searchParams.get("limit")).toBe("10");
   expect(requestUrl.searchParams.has("mode")).toBe(false);
   expect(await screen.findByText("GSE123")).toBeInTheDocument();
   expect(screen.getByText("GSE999")).toBeInTheDocument();

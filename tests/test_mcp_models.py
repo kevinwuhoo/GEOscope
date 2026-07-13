@@ -187,9 +187,13 @@ def test_provenance_rejects_inconsistent_reranker_state(
 
 
 def test_search_input_bounds_and_forbids_unknown_fields() -> None:
-    assert SearchDatasetsInput(query="x").limit == 15
+    assert SearchDatasetsInput(query="x").limit == 10
+    assert SearchDatasetsInput(query="x", limit=1).limit == 1
+    assert SearchDatasetsInput(query="x", limit=50).limit == 50
     with pytest.raises(ValidationError):
         SearchDatasetsInput(query=" ", limit=15)
+    with pytest.raises(ValidationError):
+        SearchDatasetsInput(query="x", limit=0)
     with pytest.raises(ValidationError):
         SearchDatasetsInput(query="x", limit=51)
     with pytest.raises(ValidationError):

@@ -123,7 +123,7 @@ def _normalized_query(value: str) -> str:
 class SearchDatasetsInput(_StrictInputModel):
     query: str
     filters: SearchFiltersInput = Field(default_factory=SearchFiltersInput)
-    limit: int = Field(default=15, ge=1, le=50)
+    limit: int = Field(default=10, ge=1, le=50)
 
     @field_validator("query", mode="after")
     @classmethod

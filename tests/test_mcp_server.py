@@ -223,13 +223,13 @@ async def test_all_tools_delegate_normalized_inputs(
     assert "mode" not in fake_service.facet_calls[0]
 
 
-async def test_search_tool_uses_public_result_default(
+async def test_search_tool_uses_unified_ten_result_default(
     mcp, fake_service: FakeService
 ) -> None:
     async with Client(mcp) as client:
         await client.call_tool("search_datasets", {"query": "single cell RNA"})
 
-    assert fake_service.search_calls[0]["limit"] == 15
+    assert fake_service.search_calls[0]["limit"] == 10
 
 
 @pytest.mark.parametrize(

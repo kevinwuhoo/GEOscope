@@ -57,7 +57,7 @@ def install_marketing_routes(
     @app.get("/api/demo/search")
     async def demo_search(
         q: str = Query(min_length=1, max_length=1000),
-        limit: int = Query(default=8, ge=1, le=20),
+        limit: int = Query(default=10, ge=1, le=50),
     ) -> dict[str, object]:
         query = q.strip()
         if not query:

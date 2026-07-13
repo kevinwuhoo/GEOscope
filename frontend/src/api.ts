@@ -84,7 +84,7 @@ export async function searchDemo(
   query: string,
   signal?: AbortSignal,
 ): Promise<DemoResponse> {
-  const params = new URLSearchParams({ q: query, limit: "8" });
+  const params = new URLSearchParams({ q: query, limit: "10" });
   const response = await fetch(`/api/demo/search?${params}`, { signal });
   if (!response.ok) {
     throw new Error(

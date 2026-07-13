@@ -44,7 +44,7 @@ flowchart LR
     M[NCBI GEO E-utilities] --> N[NCBI candidates]
     J --> O[Merge + deduplicate by GSE]
     N --> O
-    O --> P[Sonnet 5 reranker]
+    O --> P[GPT-5.6 Luna reranker]
     P --> Q[Shared search service]
     G --> R[Exact GSE lookup]
     M --> R
@@ -140,10 +140,11 @@ Elasticsearch provides the shared online search layer:
   20 native NCBI GEO candidates, merges them by GSE accession, prefers the
   richer local metadata, and records whether each result came from
   Elasticsearch, NCBI, or both.
-- **LLM reranking** uses Sonnet 5 to select and order the final top 10 from the
-  merged candidate set. Exact GSE accession lookups normalize the identifier,
-  check the local index first, fall back to NCBI if needed, and bypass semantic
-  retrieval and reranking so identifiers remain deterministic.
+- **LLM reranking** uses GPT-5.6 Luna with low reasoning effort to select and
+  order the final top 10 from the merged candidate set. Exact GSE accession
+  lookups normalize the identifier, check the local index first, fall back to
+  NCBI if needed, and bypass semantic retrieval and reranking so identifiers
+  remain deterministic.
 
 Elasticsearch remains the required source of indexed metadata. If live NCBI
 retrieval or reranking is unavailable, the service falls back to deterministic
@@ -218,7 +219,8 @@ Hybrid Elasticsearch retrieval improved recall within the indexed snapshot,
 but it could not surface a newly published or locally missing GSE. We therefore
 extended the shared search service to retrieve a deeper Elasticsearch pool and
 native NCBI GEO results concurrently, deduplicate them by accession, preserve
-source provenance, and rerank the combined evidence with Sonnet 5.
+source provenance, and rerank the combined evidence with GPT-5.6 Luna at low
+reasoning effort.
 
 The service records timing, model usage, and reranking cost so relevance gains
 can be evaluated against latency and spend. It also preserves deterministic
