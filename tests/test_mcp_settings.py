@@ -55,6 +55,29 @@ def test_search_quality_settings_fail_closed(key: str, value: str) -> None:
         SearchQualitySettings.from_env({key: value})
 
 
+def test_mcp_settings_wires_search_quality_from_env() -> None:
+    settings = McpSettings.from_env(
+        VALID
+        | {
+            "GEO_RERANK_ENABLED": "true",
+            "OPENAI_API_KEY": " nested-secret ",
+            "GEO_RERANK_MODEL": "gpt-5.6-luna",
+            "GEO_RERANK_REASONING_EFFORT": "LOW",
+            "GEO_RERANK_CANDIDATE_LIMIT": "64",
+            "GEO_RERANK_TIMEOUT_SECONDS": "3.5",
+            "GEO_NCBI_TIMEOUT_SECONDS": "2.25",
+        }
+    )
+
+    assert settings.search_quality.rerank_enabled is True
+    assert settings.search_quality.openai_api_key == "nested-secret"
+    assert settings.search_quality.rerank_model == "gpt-5.6-luna"
+    assert settings.search_quality.reasoning_effort == "low"
+    assert settings.search_quality.candidate_limit == 64
+    assert settings.search_quality.rerank_timeout_seconds == 3.5
+    assert settings.search_quality.ncbi_timeout_seconds == 2.25
+
+
 def test_public_settings_apply_safe_admission_defaults() -> None:
     settings = McpSettings.from_env(VALID)
 

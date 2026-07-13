@@ -101,6 +101,91 @@ def _provenance() -> SearchProvenanceOutput:
     )
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"elasticsearch_candidates": 101}, id="candidate-count"),
+        pytest.param({"rerank_input_tokens": -1}, id="token-count"),
+        pytest.param(
+            {
+                "latency": {
+                    "elasticsearch_ms": -1,
+                    "ncbi_ms": 80,
+                    "reranker_ms": 200,
+                }
+            },
+            id="latency",
+        ),
+    ],
+)
+def test_provenance_rejects_invalid_bounds(overrides: dict[str, object]) -> None:
+    values = _provenance().model_dump()
+    values.update(overrides)
+
+    with pytest.raises(ValidationError):
+        SearchProvenanceOutput(**values)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(
+            {
+                "rerank_attempted": False,
+                "rerank_applied": True,
+                "rerank_model": None,
+                "rerank_reasoning_effort": None,
+            },
+            id="applied-without-attempt",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": True,
+                "rerank_applied": False,
+                "rerank_model": None,
+                "rerank_reasoning_effort": "low",
+            },
+            id="attempt-without-model",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": False,
+                "rerank_applied": False,
+                "rerank_model": "gpt-5.6-luna",
+                "rerank_reasoning_effort": None,
+            },
+            id="model-without-attempt",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": True,
+                "rerank_applied": False,
+                "rerank_model": "gpt-5.6-luna",
+                "rerank_reasoning_effort": None,
+            },
+            id="attempt-without-effort",
+        ),
+        pytest.param(
+            {
+                "rerank_attempted": False,
+                "rerank_applied": False,
+                "rerank_model": None,
+                "rerank_reasoning_effort": "low",
+            },
+            id="effort-without-attempt",
+        ),
+    ],
+)
+def test_provenance_rejects_inconsistent_reranker_state(
+    overrides: dict[str, object],
+) -> None:
+    values = _provenance().model_dump()
+    values.update(overrides)
+
+    with pytest.raises(ValidationError):
+        SearchProvenanceOutput(**values)
+
+
 def test_search_input_bounds_and_forbids_unknown_fields() -> None:
     assert SearchDatasetsInput(query="x").limit == 10
     with pytest.raises(ValidationError):
