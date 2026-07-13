@@ -579,7 +579,7 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
     assert len(output.results[0].title or "") == 500
     assert len(output.results[0].snippet or "") == 1000
     assert len(output.results[0].assay_labels) == 100
-    assert output.results[0].truncated_fields == []
+    assert output.results[0].truncated_fields == ["assay_labels", "snippet", "title"]
     assert output.retrieval_version == (
         "geo-series-v1:gemini_embedding_2_3072_v1:"
         "embedding_gemini_3072:bm25"
@@ -836,7 +836,18 @@ def test_elasticsearch_candidate_text_and_arrays_are_bounded_before_reranking() 
     assert len(candidates[0].assay_categories) == 100
     assert len(candidates[0].assay_labels) == 100
     assert len(candidates[0].assay_status or "") == 256
-    assert output.results[0].truncated_fields == []
+    assert output.results[0].truncated_fields == [
+        "assay_categories",
+        "assay_labels",
+        "assay_status",
+        "organism_ids",
+        "organism_status",
+        "sex_ids",
+        "sex_status",
+        "snippet",
+        "study_type",
+        "title",
+    ]
 
 
 def test_summary_marks_only_values_strictly_over_the_output_bounds() -> None:

@@ -60,6 +60,21 @@ def test_merge_prefers_local_metadata_and_marks_both_sources() -> None:
     assert merged[0].native_rank == 3
 
 
+def test_merge_preserves_local_truncation_provenance() -> None:
+    local = candidate(
+        "GSE1",
+        "elasticsearch",
+        1,
+        truncated_fields=("snippet", "title"),
+    )
+    native = candidate("GSE1", "ncbi", 3)
+
+    merged = merge_candidates((local,), (native,), SearchFilters())
+
+    assert merged[0].source == "both"
+    assert merged[0].truncated_fields == ("snippet", "title")
+
+
 def test_merge_keeps_first_repeated_ncbi_candidate_as_ncbi_only() -> None:
     merged = merge_candidates(
         (),

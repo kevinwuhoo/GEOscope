@@ -33,6 +33,7 @@ class SearchCandidate:
     original_rank: int | None
     native_rank: int | None
     taxon: str | None = None
+    truncated_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _GSE_RE.fullmatch(self.gse):

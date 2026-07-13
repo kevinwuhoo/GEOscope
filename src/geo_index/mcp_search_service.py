@@ -635,6 +635,7 @@ class McpSearchService:
             original_rank=original_rank,
             native_rank=None,
             taxon=_cap_text(document.get("taxon"), 256, "taxon", truncated),
+            truncated_fields=tuple(sorted(truncated)),
         )
 
     def _local_candidates(
@@ -677,7 +678,7 @@ class McpSearchService:
         rank: int,
         final_score: float | None,
     ) -> DatasetSummary:
-        truncated: set[str] = set()
+        truncated = set(candidate.truncated_fields)
         text_fields = {
             "title": (candidate.title, 500),
             "snippet": (candidate.snippet, 1000),
