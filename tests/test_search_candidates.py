@@ -35,12 +35,19 @@ def candidate(gse: str, source: str, rank: int, **overrides: object) -> SearchCa
 
 def test_candidate_pool_floor_target_and_cap() -> None:
     assert candidate_pool_limit(5, 40) == 40
+    assert candidate_pool_limit(5, 20) == 40
     assert candidate_pool_limit(20, 40) == 80
     assert candidate_pool_limit(50, 40) == 100
 
 
 def test_merge_prefers_local_metadata_and_marks_both_sources() -> None:
-    local = candidate("GSE1", "elasticsearch", 1, title="Indexed title")
+    local = candidate(
+        "GSE1",
+        "elasticsearch",
+        1,
+        title="Indexed title",
+        retrieval_score=0.75,
+    )
     native = candidate("GSE1", "ncbi", 3, title="Native title")
 
     merged = merge_candidates((local,), (native,), SearchFilters())
@@ -48,8 +55,25 @@ def test_merge_prefers_local_metadata_and_marks_both_sources() -> None:
     assert len(merged) == 1
     assert merged[0].source == "both"
     assert merged[0].title == "Indexed title"
+    assert merged[0].retrieval_score == 0.75
     assert merged[0].original_rank == 1
     assert merged[0].native_rank == 3
+
+
+def test_merge_keeps_first_repeated_ncbi_candidate_as_ncbi_only() -> None:
+    merged = merge_candidates(
+        (),
+        (
+            candidate("GSE5", "ncbi", 2, title="First native title"),
+            candidate("GSE5", "ncbi", 1, title="Later native title"),
+        ),
+        SearchFilters(),
+    )
+
+    assert len(merged) == 1
+    assert merged[0].source == "ncbi"
+    assert merged[0].title == "First native title"
+    assert merged[0].native_rank == 2
 
 
 def test_ncbi_only_candidate_must_prove_every_active_filter() -> None:

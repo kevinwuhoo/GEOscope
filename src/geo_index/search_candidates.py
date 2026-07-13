@@ -47,7 +47,7 @@ class SearchCandidate:
 
 
 def candidate_pool_limit(requested_limit: int, configured_floor: int) -> int:
-    return min(100, max(configured_floor, requested_limit * 4))
+    return min(100, max(40, configured_floor, requested_limit * 4))
 
 
 def candidate_matches_filters(
@@ -69,7 +69,11 @@ def merge_candidates(
     merged: dict[str, SearchCandidate] = {
         candidate.gse: candidate for candidate in elasticsearch
     }
+    seen_ncbi: set[str] = set()
     for native in ncbi:
+        if native.gse in seen_ncbi:
+            continue
+        seen_ncbi.add(native.gse)
         local = merged.get(native.gse)
         if local is not None:
             merged[native.gse] = replace(
