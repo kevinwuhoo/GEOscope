@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
+from geo_index.mcp_models import GetDatasetOutput
 from geo_index.mcp_settings import McpSettings, SearchQualitySettings
 from geo_index.production_app import create_app
 
@@ -14,6 +18,9 @@ class FakeService:
         self.open_calls = 0
         self.close_calls = 0
         self.ping_calls = 0
+        self.marketing_started: threading.Event | None = None
+        self.dataset_started: threading.Event | None = None
+        self.request_release: threading.Event | None = None
 
     @property
     def is_open(self) -> bool:
@@ -27,6 +34,26 @@ class FakeService:
 
     def ping(self) -> None:
         self.ping_calls += 1
+
+    def search_execution(self, **kwargs: object) -> SimpleNamespace:
+        if self.marketing_started is not None:
+            self.marketing_started.set()
+            assert self.request_release is not None
+            assert self.request_release.wait(timeout=5)
+        return SimpleNamespace(
+            native=SimpleNamespace(count=0, candidates=(), error=None),
+            output=SimpleNamespace(
+                results=(),
+                model_dump=lambda *, mode: {"results": []},
+            ),
+        )
+
+    def get_dataset(self, gse: str) -> GetDatasetOutput:
+        if self.dataset_started is not None:
+            self.dataset_started.set()
+            assert self.request_release is not None
+            assert self.request_release.wait(timeout=5)
+        return GetDatasetOutput(found=False, dataset=None)
 
 
 def _settings() -> McpSettings:
@@ -57,6 +84,169 @@ def _initialize_body() -> dict[str, object]:
             "clientInfo": {"name": "production-test", "version": "1"},
         },
     }
+
+
+def _mcp_headers() -> dict[str, str]:
+    return {"Accept": "application/json, text/event-stream"}
+
+
+def _mcp_initialize(client: TestClient):
+    return client.post(
+        "/mcp",
+        json=_initialize_body(),
+        headers=_mcp_headers(),
+    )
+
+
+def _mcp_get_dataset(client: TestClient):
+    return client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "get_dataset",
+                "arguments": {"gse": "GSE123"},
+            },
+        },
+        headers=_mcp_headers(),
+    )
+
+
+def _limited_settings(
+    *, burst_capacity: int, max_concurrent_requests: int
+) -> McpSettings:
+    settings = _settings()
+    return McpSettings(
+        elasticsearch=settings.elasticsearch,
+        public_base_url=settings.public_base_url,
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.allowed_origins,
+        search_quality=settings.search_quality,
+        rate_per_second=1e-9,
+        burst_capacity=burst_capacity,
+        max_concurrent_requests=max_concurrent_requests,
+    )
+
+
+@pytest.mark.parametrize("first_transport", ["marketing", "mcp"])
+def test_production_rate_budget_is_shared_by_marketing_and_mcp(
+    first_transport: str,
+) -> None:
+    app = create_app(
+        settings=_limited_settings(
+            burst_capacity=1, max_concurrent_requests=10
+        ),
+        service=FakeService(),
+    )
+
+    with TestClient(
+        app,
+        base_url="https://geoscope.kevinformatics.com",
+    ) as client:
+        if first_transport == "marketing":
+            first = client.get("/api/demo/search", params={"q": "mouse"})
+            second = _mcp_initialize(client)
+        else:
+            first = _mcp_initialize(client)
+            second = client.get(
+                "/api/demo/search", params={"q": "mouse"}
+            )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json() == {"error": "rate_limited"}
+
+
+def test_production_mcp_is_charged_once_and_health_stays_unlimited() -> None:
+    app = create_app(
+        settings=_limited_settings(
+            burst_capacity=2, max_concurrent_requests=10
+        ),
+        service=FakeService(),
+    )
+
+    with TestClient(
+        app,
+        base_url="https://geoscope.kevinformatics.com",
+    ) as client:
+        assert _mcp_initialize(client).status_code == 200
+        assert client.get(
+            "/api/demo/search", params={"q": "mouse"}
+        ).status_code == 200
+        assert client.get(
+            "/api/demo/search", params={"q": "mouse"}
+        ).status_code == 429
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/readyz").status_code == 200
+        assert client.get("/api/health").status_code == 200
+
+
+def test_production_mcp_receives_concurrency_429_while_marketing_is_active() -> None:
+    service = FakeService()
+    service.marketing_started = threading.Event()
+    service.request_release = threading.Event()
+    app = create_app(
+        settings=_limited_settings(
+            burst_capacity=10, max_concurrent_requests=1
+        ),
+        service=service,
+    )
+    responses: list[object] = []
+
+    with TestClient(
+        app,
+        base_url="https://geoscope.kevinformatics.com",
+    ) as client:
+        request = threading.Thread(
+            target=lambda: responses.append(
+                client.get("/api/demo/search", params={"q": "mouse"})
+            )
+        )
+        request.start()
+        assert service.marketing_started.wait(timeout=2)
+        rejected = _mcp_initialize(client)
+        service.request_release.set()
+        request.join(timeout=2)
+
+    assert rejected.status_code == 429
+    assert rejected.json() == {"error": "rate_limited"}
+    assert not request.is_alive()
+    assert responses[0].status_code == 200
+
+
+def test_production_marketing_receives_concurrency_429_while_mcp_is_active() -> None:
+    service = FakeService()
+    service.dataset_started = threading.Event()
+    service.request_release = threading.Event()
+    app = create_app(
+        settings=_limited_settings(
+            burst_capacity=10, max_concurrent_requests=1
+        ),
+        service=service,
+    )
+    responses: list[object] = []
+
+    with TestClient(
+        app,
+        base_url="https://geoscope.kevinformatics.com",
+    ) as client:
+        request = threading.Thread(
+            target=lambda: responses.append(_mcp_get_dataset(client))
+        )
+        request.start()
+        assert service.dataset_started.wait(timeout=2)
+        rejected = client.get(
+            "/api/demo/search", params={"q": "mouse"}
+        )
+        service.request_release.set()
+        request.join(timeout=2)
+
+    assert rejected.status_code == 429
+    assert rejected.json() == {"error": "rate_limited"}
+    assert not request.is_alive()
+    assert responses[0].status_code == 200
 
 
 def test_one_app_serves_health_frontend_and_anonymous_mcp(tmp_path: Path) -> None:

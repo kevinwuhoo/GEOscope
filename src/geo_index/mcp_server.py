@@ -175,18 +175,15 @@ class RequestBodyLimitMiddleware:
         await response(scope, receive, send)
 
 
-class HttpAdmissionMiddleware:
-    """Bound all HTTP traffic before auth, readiness, or MCP work."""
+class HttpAdmissionGate:
+    """Process-wide token bucket and concurrency budget."""
 
     def __init__(
-        self,
-        app: ASGIApp,
-        *,
+        self, *,
         rate_per_second: float,
         burst_capacity: int,
         max_concurrent_requests: int,
     ) -> None:
-        self.app = app
         self.rate_per_second = rate_per_second
         self.burst_capacity = burst_capacity
         self.max_concurrent_requests = max_concurrent_requests
@@ -195,29 +192,7 @@ class HttpAdmissionMiddleware:
         self._active_requests = 0
         self._lock = asyncio.Lock()
 
-    async def __call__(
-        self,
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-    ) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        if not await self._try_admit():
-            response = JSONResponse(
-                {"error": "rate_limited"}, status_code=429,
-                headers={"Retry-After": "1"},
-            )
-            await response(scope, receive, send)
-            return
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            async with self._lock:
-                self._active_requests -= 1
-
-    async def _try_admit(self) -> bool:
+    async def try_admit(self) -> bool:
         async with self._lock:
             now = time.monotonic()
             elapsed = max(0.0, now - self._updated_at)
@@ -234,6 +209,52 @@ class HttpAdmissionMiddleware:
             self._tokens -= 1.0
             self._active_requests += 1
             return True
+
+    async def release(self) -> None:
+        async with self._lock:
+            self._active_requests -= 1
+
+
+class HttpAdmissionMiddleware:
+    """Apply an admission gate to all HTTP traffic or selected paths."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        gate: HttpAdmissionGate,
+        admitted_paths: tuple[str, ...] | None = None,
+    ) -> None:
+        self.app = app
+        self.gate = gate
+        self.admitted_paths = admitted_paths
+        self.rate_per_second = gate.rate_per_second
+        self.burst_capacity = gate.burst_capacity
+        self.max_concurrent_requests = gate.max_concurrent_requests
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http" or (
+            self.admitted_paths is not None
+            and scope.get("path") not in self.admitted_paths
+        ):
+            await self.app(scope, receive, send)
+            return
+        if not await self.gate.try_admit():
+            response = JSONResponse(
+                {"error": "rate_limited"}, status_code=429,
+                headers={"Retry-After": "1"},
+            )
+            await response(scope, receive, send)
+            return
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            await self.gate.release()
 
 
 def _configure_safe_logging() -> None:
@@ -358,6 +379,7 @@ def create_mcp_http_mount(
     service: McpService,
     *,
     path: str,
+    admission_gate: HttpAdmissionGate | None = None,
 ) -> McpHttpMount:
     mcp = create_mcp(settings, service)
     base = mcp.http_app(
@@ -367,14 +389,17 @@ def create_mcp_http_mount(
         allowed_hosts=list(settings.allowed_hosts),
         allowed_origins=list(settings.allowed_origins),
     )
+    resolved_admission_gate = admission_gate or HttpAdmissionGate(
+        rate_per_second=settings.rate_per_second,
+        burst_capacity=settings.burst_capacity,
+        max_concurrent_requests=settings.max_concurrent_requests,
+    )
     bounded = HttpAdmissionMiddleware(
         RequestBodyLimitMiddleware(
             base,
             max_body_bytes=MAX_REQUEST_BODY_BYTES,
         ),
-        rate_per_second=settings.rate_per_second,
-        burst_capacity=settings.burst_capacity,
-        max_concurrent_requests=settings.max_concurrent_requests,
+        gate=resolved_admission_gate,
     )
     return McpHttpMount(app=bounded, lifespan=getattr(base, "lifespan", None))
 

@@ -14,7 +14,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .marketing_api import install_marketing_routes
 from .mcp_search_service import McpSearchService
-from .mcp_server import McpService, create_mcp_http_mount
+from .mcp_server import (
+    HttpAdmissionGate,
+    HttpAdmissionMiddleware,
+    McpService,
+    create_mcp_http_mount,
+)
 from .mcp_settings import McpSettings
 
 
@@ -42,7 +47,17 @@ def create_app(
 ) -> FastAPI:
     settings = settings or McpSettings.from_env(os.environ)
     service = service or McpSearchService.from_settings(settings)
-    mcp_mount = create_mcp_http_mount(settings, service, path="/")
+    admission_gate = HttpAdmissionGate(
+        rate_per_second=settings.rate_per_second,
+        burst_capacity=settings.burst_capacity,
+        max_concurrent_requests=settings.max_concurrent_requests,
+    )
+    mcp_mount = create_mcp_http_mount(
+        settings,
+        service,
+        path="/",
+        admission_gate=admission_gate,
+    )
     if not callable(mcp_mount.lifespan):
         raise RuntimeError("FastMCP HTTP lifespan is unavailable")
 
@@ -52,6 +67,11 @@ def create_app(
             yield
 
     app = FastAPI(title="GEOscope", lifespan=lifespan)
+    app.add_middleware(
+        HttpAdmissionMiddleware,
+        gate=admission_gate,
+        admitted_paths=("/api/demo/search",),
+    )
     app.state.search_service = service
 
     @app.get("/healthz")

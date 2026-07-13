@@ -5,6 +5,7 @@ from typing import Any
 
 import fastmcp
 import pytest
+from fastapi.testclient import TestClient
 from fastmcp import Client
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
@@ -298,6 +299,42 @@ def test_create_app_uses_elasticsearch_adapter_and_http_guards(monkeypatch) -> N
         "allowed_origins": ["https://client.example.org"],
     }
     assert sentinel_service.open_calls == 0
+
+
+def test_standalone_mcp_retains_its_admission_budget(
+    fake_service: FakeService,
+) -> None:
+    settings = _settings()
+    limited = McpSettings(
+        elasticsearch=settings.elasticsearch,
+        public_base_url=settings.public_base_url,
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.allowed_origins,
+        search_quality=settings.search_quality,
+        rate_per_second=1e-9,
+        burst_capacity=1,
+        max_concurrent_requests=10,
+    )
+    app = create_app(settings=limited, service=fake_service)
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "standalone-test", "version": "1"},
+        },
+    }
+    headers = {"Accept": "application/json, text/event-stream"}
+
+    with TestClient(app, base_url="https://geo.example.org") as client:
+        first = client.post(MCP_PATH, json=initialize, headers=headers)
+        second = client.post(MCP_PATH, json=initialize, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json() == {"error": "rate_limited"}
 
 
 def test_body_limit_accommodates_largest_valid_unicode_search() -> None:
