@@ -159,11 +159,13 @@ class FakeReranker:
         *,
         scores: dict[str, int] | None = None,
         error: Exception | None = None,
+        on_rerank=None,
         close_error: Exception | None = None,
         close_events: list[str] | None = None,
     ) -> None:
         self.scores = scores
         self.error = error
+        self.on_rerank = on_rerank
         self.close_error = close_error
         self.rerank_calls: list[tuple[str, tuple[SearchCandidate, ...], int]] = []
         self.closed = False
@@ -173,6 +175,8 @@ class FakeReranker:
         self, query: str, candidates: tuple[SearchCandidate, ...], *, limit: int
     ) -> RerankResult:
         self.rerank_calls.append((query, tuple(candidates), limit))
+        if self.on_rerank is not None:
+            self.on_rerank()
         if self.error is not None:
             raise self.error
         scores = self.scores or {
@@ -437,6 +441,84 @@ def test_close_attempts_every_resource_when_reranker_close_fails() -> None:
     assert not service.is_open
 
 
+def test_close_waits_for_inflight_search_and_rejects_new_operations() -> None:
+    rerank_started = threading.Event()
+    allow_rerank = threading.Event()
+    close_started = threading.Event()
+    close_finished = threading.Event()
+
+    def pause_rerank() -> None:
+        rerank_started.set()
+        assert allow_rerank.wait(timeout=2)
+
+    native = FakeNativeSource()
+    reranker = FakeReranker(on_rerank=pause_rerank)
+    service, client, _, encoder, _ = _service(
+        native=native,
+        reranker=reranker,
+    )
+    service.open()
+    executions = []
+    search_errors: list[BaseException] = []
+    close_errors: list[BaseException] = []
+
+    def run_search() -> None:
+        try:
+            executions.append(
+                service.search_execution(
+                    query="immune",
+                    filters=SearchFilters(),
+                    mode="hybrid",
+                    limit=10,
+                )
+            )
+        except BaseException as exc:
+            search_errors.append(exc)
+
+    def run_close() -> None:
+        close_started.set()
+        try:
+            service.close()
+        except BaseException as exc:
+            close_errors.append(exc)
+        finally:
+            close_finished.set()
+
+    search_thread = threading.Thread(target=run_search)
+    close_thread = threading.Thread(target=run_close)
+    search_thread.start()
+    assert rerank_started.wait(timeout=2)
+    close_thread.start()
+    assert close_started.wait(timeout=2)
+    with service._state_condition:
+        assert service._state_condition.wait_for(
+            lambda: service._closing, timeout=2
+        )
+
+    assert not close_finished.is_set()
+    with pytest.raises(RuntimeError, match="closing"):
+        service.ping()
+
+    allow_rerank.set()
+    search_thread.join(timeout=2)
+    close_thread.join(timeout=2)
+
+    assert not search_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert search_errors == []
+    assert close_errors == []
+    assert len(executions) == 1
+    provenance = executions[0].output.provenance
+    assert provenance.rerank_attempted is True
+    assert provenance.rerank_applied is True
+    assert provenance.rerank_model == "gpt-5.6-luna"
+    assert provenance.rerank_reasoning_effort == "low"
+    assert reranker.closed
+    assert native.closed
+    assert encoder.closed
+    assert client.closed
+
+
 def test_truncated_facet_vocabulary_fails_closed() -> None:
     class TruncatedClient(_Client):
         def search(self, **kwargs: object) -> dict[str, object]:
@@ -497,7 +579,7 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
     assert len(output.results[0].title or "") == 500
     assert len(output.results[0].snippet or "") == 1000
     assert len(output.results[0].assay_labels) == 100
-    assert output.results[0].truncated_fields == ["assay_labels", "snippet", "title"]
+    assert output.results[0].truncated_fields == []
     assert output.retrieval_version == (
         "geo-series-v1:gemini_embedding_2_3072_v1:"
         "embedding_gemini_3072:bm25"
@@ -754,8 +836,60 @@ def test_elasticsearch_candidate_text_and_arrays_are_bounded_before_reranking() 
     assert len(candidates[0].assay_categories) == 100
     assert len(candidates[0].assay_labels) == 100
     assert len(candidates[0].assay_status or "") == 256
-    assert "title" in output.results[0].truncated_fields
-    assert "snippet" in output.results[0].truncated_fields
+    assert output.results[0].truncated_fields == []
+
+
+def test_summary_marks_only_values_strictly_over_the_output_bounds() -> None:
+    service, _, _, _, _ = _service()
+    exact = _native_candidate(
+        "GSE310900",
+        1,
+        title="t" * 500,
+        snippet="s" * 1000,
+        study_type="y" * 200,
+        organism_ids=tuple("o" * 256 for _ in range(100)),
+        organism_status="m" * 256,
+        sex_ids=tuple("x" * 256 for _ in range(100)),
+        sex_status="u" * 256,
+        assay_categories=tuple("c" * 256 for _ in range(100)),
+        assay_labels=tuple("l" * 256 for _ in range(100)),
+        assay_status="a" * 256,
+    )
+    over = _native_candidate(
+        "GSE310901",
+        1,
+        title="t" * 501,
+        snippet="s" * 1001,
+        study_type="y" * 201,
+        organism_ids=tuple("o" * 257 for _ in range(101)),
+        organism_status="m" * 257,
+        sex_ids=tuple("x" * 257 for _ in range(101)),
+        sex_status="u" * 257,
+        assay_categories=tuple("c" * 257 for _ in range(101)),
+        assay_labels=tuple("l" * 257 for _ in range(101)),
+        assay_status="a" * 257,
+    )
+
+    exact_summary = service._summary_from_candidate(
+        exact, rank=1, final_score=None
+    )
+    over_summary = service._summary_from_candidate(
+        over, rank=1, final_score=None
+    )
+
+    assert exact_summary.truncated_fields == []
+    assert over_summary.truncated_fields == [
+        "assay_categories",
+        "assay_labels",
+        "assay_status",
+        "organism_ids",
+        "organism_status",
+        "sex_ids",
+        "sex_status",
+        "snippet",
+        "study_type",
+        "title",
+    ]
 
 
 def test_exact_lookup_maps_urls_pubmed_and_missing() -> None:

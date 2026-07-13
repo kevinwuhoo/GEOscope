@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Generic, Protocol, TypeVar, cast
@@ -316,6 +317,9 @@ class McpSearchService:
             MappingProxyType({})
         )
         self._state_lock = threading.Lock()
+        self._state_condition = threading.Condition(self._state_lock)
+        self._closing = False
+        self._active_operations = 0
         self._encoder_lock = threading.Lock()
         self._inference_lock = threading.Lock()
 
@@ -344,7 +348,9 @@ class McpSearchService:
         return create_query_encoder(model_key)
 
     def open(self) -> None:
-        with self._state_lock:
+        with self._state_condition:
+            while self._closing:
+                self._state_condition.wait()
             if self.is_open:
                 return
             client = self._client_factory(self.elasticsearch)
@@ -381,7 +387,23 @@ class McpSearchService:
             self._facet_vocabulary = MappingProxyType(vocabulary)
 
     def close(self) -> None:
-        with self._state_lock:
+        with self._state_condition:
+            while self._closing:
+                self._state_condition.wait()
+            if all(
+                resource is None
+                for resource in (
+                    self._reranker,
+                    self._ncbi_source,
+                    self._encoder,
+                    self._search,
+                    self._client,
+                )
+            ):
+                return
+            self._closing = True
+            while self._active_operations:
+                self._state_condition.wait()
             reranker = self._reranker
             native_source = self._ncbi_source
             encoder = self._encoder
@@ -392,7 +414,8 @@ class McpSearchService:
             self._search = None
             self._client = None
             self._facet_vocabulary = MappingProxyType({})
-            close_error: BaseException | None = None
+        close_error: BaseException | None = None
+        try:
             for resource in (reranker, native_source, encoder, client):
                 close = getattr(resource, "close", None)
                 if callable(close):
@@ -401,8 +424,28 @@ class McpSearchService:
                     except BaseException as exc:
                         if close_error is None:
                             close_error = exc
-            if close_error is not None:
-                raise close_error
+        finally:
+            with self._state_condition:
+                self._closing = False
+                self._state_condition.notify_all()
+        if close_error is not None:
+            raise close_error
+
+    @contextmanager
+    def _operation_lease(self) -> Iterator[None]:
+        with self._state_condition:
+            if self._closing:
+                raise RuntimeError("McpSearchService is closing")
+            if not self.is_open:
+                raise RuntimeError("McpSearchService is not open")
+            self._active_operations += 1
+        try:
+            yield
+        finally:
+            with self._state_condition:
+                self._active_operations -= 1
+                if self._active_operations == 0:
+                    self._state_condition.notify_all()
 
     @staticmethod
     def _load_facet_vocabulary(
@@ -644,7 +687,7 @@ class McpSearchService:
             "assay_status": (candidate.assay_status, 256),
         }
         for field, (value, bound) in text_fields.items():
-            if value is not None and len(value) >= bound:
+            if value is not None and len(value) > bound:
                 truncated.add(field)
         array_fields = {
             "organism_ids": candidate.organism_ids,
@@ -653,7 +696,7 @@ class McpSearchService:
             "assay_labels": candidate.assay_labels,
         }
         for field, values in array_fields.items():
-            if len(values) >= 100 or any(len(value) >= 256 for value in values):
+            if len(values) > 100 or any(len(value) > 256 for value in values):
                 truncated.add(field)
         summary = DatasetSummary(
             rank=rank,
@@ -798,6 +841,17 @@ class McpSearchService:
     def search_execution(
         self, *, query: str, filters: SearchFilters, mode: str, limit: int
     ) -> SearchExecution:
+        with self._operation_lease():
+            return self._search_execution(
+                query=query,
+                filters=filters,
+                mode=mode,
+                limit=limit,
+            )
+
+    def _search_execution(
+        self, *, query: str, filters: SearchFilters, mode: str, limit: int
+    ) -> SearchExecution:
         query = self._validate_search_request(query, filters, mode, limit)
         self._require_filters(filters)
         client, search = self._require_open()
@@ -940,6 +994,10 @@ class McpSearchService:
         return SearchExecution(output=output, native=native, candidates=merged)
 
     def get_dataset(self, gse: str) -> GetDatasetOutput:
+        with self._operation_lease():
+            return self._get_dataset(gse)
+
+    def _get_dataset(self, gse: str) -> GetDatasetOutput:
         if not isinstance(gse, str) or not _GSE_RE.fullmatch(gse):
             raise ValueError("gse must be a normalized GSE accession")
         _, search = self._require_open()
@@ -964,6 +1022,24 @@ class McpSearchService:
         return GetDatasetOutput(found=True, dataset=dataset)
 
     def facet_values(
+        self,
+        *,
+        field: FacetField,
+        query: str | None,
+        filters: SearchFilters,
+        mode: str,
+        limit: int,
+    ) -> FacetValuesOutput:
+        with self._operation_lease():
+            return self._facet_values(
+                field=field,
+                query=query,
+                filters=filters,
+                mode=mode,
+                limit=limit,
+            )
+
+    def _facet_values(
         self,
         *,
         field: FacetField,
@@ -1011,5 +1087,6 @@ class McpSearchService:
         )
 
     def ping(self) -> None:
-        client, _ = self._require_open()
-        self._readiness_check(client, self.elasticsearch.active_model_key)
+        with self._operation_lease():
+            client, _ = self._require_open()
+            self._readiness_check(client, self.elasticsearch.active_model_key)
