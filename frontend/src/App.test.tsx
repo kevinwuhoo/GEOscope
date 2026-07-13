@@ -139,9 +139,6 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   expect(
     screen.getByRole("article", { name: /ncbi geo result 1: literal keyword match/i }),
   ).toBeInTheDocument();
-  expect(
-    screen.getByText(/not returned by ncbi geo keyword search/i),
-  ).toBeInTheDocument();
 });
 
 

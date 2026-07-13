@@ -22,7 +22,6 @@ function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?:
         <a href={`https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=${result.gse}`} target="_blank" rel="noreferrer">
           {result.gse}
         </a>
-        {inNative === false && <span className="miss-label">Not returned by NCBI GEO keyword search</span>}
       </div>
       <h4>{title}</h4>
       {result.snippet && <p>{result.snippet}</p>}
