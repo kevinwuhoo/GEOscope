@@ -1,4 +1,4 @@
-"""Invite-only FastMCP application exposing the stable GEO retrieval tools."""
+"""Public FastMCP application exposing the stable GEO retrieval tools."""
 
 from __future__ import annotations
 
