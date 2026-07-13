@@ -107,31 +107,12 @@ def _default_service_factory() -> McpSearchService:
     )
 
 
-def create_app(
+def install_marketing_routes(
+    app: FastAPI,
     *,
-    service_factory: Callable[[], SearchService] | None = None,
-    geo_factory: Callable[[], GeoComparison] | None = None,
     static_dir: Path | None = None,
-) -> FastAPI:
-    resolved_service_factory = service_factory or _default_service_factory
-    resolved_geo_factory = geo_factory or EutilsGeoComparison
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        service = resolved_service_factory()
-        service.open()
-        app.state.search_service = service
-        geo = resolved_geo_factory()
-        app.state.geo = geo
-        try:
-            yield
-        finally:
-            geo_close = getattr(geo, "close", None)
-            if callable(geo_close):
-                geo_close()
-            service.close()
-
-    app = FastAPI(title="GEOscope", lifespan=lifespan)
+) -> None:
+    """Install browser routes after server routes such as /mcp and health."""
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -189,22 +170,54 @@ def create_app(
             "membership": membership,
         }
 
-    if static_dir is not None:
-        index_path = static_dir / "index.html"
-        assets_path = static_dir / "assets"
-        if assets_path.is_dir():
-            app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+    if static_dir is None:
+        return
+    index_path = static_dir / "index.html"
+    assets_path = static_dir / "assets"
+    if assets_path.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
 
-        @app.get("/", include_in_schema=False)
-        async def frontend_root() -> FileResponse:
-            return FileResponse(index_path)
+    @app.get("/", include_in_schema=False)
+    async def frontend_root() -> FileResponse:
+        return FileResponse(index_path)
 
-        @app.get("/{frontend_path:path}", include_in_schema=False)
-        async def frontend_fallback(frontend_path: str) -> FileResponse:
-            if frontend_path == "api" or frontend_path.startswith("api/"):
-                raise HTTPException(status_code=404, detail="Not found")
-            return FileResponse(index_path)
+    @app.get("/{frontend_path:path}", include_in_schema=False)
+    async def frontend_fallback(frontend_path: str) -> FileResponse:
+        reserved = ("api", "mcp", "healthz", "readyz")
+        if any(
+            frontend_path == prefix or frontend_path.startswith(f"{prefix}/")
+            for prefix in reserved
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(index_path)
 
+
+def create_app(
+    *,
+    service_factory: Callable[[], SearchService] | None = None,
+    geo_factory: Callable[[], GeoComparison] | None = None,
+    static_dir: Path | None = None,
+) -> FastAPI:
+    resolved_service_factory = service_factory or _default_service_factory
+    resolved_geo_factory = geo_factory or EutilsGeoComparison
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        service = resolved_service_factory()
+        service.open()
+        app.state.search_service = service
+        geo = resolved_geo_factory()
+        app.state.geo = geo
+        try:
+            yield
+        finally:
+            geo_close = getattr(geo, "close", None)
+            if callable(geo_close):
+                geo_close()
+            service.close()
+
+    app = FastAPI(title="GEOscope", lifespan=lifespan)
+    install_marketing_routes(app, static_dir=static_dir)
     return app
 
 

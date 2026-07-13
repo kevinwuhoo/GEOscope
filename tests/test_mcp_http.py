@@ -3,16 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import warnings
-from urllib.parse import urlparse
-
-from fastmcp.server.auth import RemoteAuthProvider
-from fastmcp.server.auth.providers.jwt import RSAKeyPair
-from pydantic import AnyHttpUrl
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
-from geo_index.mcp_auth import JWTVerifier
 from geo_index.mcp_models import (
     FacetResultOutput,
     FacetValuesOutput,
@@ -29,8 +22,6 @@ from geo_index.mcp_settings import McpSettings
 from geo_index.search_models import FACET_FIELDS
 
 
-ISSUER = "https://issuer.test/"
-AUDIENCE = "geo-mcp-test"
 SENTINEL_QUERY = "SENTINEL-RAW-QUERY-9f7c"
 SENTINEL_SECRET = "SENTINEL-ELASTIC-SECRET-314f"
 
@@ -41,12 +32,9 @@ def _settings() -> McpSettings:
             url="https://elastic.internal:9200", api_key=SENTINEL_SECRET,
             active_model_key="gemini_embedding_2_3072_v1",
         ),
-        public_base_url="https://geo.test", jwks_uri=f"{ISSUER}jwks",
-        issuer=ISSUER, audience=AUDIENCE,
-        authorization_server=ISSUER.rstrip("/"),
-        allowed_subjects=frozenset({"invited-user"}),
+        public_base_url="https://geo.test",
         allowed_hosts=("geo.test",), allowed_origins=("https://client.test",),
-        rate_per_second=1000, burst_capacity=100,
+        rate_per_second=1000, burst_capacity=100, max_concurrent_requests=100,
     )
 
 
@@ -93,18 +81,6 @@ class FakeService:
         )
 
 
-def _auth(settings: McpSettings, pair: RSAKeyPair) -> RemoteAuthProvider:
-    return RemoteAuthProvider(
-        token_verifier=JWTVerifier(
-            public_key=pair.public_key, issuer=settings.issuer,
-            audience=settings.audience, required_scopes=[settings.required_scope],
-        ),
-        authorization_servers=[AnyHttpUrl(settings.authorization_server)],
-        base_url=settings.public_base_url,
-        scopes_supported=[settings.required_scope],
-    )
-
-
 def _initialize_body() -> dict[str, object]:
     return {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -113,14 +89,13 @@ def _initialize_body() -> dict[str, object]:
     }
 
 
-def _headers(bearer: str | None = None, *, host: str = "geo.test", origin: str | None = None):
+def _headers(*, host: str = "geo.test", origin: str | None = None):
     values = {"Host": host, "Accept": "application/json, text/event-stream"}
-    if bearer: values["Authorization"] = f"Bearer {bearer}"
     if origin: values["Origin"] = origin
     return values
 
 
-def test_raw_asgi_auth_guards_health_readiness_and_log_redaction(caplog) -> None:
+def test_raw_asgi_anonymous_guards_health_readiness_and_log_redaction(caplog) -> None:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=Warning)
         from starlette.testclient import TestClient
@@ -128,38 +103,20 @@ def test_raw_asgi_auth_guards_health_readiness_and_log_redaction(caplog) -> None
     caplog.set_level(logging.DEBUG)
     settings = _settings()
     service = FakeService()
-    pair = RSAKeyPair.generate()
-    valid = pair.create_token(
-        subject="invited-user", issuer=ISSUER, audience=AUDIENCE,
-        scopes=["geo:read"], expires_in_seconds=300,
-    )
-    uninvited = pair.create_token(
-        subject="uninvited-user", issuer=ISSUER, audience=AUDIENCE,
-        scopes=["geo:read"], expires_in_seconds=300,
-    )
-    app = create_app(settings=settings, service=service, auth_provider=_auth(settings, pair))
+    app = create_app(settings=settings, service=service)
 
     with TestClient(app, base_url=settings.public_base_url) as client:
-        missing = client.post("/mcp", json=_initialize_body(), headers=_headers())
-        assert missing.status_code == 401
-        match = re.search(r'resource_metadata="([^"]+)"', missing.headers["www-authenticate"])
-        assert match is not None
-        metadata = client.get(urlparse(match.group(1)).path, headers={"Host": "geo.test"})
-        assert metadata.status_code == 200
-        assert metadata.json()["resource"] == settings.mcp_url
-
-        denied = client.post("/mcp", json=_initialize_body(), headers=_headers(uninvited))
-        assert denied.status_code == 200
         accepted = client.post(
             "/mcp", json=_initialize_body(),
-            headers=_headers(valid, origin="https://client.test"),
+            headers=_headers(origin="https://client.test"),
         )
         assert accepted.status_code == 200
+        assert "www-authenticate" not in accepted.headers
         assert "mcp-session-id" not in accepted.headers
 
         oversized = client.post(
             "/mcp", content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
-            headers={**_headers(valid), "Content-Type": "application/json"},
+            headers={**_headers(), "Content-Type": "application/json"},
         )
         assert oversized.status_code == 413
         assert oversized.json() == {"error": "request_too_large"}
@@ -178,14 +135,13 @@ def test_raw_asgi_auth_guards_health_readiness_and_log_redaction(caplog) -> None
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": "search_datasets", "arguments": {"query": SENTINEL_QUERY}},
         }
-        assert client.post("/mcp", json=call, headers=_headers(valid)).status_code == 200
+        assert client.post("/mcp", json=call, headers=_headers()).status_code == 200
         assert service.search_calls[-1]["query"] == SENTINEL_QUERY
         service.search_error = RuntimeError("SENTINEL-PRIVATE-ERROR")
-        assert client.post("/mcp", json=call | {"id": 3}, headers=_headers(valid)).status_code == 200
+        assert client.post("/mcp", json=call | {"id": 3}, headers=_headers()).status_code == 200
 
     assert service.open_calls == 1
     assert service.close_calls == 1
-    assert valid not in caplog.text
     assert SENTINEL_SECRET not in caplog.text
     assert SENTINEL_QUERY not in caplog.text
     assert "SENTINEL-PRIVATE-ERROR" not in caplog.text

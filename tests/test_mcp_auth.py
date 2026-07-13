@@ -10,39 +10,16 @@ from fastmcp.server.auth.providers.jwt import (
     RSAKeyPair,
 )
 from joserfc import jwk
-from pydantic import AnyHttpUrl
-
-from geo_index.elasticsearch_config import ElasticsearchSettings
 from geo_index.mcp_auth import (
     JWTVerifier,
     _valid_time_claims,
-    create_auth,
     require_invited_subject,
 )
-from geo_index.mcp_settings import McpSettings
 
 
 def _ctx(subject: object | None = None):
     token = None if subject is None else SimpleNamespace(claims={"sub": subject})
     return SimpleNamespace(token=token)
-
-
-def _settings() -> McpSettings:
-    return McpSettings(
-        elasticsearch=ElasticsearchSettings(
-            url="https://elastic.internal:9200",
-            api_key="secret-api-key",
-            active_model_key="gemini_embedding_2_3072_v1",
-        ),
-        public_base_url="https://geo.example.org",
-        jwks_uri="https://login.example.org/jwks",
-        issuer="https://login.example.org/",
-        audience="geo-mcp",
-        authorization_server="https://login.example.org",
-        allowed_subjects=frozenset({"user-1"}),
-        allowed_hosts=("geo.example.org",),
-        allowed_origins=(),
-    )
 
 
 def test_invited_subject_is_allowed() -> None:
@@ -59,40 +36,6 @@ def test_missing_blank_uninvited_or_nonstring_subject_is_denied() -> None:
 
 def test_invited_subject_is_stripped_before_matching() -> None:
     assert require_invited_subject(frozenset({"user-1"}))(_ctx(" user-1 ")) is True
-
-
-def test_create_auth_forwards_exact_remote_jwt_contract(monkeypatch) -> None:
-    calls: dict[str, dict[str, object]] = {}
-    verifier = object()
-    provider = object()
-
-    def fake_jwt_verifier(**kwargs):
-        calls["verifier"] = kwargs
-        return verifier
-
-    def fake_remote_auth_provider(**kwargs):
-        calls["provider"] = kwargs
-        return provider
-
-    monkeypatch.setattr("geo_index.mcp_auth.JWTVerifier", fake_jwt_verifier)
-    monkeypatch.setattr(
-        "geo_index.mcp_auth.RemoteAuthProvider", fake_remote_auth_provider
-    )
-
-    assert create_auth(_settings()) is provider
-    assert calls["verifier"] == {
-        "jwks_uri": "https://login.example.org/jwks",
-        "issuer": "https://login.example.org/",
-        "audience": "geo-mcp",
-        "required_scopes": ["geo:read"],
-    }
-    assert calls["provider"] == {
-        "token_verifier": verifier,
-        "authorization_servers": [AnyHttpUrl("https://login.example.org")],
-        "base_url": "https://geo.example.org",
-        "scopes_supported": ["geo:read"],
-    }
-    assert not any("redirect" in key for key in calls["provider"])
 
 
 def test_time_claims_require_expiration_and_reject_future_activation() -> None:

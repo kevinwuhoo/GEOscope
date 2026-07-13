@@ -9,8 +9,13 @@ The design lives in the planning vault under [`wiki/`](wiki/Home.md) (Obsidian).
 Requires Python ≥3.11 and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync
+uv sync --all-extras
 ```
+
+The complete development environment includes ETL orchestration, local embedding
+models, and the historical PostgreSQL comparison. The production image uses
+`uv sync --frozen --no-dev`, which installs only the online search service and
+does not include Prefect, PyTorch/sentence-transformers, or PostgreSQL clients.
 
 For a polite, faster crawl (10 req/s instead of 3), set an [NCBI API key](https://www.ncbi.nlm.nih.gov/account/):
 

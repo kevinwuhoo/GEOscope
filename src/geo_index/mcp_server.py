@@ -6,19 +6,16 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AuthProvider
 from fastmcp.server.lifespan import lifespan
-from fastmcp.server.middleware import AuthMiddleware
-from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from mcp.types import ToolAnnotations
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .mcp_auth import create_auth, require_invited_subject
 from .mcp_models import (
     FacetFieldName,
     FacetValuesInput,
@@ -262,7 +259,6 @@ def _service_from_context(ctx: Context) -> McpService:
 def create_mcp(
     settings: McpSettings,
     service: McpService,
-    auth_provider: AuthProvider | None = None,
 ) -> FastMCP:
     _configure_safe_logging()
 
@@ -274,19 +270,10 @@ def create_mcp(
         finally:
             service.close()
 
-    auth = auth_provider or create_auth(settings)
     mcp = FastMCP(
         "GEO Metadata Index",
         instructions=INSTRUCTIONS,
-        auth=auth,
         lifespan=app_lifespan,
-        middleware=[
-            AuthMiddleware(auth=require_invited_subject(settings.allowed_subjects)),
-            RateLimitingMiddleware(
-                max_requests_per_second=settings.rate_per_second,
-                burst_capacity=settings.burst_capacity,
-            ),
-        ],
         strict_input_validation=True,
         mask_error_details=True,
         on_duplicate="error",
@@ -364,22 +351,39 @@ def _register_health_routes(mcp: FastMCP, service: McpService) -> None:
         return JSONResponse({"status": "ready"})
 
 
-def create_app(settings=None, service=None, auth_provider=None):
-    settings = settings or McpSettings.from_env(os.environ)
-    service = service or McpSearchService.from_settings(settings)
-    mcp = create_mcp(settings, service, auth_provider)
-    return HttpAdmissionMiddleware(
+@dataclass(frozen=True)
+class McpHttpMount:
+    app: ASGIApp
+    lifespan: object | None
+
+
+def create_mcp_http_mount(
+    settings: McpSettings,
+    service: McpService,
+    *,
+    path: str,
+) -> McpHttpMount:
+    mcp = create_mcp(settings, service)
+    base = mcp.http_app(
+        path=path,
+        stateless_http=True,
+        host_origin_protection=True,
+        allowed_hosts=list(settings.allowed_hosts),
+        allowed_origins=list(settings.allowed_origins),
+    )
+    bounded = HttpAdmissionMiddleware(
         RequestBodyLimitMiddleware(
-            mcp.http_app(
-                path=MCP_PATH,
-                stateless_http=True,
-                host_origin_protection=True,
-                allowed_hosts=list(settings.allowed_hosts),
-                allowed_origins=list(settings.allowed_origins),
-            ),
+            base,
             max_body_bytes=MAX_REQUEST_BODY_BYTES,
         ),
         rate_per_second=settings.rate_per_second,
         burst_capacity=settings.burst_capacity,
-        max_concurrent_requests=settings.burst_capacity,
+        max_concurrent_requests=settings.max_concurrent_requests,
     )
+    return McpHttpMount(app=bounded, lifespan=getattr(base, "lifespan", None))
+
+
+def create_app(settings=None, service=None):
+    settings = settings or McpSettings.from_env(os.environ)
+    service = service or McpSearchService.from_settings(settings)
+    return create_mcp_http_mount(settings, service, path=MCP_PATH).app

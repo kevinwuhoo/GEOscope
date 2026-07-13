@@ -5,11 +5,8 @@ import math
 import time
 from collections.abc import Callable, Mapping
 
-from fastmcp.server.auth import AuthContext, RemoteAuthProvider
+from fastmcp.server.auth import AuthContext
 from fastmcp.server.auth.providers.jwt import JWTVerifier as FastMCPJWTVerifier
-from pydantic import AnyHttpUrl
-
-from .mcp_settings import McpSettings
 
 
 AuthCheck = Callable[[AuthContext], bool]
@@ -89,18 +86,3 @@ def require_invited_subject(subjects: frozenset[str]) -> AuthCheck:
             and subject.strip() in subjects
         )
     return check
-
-
-def create_auth(settings: McpSettings) -> RemoteAuthProvider:
-    verifier = JWTVerifier(
-        jwks_uri=settings.jwks_uri,
-        issuer=settings.issuer,
-        audience=settings.audience,
-        required_scopes=[settings.required_scope],
-    )
-    return RemoteAuthProvider(
-        token_verifier=verifier,
-        authorization_servers=[AnyHttpUrl(settings.authorization_server)],
-        base_url=settings.public_base_url,
-        scopes_supported=[settings.required_scope],
-    )
