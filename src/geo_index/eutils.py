@@ -58,14 +58,17 @@ class EutilsClient:
     _min_interval: float = field(init=False)
     _next_request_at: float = field(init=False, default=0.0)
     _rate_lock: threading.Lock = field(init=False, repr=False)
+    _transport_lock: threading.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # 10 req/s with a key, 3 without. Leave a little headroom.
         rate = 9.0 if self.api_key else 2.5
         self._min_interval = 1.0 / rate
         self._rate_lock = threading.Lock()
-        # httpx.Client is intentionally shared: HTTPX documents Client as
-        # thread-safe. Only the rate-accounting state above needs a lock.
+        self._transport_lock = threading.Lock()
+        # HTTPX documents Client as thread-safe. The transport lock is instead
+        # a deliberate rate-policy handoff: no later call can start between a
+        # due-now claim and this client's synchronous request boundary.
         self._client = httpx.Client(base_url=BASE_URL, timeout=self.timeout)
 
     def __enter__(self) -> "EutilsClient":
@@ -110,6 +113,41 @@ class EutilsClient:
             raise TimeoutError("NCBI request deadline expired")
         return min(self.timeout, remaining)
 
+    def _acquire_transport(self, deadline: float | None) -> None:
+        if deadline is None:
+            self._transport_lock.acquire()
+            return
+        remaining = deadline - self.clock()
+        if remaining <= 0 or not self._transport_lock.acquire(timeout=remaining):
+            raise TimeoutError("NCBI transport gate acquisition timed out")
+
+    def _transport_get(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any],
+        deadline: float | None,
+    ) -> httpx.Response:
+        """Start one request under the rate/transport handoff guarantee."""
+
+        self._acquire_transport(deadline)
+        started = False
+        try:
+            self._throttle(deadline=deadline)
+            timeout = self._request_timeout(deadline)
+            started = True
+            return self._client.get(path, params=params, timeout=timeout)
+        finally:
+            try:
+                if started:
+                    with self._rate_lock:
+                        self._next_request_at = max(
+                            self._next_request_at,
+                            self.clock() + self._min_interval,
+                        )
+            finally:
+                self._transport_lock.release()
+
     def _backoff(self, seconds: float, deadline: float | None) -> None:
         if deadline is not None and self.clock() + seconds >= deadline:
             raise TimeoutError("NCBI retry deadline expired")
@@ -125,12 +163,11 @@ class EutilsClient:
         merged = {**self._common_params(), **params}
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
-            self._throttle(deadline=deadline)
             try:
-                resp = self._client.get(
+                resp = self._transport_get(
                     path,
                     params=merged,
-                    timeout=self._request_timeout(deadline),
+                    deadline=deadline,
                 )
                 if resp.status_code in RETRY_STATUSES:
                     raise httpx.HTTPStatusError(

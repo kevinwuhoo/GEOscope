@@ -10,10 +10,11 @@ from geo_index.eutils import EutilsClient
 
 
 class _ControlledSchedule:
-    def __init__(self) -> None:
+    def __init__(self, *, delay_first_waiter: bool = True) -> None:
         self._condition = threading.Condition()
         self._now = 0.0
         self._waiters: dict[int, float] = {}
+        self._delay_first_waiter = delay_first_waiter
         self._delayed_thread: int | None = None
         self._release_delayed = False
         self.starts: list[float] = []
@@ -27,7 +28,7 @@ class _ControlledSchedule:
         with self._condition:
             target = self._now + seconds
             self._waiters[ident] = target
-            if self._delayed_thread is None:
+            if self._delay_first_waiter and self._delayed_thread is None:
                 self._delayed_thread = ident
             self._condition.notify_all()
             assert self._condition.wait_for(
@@ -89,6 +90,29 @@ class _RecordingHttpClient:
         pass
 
 
+class _ObservedTransportGate:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._condition = threading.Condition()
+        self._attempts = 0
+
+    def acquire(self, *, timeout: float) -> bool:
+        with self._condition:
+            self._attempts += 1
+            self._condition.notify_all()
+        return self._lock.acquire(timeout=timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def wait_for_attempts(self, count: int) -> None:
+        with self._condition:
+            assert self._condition.wait_for(
+                lambda: self._attempts >= count,
+                timeout=2,
+            )
+
+
 def test_rate_gate_rechecks_the_clock_after_each_lock_free_wait() -> None:
     waits: list[float] = []
     now = 0.0
@@ -125,6 +149,8 @@ def test_delayed_waiter_cannot_bunch_actual_request_starts() -> None:
     )
     client._client.close()
     client._client = _RecordingHttpClient(schedule)  # type: ignore[assignment]
+    transport_gate = _ObservedTransportGate()
+    client._transport_lock = transport_gate  # type: ignore[assignment]
     client._throttle(deadline=3.0)
     step = client._min_interval
     try:
@@ -133,29 +159,124 @@ def test_delayed_waiter_cannot_bunch_actual_request_starts() -> None:
                 executor.submit(client._get, "/probe", {}, deadline=3.0)
                 for _ in range(4)
             ]
-            schedule.wait_for_waiters(4)
-            observed_expected_start_counts = []
-            schedule.advance(step)
-            observed_expected_start_counts.append(schedule.wait_for_starts(1))
-            schedule.advance(2 * step)
-            observed_expected_start_counts.append(schedule.wait_for_starts(2))
-            schedule.advance(3 * step, release_delayed=True)
-            observed_expected_start_counts.append(schedule.wait_for_starts(3))
-            schedule.advance(4 * step)
-            observed_expected_start_counts.append(schedule.wait_for_starts(4))
+            transport_gate.wait_for_attempts(4)
+            schedule.wait_for_waiters(1)
+            schedule.advance(3 * step + 1e-9, release_delayed=True)
+            assert schedule.wait_for_starts(1)
+            for start_count, start_at in enumerate(range(4, 7), 2):
+                schedule.wait_for_waiters(1)
+                schedule.advance(start_at * step + 1e-9)
+                assert schedule.wait_for_starts(start_count)
             for request in requests:
                 assert request.result().status_code == 200
     finally:
         client.close()
 
-    assert observed_expected_start_counts == [True, True, True, True]
     assert schedule.starts == pytest.approx(
-        [step, 2 * step, 3 * step, 4 * step]
+        [3 * step + 1e-9, 4 * step + 1e-9, 5 * step + 1e-9, 6 * step + 1e-9]
     )
     assert all(
         sum(start <= candidate < start + 1 for candidate in schedule.starts) <= 3
         for start in schedule.starts
     )
+
+
+def test_delayed_due_now_claimant_cannot_bunch_actual_request_starts() -> None:
+    schedule = _ControlledSchedule(delay_first_waiter=False)
+    client = EutilsClient(
+        api_key=None,
+        max_retries=1,
+        clock=schedule.clock,
+        sleep=schedule.sleep,
+    )
+    client._client.close()
+    client._client = _RecordingHttpClient(schedule)  # type: ignore[assignment]
+    transport_gate = _ObservedTransportGate()
+    client._transport_lock = transport_gate  # type: ignore[assignment]
+    original_request_timeout = client._request_timeout
+    claim_handed_off = threading.Event()
+    release_claimant = threading.Event()
+    timeout_calls = 0
+    timeout_calls_lock = threading.Lock()
+
+    def delay_first_claimant(deadline: float | None) -> float:
+        nonlocal timeout_calls
+        with timeout_calls_lock:
+            timeout_calls += 1
+            is_first = timeout_calls == 1
+        if is_first:
+            claim_handed_off.set()
+            assert release_claimant.wait(timeout=2)
+        return original_request_timeout(deadline)
+
+    client._request_timeout = delay_first_claimant  # type: ignore[method-assign]
+    step = client._min_interval
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            requests = [
+                executor.submit(client._get, "/probe", {}, deadline=3.0)
+            ]
+            assert claim_handed_off.wait(timeout=2)
+            requests.extend(
+                executor.submit(client._get, "/probe", {}, deadline=3.0)
+                for _ in range(3)
+            )
+            transport_gate.wait_for_attempts(4)
+            schedule.advance(3 * step + 1e-9)
+            release_claimant.set()
+            assert schedule.wait_for_starts(1)
+            schedule.wait_for_waiters(1)
+            schedule.advance(4 * step + 1e-9)
+            assert schedule.wait_for_starts(2)
+            schedule.wait_for_waiters(1)
+            schedule.advance(5 * step + 1e-9)
+            assert schedule.wait_for_starts(3)
+            schedule.wait_for_waiters(1)
+            schedule.advance(6 * step + 1e-9)
+            assert schedule.wait_for_starts(4), schedule.starts
+            for request in requests:
+                assert request.result().status_code == 200
+    finally:
+        release_claimant.set()
+        client.close()
+
+    assert all(
+        sum(start <= candidate < start + 1 for candidate in schedule.starts) <= 3
+        for start in schedule.starts
+    ), schedule.starts
+
+
+def test_transport_gate_acquisition_is_bounded_by_the_request_deadline() -> None:
+    class RejectingTransportGate:
+        def __init__(self) -> None:
+            self.timeouts: list[float] = []
+
+        def acquire(self, *, timeout: float) -> bool:
+            self.timeouts.append(timeout)
+            return False
+
+        def release(self) -> None:
+            raise AssertionError("an unacquired transport gate must not be released")
+
+    schedule = _ControlledSchedule(delay_first_waiter=False)
+    client = EutilsClient(
+        api_key=None,
+        max_retries=1,
+        clock=schedule.clock,
+        sleep=schedule.sleep,
+    )
+    client._client.close()
+    client._client = _RecordingHttpClient(schedule)  # type: ignore[assignment]
+    transport_gate = RejectingTransportGate()
+    client._transport_lock = transport_gate  # type: ignore[assignment]
+    try:
+        with pytest.raises(TimeoutError, match="NCBI transport gate"):
+            client._get("/probe", {}, deadline=2.0)
+    finally:
+        client.close()
+
+    assert transport_gate.timeouts == pytest.approx([2.0])
+    assert schedule.starts == []
 
 
 def test_rate_slot_wait_must_fit_inside_the_request_deadline() -> None:
