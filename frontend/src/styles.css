@@ -52,24 +52,18 @@ a:focus-visible, button:focus-visible, input:focus-visible, .signal-strip:focus-
 .mcp-install { width: 100%; max-width: 470px; justify-self: end; padding: 34px; border: 2px solid var(--carbon); background: var(--lime); box-shadow: 10px 10px 0 var(--carbon); }
 .mcp-install h3 { margin: 0; font: 650 clamp(34px, 3.4vw, 52px)/.93 var(--display); letter-spacing: -.055em; }
 .mcp-install__copy > p { margin: 18px 0 0; font-size: 16px; line-height: 1.4; }
-.mcp-install__action { margin-top: 30px; }
-.mcp-install__action label { display: block; margin-bottom: 10px; font: 650 10px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; }
-.mcp-install__copy-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-.mcp-install__copy-row input, .mcp-install__copy-row button { min-height: 56px; border: 2px solid var(--carbon); border-radius: 0; }
-.mcp-install__copy-row input { min-width: 0; width: 100%; padding: 0 15px; background: var(--white); color: var(--cobalt); font: 600 11px/1 var(--mono); }
-.mcp-install__copy-row button { width: 56px; min-width: 56px; margin-left: -2px; padding: 0; background: var(--carbon); color: var(--white); cursor: pointer; }
-.mcp-install__copy-row button:hover { background: var(--cobalt); }
-.mcp-install__copy-row button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.mcp-install__tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 28px; }
+.mcp-install__tab { display: grid; place-items: center; gap: 7px; min-width: 0; min-height: 76px; padding: 10px 6px; border: 1px solid var(--carbon); border-radius: 0; background: rgb(252 255 253 / .55); color: var(--carbon); font: 650 9px/1.15 var(--mono); cursor: pointer; }
+.mcp-install__tab + .mcp-install__tab { margin-left: -1px; }
+.mcp-install__tab[aria-selected="true"] { position: relative; z-index: 1; background: var(--carbon); color: var(--white); }
+.mcp-install__logo { width: 30px; height: 30px; object-fit: contain; }
+.mcp-install__panel { padding-top: 16px; }
+.mcp-install__instruction { min-height: 38px; margin: 0 0 10px; font: 500 11px/1.45 var(--mono); }
+.mcp-install__command { margin: 0; padding: 14px; overflow-wrap: anywhere; border: 2px solid var(--carbon); background: var(--white); color: var(--cobalt); font: 600 10px/1.5 var(--mono); white-space: pre-wrap; }
+.mcp-install__copy-command { display: inline-flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 48px; margin-top: -2px; border: 2px solid var(--carbon); border-radius: 0; background: var(--carbon); color: var(--white); font: 650 10px/1 var(--mono); text-transform: uppercase; cursor: pointer; }
+.mcp-install__copy-command:hover { background: var(--cobalt); }
+.mcp-install__copy-command svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .mcp-install__status { min-height: 18px; margin: 10px 0 0; font: 600 10px/1.4 var(--mono); }
-.mcp-install__clients { margin-top: 24px; padding-top: 18px; border-top: 1px solid rgb(16 35 33 / .34); }
-.mcp-install__clients > p { margin: 0 0 11px; font: 650 10px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; }
-.mcp-install__clients ul { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.mcp-install__clients li { display: grid; gap: 7px; min-width: 0; color: var(--carbon); font: 600 9px/1.1 var(--mono); text-align: center; }
-.agent-client__mark { display: grid; place-items: center; width: 34px; height: 34px; margin: 0 auto; border: 1px solid var(--carbon); border-radius: 50%; background: var(--white); font: 700 18px/1 var(--display); }
-.agent-client__mark--chatgpt { color: white; background: #10a37f; }
-.agent-client__mark--claude { color: white; background: #d97757; }
-.agent-client__mark--cursor { color: white; background: var(--carbon); }
-.agent-client__mark--copilot { color: white; background: linear-gradient(135deg, #315cff 0 50%, #7259d9 50%); }
 
 .scope-shell { position: relative; aspect-ratio: 1.12; width: 100%; max-width: 720px; justify-self: end; overflow: hidden; border: 2px solid var(--carbon); border-radius: 47% 53% 51% 49% / 43% 44% 56% 57%; background: var(--carbon); color: var(--white); isolation: isolate; animation: scope-arrive .8s cubic-bezier(.2,.75,.2,1) both; }
 .scope-shell::before, .scope-shell::after { content: ""; position: absolute; z-index: -1; background: #28403c; }
@@ -264,9 +258,8 @@ footer p { color: var(--muted); font-size: 13px; }
   .scope-focus strong { font-size: 24px; }
   .search-console__controls { grid-template-columns: 1fr; }
   .search-console__controls > button { margin: -1px 0 0; }
-  .mcp-install__copy-row { grid-template-columns: 1fr; }
-  .mcp-install__copy-row input { padding-inline: 10px; font-size: 10px; }
-  .mcp-install__copy-row button { width: 100%; margin: -2px 0 0; }
+  .mcp-install__tab { min-height: 70px; padding-inline: 3px; font-size: 8px; }
+  .mcp-install__logo { width: 26px; height: 26px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
