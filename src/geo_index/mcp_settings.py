@@ -101,9 +101,9 @@ class McpSettings:
     public_base_url: str
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
-    rate_per_second: float = 1.0
-    burst_capacity: int = 5
-    max_concurrent_requests: int = 4
+    rate_per_second: float = 100.0
+    burst_capacity: int = 100
+    max_concurrent_requests: int = 20
 
     @property
     def mcp_url(self) -> str:
@@ -136,7 +136,7 @@ class McpSettings:
         )
         allowed_origins = tuple(_validated_origin(value) for value in origin_values)
         try:
-            rate_per_second = float(env.get("GEO_MCP_RATE_PER_SECOND", "1"))
+            rate_per_second = float(env.get("GEO_MCP_RATE_PER_SECOND", "100"))
         except ValueError as exc:
             raise ValueError("GEO_MCP_RATE_PER_SECOND must be numeric") from exc
         if not math.isfinite(rate_per_second) or rate_per_second <= 0:
@@ -147,8 +147,8 @@ class McpSettings:
             allowed_hosts=tuple(value for value, _ in validated_hosts),
             allowed_origins=allowed_origins,
             rate_per_second=rate_per_second,
-            burst_capacity=_positive_int(env, "GEO_MCP_BURST_CAPACITY", 5),
+            burst_capacity=_positive_int(env, "GEO_MCP_BURST_CAPACITY", 100),
             max_concurrent_requests=_positive_int(
-                env, "GEO_MCP_MAX_CONCURRENT_REQUESTS", 4
+                env, "GEO_MCP_MAX_CONCURRENT_REQUESTS", 20
             ),
         )

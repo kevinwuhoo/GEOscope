@@ -42,8 +42,19 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     assert "GEO_PG_DSN" not in example
     assert "GEO_EMBEDDING_VARIANT" not in example
     assert "gemini_embedding_2_3072_v1" in example
+    assert "GEO_MCP_RATE_PER_SECOND=100" in example
+    assert "GEO_MCP_BURST_CAPACITY=100" in example
+    assert "GEO_MCP_MAX_CONCURRENT_REQUESTS=20" in example
     assert "set-in-app-platform" in example
     assert "SENTINEL" not in example
+
+    app_spec = (ROOT / ".do" / "app.yaml.tmpl").read_text()
+    assert 'key: GEO_MCP_RATE_PER_SECOND\n        value: "100"' in app_spec
+    assert 'key: GEO_MCP_BURST_CAPACITY\n        value: "100"' in app_spec
+    assert (
+        'key: GEO_MCP_MAX_CONCURRENT_REQUESTS\n        value: "20"'
+        in app_spec
+    )
 
 
 def test_dockerignore_excludes_local_credentials_and_corpus() -> None:

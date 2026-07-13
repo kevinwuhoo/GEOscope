@@ -22,9 +22,9 @@ def test_public_settings_apply_safe_admission_defaults() -> None:
     assert settings.allowed_hosts == ("geoscope.kevinformatics.com",)
     assert settings.allowed_origins == ()
     assert settings.elasticsearch.active_model_key == "gemini_embedding_2_3072_v1"
-    assert settings.rate_per_second == 1.0
-    assert settings.burst_capacity == 5
-    assert settings.max_concurrent_requests == 4
+    assert settings.rate_per_second == 100.0
+    assert settings.burst_capacity == 100
+    assert settings.max_concurrent_requests == 20
     assert not hasattr(settings, "jwks_uri")
     assert not hasattr(settings, "allowed_subjects")
 
