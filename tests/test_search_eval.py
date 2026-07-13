@@ -114,6 +114,7 @@ def _execution(
     rerank_applied: bool = False,
     tokens: tuple[int, int] = (0, 0),
     latency: tuple[int, int, int] = (10, 20, 0),
+    exact_accession: bool = False,
 ) -> SearchExecution:
     elasticsearch_candidates = sum(
         candidate.original_rank is not None for candidate in candidates
@@ -136,7 +137,7 @@ def _execution(
             for field in FACET_FIELDS
         },
         provenance=SearchProvenanceOutput(
-            exact_accession=False,
+            exact_accession=exact_accession,
             elasticsearch_candidates=elasticsearch_candidates,
             ncbi_candidates=ncbi_candidates,
             merged_candidates=len(candidates),
@@ -200,7 +201,7 @@ def _write_cases(path: Path) -> None:
             "query_id": "native_count",
             "query": "native count query",
             "filters": {},
-            "judgments": {"GSE3": 3},
+            "judgments": {},
             "constraints": {"organism_ids": ["NCBITaxon:10090"]},
             "expected_ncbi_count": 0,
         },
@@ -264,6 +265,7 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
                 degradation=["rerank_timeout"],
                 rerank_attempted=True,
                 rerank_applied=False,
+                tokens=(300, 50),
                 latency=(20, 10, 40),
             ),
         }
@@ -292,21 +294,137 @@ def test_evaluation_compares_baseline_and_luna_with_candidate_and_final_metrics(
     assert baseline_case["recall_at_40"] == 1.0
     assert baseline_case["ndcg_at_10"] == 0.0
     assert baseline_case["mrr"] == 0.0
+    baseline_aggregate = report["runs"]["baseline"]["aggregate"]
+    assert baseline_aggregate["relevance_case_count"] == 1
+    assert baseline_aggregate["mean_recall_at_40"] == 1.0
+    assert baseline_aggregate["mean_ndcg_at_10"] == 0.0
+    assert baseline_aggregate["mean_mrr"] == 0.0
     luna_aggregate = report["runs"]["luna"]["aggregate"]
     assert luna_aggregate["constraint_violations"] == 1
     assert luna_aggregate["ncbi_only_recovery"] == 1
     assert luna_aggregate["native_count_mismatches"] == 1
     assert luna_aggregate["fallback_rate"] == 0.5
     assert luna_aggregate["degradation_rate"] == 0.5
-    assert luna_aggregate["rerank_input_tokens"] == 200
-    assert luna_aggregate["rerank_output_tokens"] == 50
-    assert luna_aggregate["estimated_cost"] == 0.0003
+    assert luna_aggregate["relevance_case_count"] == 1
+    assert luna_aggregate["mean_recall_at_40"] == 1.0
+    assert luna_aggregate["mean_ndcg_at_10"] == 1.0
+    assert luna_aggregate["mean_mrr"] == 1.0
+    assert luna_aggregate["rerank_input_tokens"] == 500
+    assert luna_aggregate["rerank_output_tokens"] == 100
+    assert luna_aggregate["estimated_cost"] == 0.0007
     # Elasticsearch and NCBI retrieval run concurrently, so wall latency is the
     # slower source plus reranking rather than the sum of both source timings.
     assert luna_aggregate["latency_ms"] == {"p50": 55.0, "p95": 59.5}
     assert baseline.open_calls == baseline.close_calls == 1
     assert luna.open_calls == luna.close_calls == 1
     assert all(call[2] == 10 for call in baseline.search_calls + luna.search_calls)
+
+
+def test_exact_accession_latency_sums_sequential_local_and_ncbi_phases(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "exact.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "query_id": "exact",
+                "query": "GSE310900",
+                "filters": {},
+                "judgments": {"GSE310900": 3},
+                "constraints": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = _Service(
+        {
+            "GSE310900": _execution(
+                query="GSE310900",
+                candidates=(
+                    _candidate(
+                        "GSE310900",
+                        source="ncbi",
+                        original_rank=None,
+                        native_rank=1,
+                    ),
+                ),
+                results=[_summary("GSE310900", 1, source="ncbi")],
+                native_count=1,
+                latency=(10, 20, 0),
+                exact_accession=True,
+            )
+        }
+    )
+
+    report = run_evaluation(
+        cases_path=cases_path,
+        output_path=tmp_path / "report.json",
+        compare_baseline=False,
+        input_cost_per_million=0,
+        output_cost_per_million=0,
+        service_factories={"luna": lambda: service},
+    )
+
+    case = report["runs"]["luna"]["cases"][0]
+    assert case["exact_accession"] is True
+    assert case["latency_ms"]["total"] == 30
+    assert report["runs"]["luna"]["aggregate"]["latency_ms"] == {
+        "p50": 30.0,
+        "p95": 30.0,
+    }
+
+
+@pytest.mark.parametrize("category", ["rerank_refusal", "rerank_invalid"])
+def test_evaluator_prices_observed_usage_for_unusable_provider_responses(
+    tmp_path: Path, category: str
+) -> None:
+    cases_path = tmp_path / f"{category}.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "query_id": category,
+                "query": "control query",
+                "filters": {},
+                "judgments": {},
+                "constraints": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = _Service(
+        {
+            "control query": _execution(
+                query="control query",
+                candidates=(_candidate("GSE1"), _candidate("GSE2", original_rank=2)),
+                results=[_summary("GSE1", 1)],
+                native_count=0,
+                degradation=[category],
+                rerank_attempted=True,
+                rerank_applied=False,
+                tokens=(120, 30),
+            )
+        }
+    )
+
+    report = run_evaluation(
+        cases_path=cases_path,
+        output_path=tmp_path / "report.json",
+        compare_baseline=False,
+        input_cost_per_million=1.0,
+        output_cost_per_million=2.0,
+        service_factories={"luna": lambda: service},
+    )
+
+    aggregate = report["runs"]["luna"]["aggregate"]
+    assert aggregate["case_count"] == 1
+    assert aggregate["relevance_case_count"] == 0
+    assert aggregate["fallback_rate"] == 1.0
+    assert aggregate["degradation_rate"] == 1.0
+    assert aggregate["rerank_input_tokens"] == 120
+    assert aggregate["rerank_output_tokens"] == 30
+    assert aggregate["estimated_cost"] == 0.00018
 
 
 def test_atomic_report_write_preserves_existing_file_when_serialization_fails(

@@ -52,6 +52,7 @@ from .reranker import (
     OpenAIReranker,
     RerankRefusalError,
     RerankResult,
+    RerankResponseError,
     rank_candidates,
 )
 from .search_candidates import (
@@ -925,6 +926,12 @@ class McpSearchService:
                 ordered = rank_candidates(merged, rerank_result)
                 rerank_applied = True
             elif rerank_call.error is not None:
+                if isinstance(rerank_call.error, RerankResponseError):
+                    rerank_result = RerankResult(
+                        scores={},
+                        input_tokens=rerank_call.error.input_tokens,
+                        output_tokens=rerank_call.error.output_tokens,
+                    )
                 degradation.append(_rerank_error_category(rerank_call.error))
             else:
                 degradation.append("rerank_error")
@@ -969,12 +976,8 @@ class McpSearchService:
                     if rerank_attempted and self._reranker
                     else None
                 ),
-                rerank_input_tokens=(
-                    rerank_result.input_tokens if rerank_applied else 0
-                ),
-                rerank_output_tokens=(
-                    rerank_result.output_tokens if rerank_applied else 0
-                ),
+                rerank_input_tokens=rerank_result.input_tokens,
+                rerank_output_tokens=rerank_result.output_tokens,
                 latency=SearchLatencyOutput(
                     elasticsearch_ms=local_call.elapsed_ms,
                     ncbi_ms=native_call.elapsed_ms,

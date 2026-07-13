@@ -267,6 +267,8 @@ def _case_report(case: EvaluationCase, execution: SearchExecution) -> dict[str, 
     )
     return {
         "query_id": case.query_id,
+        "exact_accession": provenance.exact_accession,
+        "relevance_judged": any(grade > 0 for grade in case.judgments.values()),
         "candidate_ids": candidate_ids,
         "final_ids": final_ids,
         "recall_at_40": recall_at(candidate_ids, case.judgments, 40),
@@ -290,9 +292,14 @@ def _case_report(case: EvaluationCase, execution: SearchExecution) -> dict[str, 
             "ncbi": provenance.latency.ncbi_ms,
             "reranker": provenance.latency.reranker_ms,
             "total": (
-                max(
-                    provenance.latency.elasticsearch_ms,
-                    provenance.latency.ncbi_ms,
+                (
+                    provenance.latency.elasticsearch_ms
+                    + provenance.latency.ncbi_ms
+                    if provenance.exact_accession
+                    else max(
+                        provenance.latency.elasticsearch_ms,
+                        provenance.latency.ncbi_ms,
+                    )
                 )
                 + provenance.latency.reranker_ms
             ),
@@ -315,12 +322,21 @@ def _aggregate(
     input_tokens = sum(case["rerank_input_tokens"] for case in cases)
     output_tokens = sum(case["rerank_output_tokens"] for case in cases)
     latencies = [case["latency_ms"]["total"] for case in cases]
+    relevance_cases = [case for case in cases if case["relevance_judged"]]
+    relevance_count = len(relevance_cases)
+
+    def relevance_mean(field: str) -> float:
+        if not relevance_cases:
+            return 0.0
+        return sum(case[field] for case in relevance_cases) / relevance_count
+
     candidate_fields = ("elasticsearch", "ncbi", "merged")
     return {
         "case_count": count,
-        "mean_recall_at_40": sum(case["recall_at_40"] for case in cases) / count,
-        "mean_ndcg_at_10": sum(case["ndcg_at_10"] for case in cases) / count,
-        "mean_mrr": sum(case["mrr"] for case in cases) / count,
+        "relevance_case_count": relevance_count,
+        "mean_recall_at_40": relevance_mean("recall_at_40"),
+        "mean_ndcg_at_10": relevance_mean("ndcg_at_10"),
+        "mean_mrr": relevance_mean("mrr"),
         "constraint_violations": sum(
             case["constraint_violations"] for case in cases
         ),

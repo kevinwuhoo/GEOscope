@@ -21,6 +21,11 @@ this stage. They will be considered only if evaluation shows that reranking
 cannot enforce important intent or that the unmodified NCBI query has
 insufficient recall.
 
+GPT-5.6 Luna is the fixed model for this evaluation stage.
+Sonnet 5 migration is deferred until after the Luna baseline is recorded and
+reviewed; it will be a separate model migration so the baseline and follow-up
+measurements are not mixed.
+
 ## Goals
 
 - Make exact queries such as `GSE310900` deterministic and correct.

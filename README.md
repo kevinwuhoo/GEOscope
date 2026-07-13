@@ -71,9 +71,9 @@ consistent across every consumer.
 | Human interface | Built and deployed a responsive React/FastAPI comparison experience at [geoscope.kevinformatics.com](https://geoscope.kevinformatics.com). |
 | Agent interface | Built a FastMCP service exposing exactly three read-only tools: `search_datasets`, `get_dataset`, and `facet_values`. |
 
-At this checkpoint, the offline verification suite passes **481 Python tests**
+At this checkpoint, the offline verification suite passes **486 Python tests**
 (with ten opt-in live integrations skipped), and the frontend suite passes all
-**eight tests**.
+**eleven tests**.
 
 ## Methods
 

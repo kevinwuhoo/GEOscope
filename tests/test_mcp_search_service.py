@@ -17,6 +17,7 @@ from geo_index.reranker import (
     InvalidRerankOutputError,
     RerankRefusalError,
     RerankResult,
+    RerankUsage,
 )
 from geo_index.search_candidates import SearchCandidate
 from geo_index.search_models import (
@@ -827,6 +828,47 @@ def test_every_untrusted_reranker_result_discards_the_model_order(
     assert [result.original_rank for result in output.results] == list(range(1, 11))
     assert output.provenance.rerank_applied is False
     assert output.provenance.degradation == [category]
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (
+            RerankRefusalError(
+                "sensitive refusal text",
+                usage=RerankUsage(input_tokens=321, output_tokens=54),
+            ),
+            "rerank_refusal",
+        ),
+        (
+            InvalidRerankOutputError(
+                "sensitive invalid output",
+                usage=RerankUsage(input_tokens=321, output_tokens=54),
+            ),
+            "rerank_invalid",
+        ),
+    ],
+)
+def test_completed_unusable_reranks_preserve_usage_while_failing_open(
+    error: Exception, category: str
+) -> None:
+    service, _, _, _, _ = _service(
+        native=FakeNativeSource(), reranker=FakeReranker(error=error)
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), limit=10
+    )
+
+    assert [result.original_rank for result in output.results] == list(range(1, 11))
+    assert output.provenance.rerank_applied is False
+    assert output.provenance.rerank_input_tokens == 321
+    assert output.provenance.rerank_output_tokens == 54
+    assert output.provenance.degradation == [category]
+    serialized = output.model_dump_json()
+    assert "sensitive refusal text" not in serialized
+    assert "sensitive invalid output" not in serialized
 
 
 def test_natural_sources_start_concurrently() -> None:

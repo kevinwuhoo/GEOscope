@@ -119,6 +119,8 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "up to 100 Elasticsearch and 100 NCBI candidates",
     ):
         assert phrase in deployment, phrase
+    assert "never commit the generated spec or include the key in reports" in deployment
+    assert "never write it to the generated spec" not in deployment
 
     readme = _read("README.md")
     for phrase in (
@@ -148,3 +150,10 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "GEO_NCBI_TIMEOUT_SECONDS",
     ):
         assert f"key: {key}" in app_spec, key
+
+    internal_design = _read(
+        "docs/superpowers/specs/2026-07-13-unified-ncbi-reranking-design.md"
+    )
+    assert "Sonnet 5 migration is deferred until after the Luna baseline" in (
+        internal_design
+    )

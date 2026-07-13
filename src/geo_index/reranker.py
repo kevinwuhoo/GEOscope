@@ -19,11 +19,40 @@ overlap. Return every supplied GSE exactly once. Never invent, remove, or modify
 an accession. Use integer scores from 0 (irrelevant) through 100 (direct match)."""
 
 
-class RerankRefusalError(RuntimeError):
+@dataclass(frozen=True)
+class RerankUsage:
+    """Observed provider usage, including responses rejected by validation."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        for value in (self.input_tokens, self.output_tokens):
+            if type(value) is not int or value < 0:
+                raise ValueError("reranker token usage must be non-negative integers")
+
+
+class RerankResponseError(RuntimeError):
+    """A completed but unusable provider response with safe usage metadata."""
+
+    def __init__(self, message: str, *, usage: RerankUsage | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage or RerankUsage()
+
+    @property
+    def input_tokens(self) -> int:
+        return self.usage.input_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.usage.output_tokens
+
+
+class RerankRefusalError(RerankResponseError):
     pass
 
 
-class InvalidRerankOutputError(RuntimeError):
+class InvalidRerankOutputError(RerankResponseError):
     pass
 
 
@@ -101,6 +130,23 @@ def _contains_refusal(response: object) -> bool:
     return False
 
 
+def _response_usage(response: object) -> RerankUsage:
+    usage = getattr(response, "usage", None)
+
+    def token_count(name: str) -> int:
+        raw = getattr(usage, name, 0)
+        try:
+            value = int(raw or 0)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+        return max(0, value)
+
+    return RerankUsage(
+        input_tokens=token_count("input_tokens"),
+        output_tokens=token_count("output_tokens"),
+    )
+
+
 class OpenAIReranker:
     def __init__(
         self,
@@ -151,23 +197,30 @@ class OpenAIReranker:
             store=False,
             max_output_tokens=min(8_000, max(1_000, len(candidates) * 40)),
         )
+        usage = _response_usage(response)
         if _contains_refusal(response):
-            raise RerankRefusalError("reranker refused the request")
+            raise RerankRefusalError(
+                "reranker refused the request",
+                usage=usage,
+            )
         try:
             parsed = RankingEnvelope.model_validate_json(response.output_text)
         except (ValidationError, ValueError, TypeError) as exc:
-            raise InvalidRerankOutputError("reranker returned invalid JSON") from exc
+            raise InvalidRerankOutputError(
+                "reranker returned invalid JSON",
+                usage=usage,
+            ) from exc
         received = [item.gse for item in parsed.rankings]
         expected = [candidate.gse for candidate in candidates]
         if len(received) != len(set(received)) or set(received) != set(expected):
             raise InvalidRerankOutputError(
-                "reranker candidate identifiers do not match the request"
+                "reranker candidate identifiers do not match the request",
+                usage=usage,
             )
-        usage = getattr(response, "usage", None)
         return RerankResult(
             scores={item.gse: item.relevance_score for item in parsed.rankings},
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
         )
 
 

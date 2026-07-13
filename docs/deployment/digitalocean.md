@@ -117,6 +117,7 @@ ${EDITOR:-vi} deploy/app-platform.env
 set -a
 . ./deploy/app-platform.env
 set +a
+umask 077
 envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${OPENAI_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_REASONING_EFFORT} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
   <.do/app.yaml.tmpl >.do/app.yaml
 doctl apps spec validate .do/app.yaml
@@ -149,7 +150,8 @@ Startup validates the complete search-quality configuration. Enabling
 reranking requires `OPENAI_API_KEY`; an absent key, a model other than
 `gpt-5.6-luna`, reasoning effort other than `low`, or an invalid candidate or
 timeout bound prevents startup. Keep the OpenAI key in App Platform as a secret
-and never write it to the generated spec or a report.
+at runtime. The `envsubst` step writes it into the ignored local `.do/app.yaml`;
+never commit the generated spec or include the key in reports.
 
 With live Elasticsearch and NCBI access configured, explicitly opt in to the
 provider smoke and then record baseline versus Luna metrics. Supply current

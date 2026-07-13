@@ -34,8 +34,8 @@ const geoscopeResultSchema = z.object({
 const provenanceSchema = z.object({
   exact_accession: z.boolean(),
   elasticsearch_candidates: z.number().int().min(0).max(100),
-  ncbi_candidates: z.number().int().min(0).max(20),
-  merged_candidates: z.number().int().min(0).max(120),
+  ncbi_candidates: z.number().int().min(0).max(100),
+  merged_candidates: z.number().int().min(0).max(200),
   rerank_attempted: z.boolean(),
   rerank_applied: z.boolean(),
   rerank_model: z.string().min(1).max(256).nullable(),

@@ -152,12 +152,15 @@ def test_reranker_rejects_incomplete_candidate_id_sets(
 ) -> None:
     reranker = make_reranker(Client({"rankings": rankings}))
 
-    with pytest.raises(InvalidRerankOutputError):
+    with pytest.raises(InvalidRerankOutputError) as captured:
         reranker.rerank(
             "query",
             (candidate("GSE1", 1), candidate("GSE2", 2)),
             limit=10,
         )
+
+    assert captured.value.input_tokens == 120
+    assert captured.value.output_tokens == 30
 
 
 @pytest.mark.parametrize("score", [-1, 101, "90", 90.5, True])
@@ -177,15 +180,21 @@ def test_reranker_raises_distinct_error_for_refusal() -> None:
         Client("not structured JSON", response_output=(response_item,))
     )
 
-    with pytest.raises(RerankRefusalError):
+    with pytest.raises(RerankRefusalError) as captured:
         reranker.rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert captured.value.input_tokens == 120
+    assert captured.value.output_tokens == 30
 
 
 def test_reranker_raises_invalid_output_for_malformed_json() -> None:
     reranker = make_reranker(Client("not structured JSON"))
 
-    with pytest.raises(InvalidRerankOutputError):
+    with pytest.raises(InvalidRerankOutputError) as captured:
         reranker.rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert captured.value.input_tokens == 120
+    assert captured.value.output_tokens == 30
 
 
 def test_reranker_bounds_candidate_text_before_the_provider_call() -> None:

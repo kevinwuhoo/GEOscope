@@ -98,9 +98,9 @@ const demoResponse = {
     facets: {},
     provenance: {
       exact_accession: false,
-      elasticsearch_candidates: 2,
-      ncbi_candidates: 2,
-      merged_candidates: 3,
+      elasticsearch_candidates: 100,
+      ncbi_candidates: 100,
+      merged_candidates: 200,
       rerank_attempted: true,
       rerank_applied: true,
       rerank_model: "gpt-5.6-luna",
