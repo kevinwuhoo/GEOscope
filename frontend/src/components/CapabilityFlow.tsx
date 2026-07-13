@@ -1,18 +1,21 @@
+import { McpInstall } from "./McpInstall";
+
+
 const capabilities = [
   {
-    verb: "Retrieve meaning",
-    detail: "Fuse lexical precision with embedding recall across titles, summaries, designs, and sample metadata.",
-    signal: "BM25 + dense",
+    verb: "Search language and meaning",
+    detail: "Combine BM25 keyword precision with embedding-based similarity across NCBI GEO titles, summaries, designs, and sample metadata.",
+    signal: "BM25 + embeddings",
   },
   {
-    verb: "Resolve vocabulary",
-    detail: "Turn submitter-authored values into controlled organisms, sex values, and assay labels.",
-    signal: "ontology-backed",
+    verb: "Structure the metadata",
+    detail: "Extract and normalize useful biological concepts from submitter-authored metadata so relevant studies are easier to compare.",
+    signal: "extraction + normalization",
   },
   {
-    verb: "Constrain precisely",
-    detail: "Filter and facet with exact identifiers, then expose the same bounded search operations over MCP.",
-    signal: "filters + MCP",
+    verb: "Narrow to evidence",
+    detail: "Use exact filters and facets to turn a broad similarity search into a ranked, inspectable set of NCBI GEO series.",
+    signal: "filters + facets",
   },
 ];
 
@@ -20,9 +23,8 @@ const capabilities = [
 export function CapabilityFlow() {
   return (
     <section className="section capability" id="how-it-works" aria-labelledby="capability-title">
-      <div className="section-kicker">ONE RETRIEVAL LOOP</div>
       <div className="section-heading">
-        <h2 id="capability-title">Recall without surrendering precision.</h2>
+        <h2 id="capability-title">From a specific question to inspectable evidence.</h2>
       </div>
       <div className="capability-flow">
         {capabilities.map((capability, index) => (
@@ -38,6 +40,7 @@ export function CapabilityFlow() {
           </article>
         ))}
       </div>
+      <McpInstall />
     </section>
   );
 }

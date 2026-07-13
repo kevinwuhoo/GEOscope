@@ -1,10 +1,18 @@
 import { AccessionScope } from "./components/AccessionScope";
 import { CapabilityFlow } from "./components/CapabilityFlow";
 import { LiveComparison } from "./components/LiveComparison";
-import { NormalizationProof } from "./components/NormalizationProof";
 import { ResearcherExample } from "./components/ResearcherExample";
 
 import "./styles.css";
+
+
+const features = [
+  "Hybrid BM25 + embedding retrieval",
+  "Semantic similarity search",
+  "Structured metadata extraction and normalization",
+  "Exact filters and facets",
+  "An MCP server for your agent",
+];
 
 
 export default function App() {
@@ -18,8 +26,8 @@ export default function App() {
         </a>
         <nav aria-label="Primary navigation">
           <a href="#live-demo">Live proof</a>
-          <a href="#normalization">Normalization</a>
           <a href="#how-it-works">How it works</a>
+          <a href="#mcp">MCP for agents</a>
         </nav>
         <a className="header-cta" href="#live-demo">Open live demo <span aria-hidden="true">↘</span></a>
       </header>
@@ -27,8 +35,7 @@ export default function App() {
       <main id="main">
         <section className="hero" id="top" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <div className="hero-index"><span>GEO / METADATA DISCOVERY</span><span>v0.1</span></div>
-            <h1 id="hero-title">See what GEO search misses.</h1>
+            <h1 id="hero-title">See what NCBI GEO search misses.</h1>
             <p className="hero-lede">
               GEOscope turns inconsistent genomics metadata into precise,
               ontology-aware discovery—so the study you need is not hidden behind
@@ -36,39 +43,46 @@ export default function App() {
             </p>
             <div className="hero-actions">
               <a className="primary-cta" href="#live-demo">Try a live comparison <span aria-hidden="true">↓</span></a>
-              <a className="text-link" href="#normalization">See the ontology layer</a>
+              <a className="text-link" href="#how-it-works">See how it works</a>
             </div>
             <div className="hero-proof">
               <div><strong>GSE</strong><span>series-level metadata</span></div>
-              <div><strong>3-way</strong><span>hybrid · semantic · lexical</span></div>
+              <div><strong>Hybrid</strong><span>BM25 + embeddings</span></div>
               <div><strong>MCP</strong><span>agent-ready retrieval</span></div>
             </div>
           </div>
           <AccessionScope />
         </section>
 
-        <div className="signal-strip" aria-label="GEOscope capabilities">
-          <span>SEMANTIC RECALL</span><i />
-          <span>CONTROLLED VOCABULARIES</span><i />
-          <span>EXACT FACETS</span><i />
-          <span>FULL GEO METADATA</span>
+        <div className="signal-strip" aria-label="GEOscope capabilities" tabIndex={0}>
+          {[false, true].map((duplicate) => (
+            <div
+              className="signal-strip__track"
+              aria-hidden={duplicate || undefined}
+              key={String(duplicate)}
+            >
+              {features.map((feature) => (
+                <span className="signal-strip__item" key={feature}>
+                  {feature}<i aria-hidden="true" />
+                </span>
+              ))}
+            </div>
+          ))}
         </div>
 
         <LiveComparison />
-        <NormalizationProof />
         <CapabilityFlow />
         <ResearcherExample />
 
         <section className="closing" aria-labelledby="closing-title">
           <div className="closing-orbit" aria-hidden="true"><i /><i /><i /></div>
           <div>
-            <div className="section-kicker">THE RETRIEVAL LAYER FOR GEO</div>
             <h2 id="closing-title">Ask naturally.<br />Filter exactly.</h2>
           </div>
           <div className="closing-copy">
             <p>
               Search the metadata people wrote, through the concepts they meant.
-              Then use the same bounded operations from a human interface or an MCP client.
+              Find relevant NCBI GEO series without guessing the submitter's vocabulary.
             </p>
             <a className="closing-cta" href="#live-demo">Run the comparison <span aria-hidden="true">↗</span></a>
           </div>
@@ -77,8 +91,7 @@ export default function App() {
 
       <footer>
         <a className="wordmark wordmark--footer" href="#top"><span className="wordmark__geo">GEO</span><span>scope</span></a>
-        <p>Ontology-aware semantic discovery for NCBI GEO metadata.</p>
-        <span className="footer-note">PROTOTYPE / BUILT FOR EVIDENCE</span>
+        <p>Hybrid, semantic discovery for NCBI GEO metadata.</p>
       </footer>
     </div>
   );

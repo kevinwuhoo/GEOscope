@@ -4,7 +4,6 @@ const concepts = ["10x Chromium", "Drop-seq", "individual cells", "Smart-seq2"];
 export function AccessionScope() {
   return (
     <div className="scope-shell" aria-label="Illustration of GEOscope resolving metadata">
-      <div className="scope-label scope-label--top">EXAMPLE SIGNAL / 04 PHRASES</div>
       <div className="scope-crosshair" aria-hidden="true" />
       <div className="scope-ring scope-ring--outer" aria-hidden="true" />
       <div className="scope-ring scope-ring--inner" aria-hidden="true" />
@@ -31,7 +30,6 @@ export function AccessionScope() {
         <span>02</span>
         <strong>GSE184880</strong>
       </div>
-      <div className="scope-label scope-label--bottom">FOCUS / SEMANTIC + STRUCTURED</div>
     </div>
   );
 }

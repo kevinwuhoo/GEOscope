@@ -1,26 +1,30 @@
 import { FormEvent, useRef, useState } from "react";
 
-import { DemoResponse, GEOscopeResult, NativeResult, SearchMode, searchDemo } from "../api";
+import { DemoResponse, GEOscopeResult, NativeResult, searchDemo } from "../api";
 
 
 const examples = [
-  "transcriptomes of individual cells",
-  "macrophage polarization",
-  "drug that suppresses mTOR signaling",
+  "human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data",
+  "liver transcriptomics comparing nonalcoholic steatohepatitis with healthy human controls",
+  "mouse skeletal muscle gene expression after endurance exercise in insulin resistance",
 ];
 
 
 function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?: boolean }) {
+  const title = result.title ?? "Untitled NCBI GEO series";
   return (
-    <article className={`result-card result-card--scope${inNative === false ? " result-card--novel" : ""}`}>
+    <article
+      className={`result-card result-card--scope${inNative === false ? " result-card--novel" : ""}`}
+      aria-label={`GEOscope result ${result.rank}: ${title}`}
+    >
       <div className="result-card__topline">
         <span className="result-rank">{String(result.rank).padStart(2, "0")}</span>
         <a href={`https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=${result.gse}`} target="_blank" rel="noreferrer">
           {result.gse}
         </a>
-        {inNative === false && <span className="miss-label">Not returned by GEO keyword search</span>}
+        {inNative === false && <span className="miss-label">Not returned by NCBI GEO keyword search</span>}
       </div>
-      <h4>{result.title ?? "Untitled GEO series"}</h4>
+      <h4>{title}</h4>
       {result.snippet && <p>{result.snippet}</p>}
       <div className="result-tags">
         {result.organism_ids.slice(0, 2).map((value) => <code key={value}>{value}</code>)}
@@ -32,15 +36,19 @@ function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?:
 
 
 function NativeCard({ result, rank }: { result: NativeResult; rank: number }) {
+  const title = result.title ?? "Untitled NCBI GEO series";
   return (
-    <article className="result-card result-card--native">
+    <article
+      className="result-card result-card--native"
+      aria-label={`NCBI GEO result ${rank}: ${title}`}
+    >
       <div className="result-card__topline">
         <span className="result-rank">{String(rank).padStart(2, "0")}</span>
         <a href={`https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=${result.gse}`} target="_blank" rel="noreferrer">
           {result.gse}
         </a>
       </div>
-      <h4>{result.title ?? "Untitled GEO series"}</h4>
+      <h4>{title}</h4>
       {result.summary && <p>{result.summary}</p>}
       <div className="result-tags">
         {result.taxon && <span>{result.taxon}</span>}
@@ -53,7 +61,6 @@ function NativeCard({ result, rank }: { result: NativeResult; rank: number }) {
 
 export function LiveComparison() {
   const [query, setQuery] = useState(examples[0]);
-  const [mode, setMode] = useState<SearchMode>("hybrid");
   const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [data, setData] = useState<DemoResponse | null>(null);
   const [error, setError] = useState("");
@@ -73,12 +80,12 @@ export function LiveComparison() {
     setState("loading");
     setError("");
     try {
-      const response = await searchDemo(normalized, mode, controller.signal);
+      const response = await searchDemo(normalized, "hybrid", controller.signal);
       setData(response);
       setState("success");
       const params = new URLSearchParams(window.location.search);
       params.set("q", normalized);
-      params.set("mode", mode);
+      params.set("mode", "hybrid");
       window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
@@ -87,14 +94,23 @@ export function LiveComparison() {
     }
   }
 
+  const comparisonRows = data
+    ? Array.from(
+        { length: Math.max(data.geoscope.results.length, data.geo.results.length, 1) },
+        (_, index) => ({
+          geoscope: data.geoscope.results[index],
+          native: data.geo.results[index],
+        }),
+      )
+    : [];
+
   return (
     <section className="section live-demo" id="live-demo" aria-labelledby="demo-title">
       <div className="demo-intro">
         <div>
-          <div className="section-kicker">LIVE PROOF / SAME QUERY</div>
-          <h2 id="demo-title">Put keyword search beside semantic retrieval.</h2>
+          <h2 id="demo-title">Compare retrieval, result by result.</h2>
         </div>
-        <p>One query. Native GEO on the left. GEOscope on the right. The difference is vocabulary drift made visible.</p>
+        <p>See the difference for yourself. GEOscope results on the left, NCBI GEO results on the right.</p>
       </div>
 
       <form className="search-console" role="search" onSubmit={runSearch}>
@@ -105,13 +121,8 @@ export function LiveComparison() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="e.g. transcriptomes of individual cells"
+            placeholder="e.g. breast cancer before and after neoadjuvant chemotherapy"
           />
-          <select value={mode} onChange={(event) => setMode(event.target.value as SearchMode)} aria-label="Retrieval mode">
-            <option value="hybrid">Hybrid</option>
-            <option value="dense">Semantic only</option>
-            <option value="bm25">BM25 only</option>
-          </select>
           <button type="submit" disabled={state === "loading"}>
             {state === "loading" ? "Scanning…" : "Compare results"}
           </button>
@@ -125,38 +136,49 @@ export function LiveComparison() {
       </form>
 
       <div className="search-status" aria-live="polite">
-        {state === "loading" && "Searching native GEO and GEOscope…"}
+        {state === "loading" && "Searching GEOscope and NCBI GEO…"}
         {state === "error" && <span>{error}</span>}
         {state === "idle" && "Ready for a live backend comparison."}
-        {state === "success" && data && `${data.geoscope.results.length} GEOscope results compared with ${data.geo.results.length} native GEO results.`}
+        {state === "success" && data && `${data.geoscope.results.length} GEOscope results compared with ${data.geo.results.length} NCBI GEO results.`}
       </div>
 
       {state === "success" && data && (
         <div className="comparison-grid">
-          <div className="result-column result-column--native">
-            <div className="result-column__header">
-              <div><span className="source-shape source-shape--geo" />Native GEO keyword search</div>
+          <div className="comparison-header">
+            <div className="result-column__header result-column__header--scope">
+              <div><span className="source-shape source-shape--scope" />GEOscope</div>
+              <span>Hybrid · BM25 + embeddings</span>
+            </div>
+            <div className="result-column__header result-column__header--native">
+              <div><span className="source-shape source-shape--geo" />NCBI GEO keyword search</div>
               <span>{data.geo.count === null ? "unavailable" : `${data.geo.count.toLocaleString()} total`}</span>
             </div>
-            {data.geo.error && <div className="result-empty">{data.geo.error}</div>}
-            {!data.geo.error && data.geo.results.length === 0 && <div className="result-empty">No native keyword results returned.</div>}
-            {data.geo.results.map((result, index) => <NativeCard key={result.gse} result={result} rank={index + 1} />)}
           </div>
-
-          <div className="comparison-divider" aria-hidden="true"><span>VS</span></div>
-
-          <div className="result-column result-column--scope">
-            <div className="result-column__header">
-              <div><span className="source-shape source-shape--scope" />GEOscope</div>
-              <span>{data.mode}</span>
-            </div>
-            {data.geoscope.results.length === 0 && <div className="result-empty">No GEOscope results returned. Try a broader description.</div>}
-            {data.geoscope.results.map((result) => (
-              <GEOscopeCard
-                key={result.gse}
-                result={result}
-                inNative={data.membership?.[result.gse]}
-              />
+          <div className="comparison-results">
+            {comparisonRows.map((row, index) => (
+              <div className="comparison-row" key={row.geoscope?.gse ?? row.native?.gse ?? index}>
+                <div className="comparison-cell comparison-cell--scope">
+                  {row.geoscope ? (
+                    <GEOscopeCard
+                      result={row.geoscope}
+                      inNative={data.membership?.[row.geoscope.gse]}
+                    />
+                  ) : (
+                    <div className="result-empty">No GEOscope result at this rank.</div>
+                  )}
+                </div>
+                <div className="comparison-cell comparison-cell--native">
+                  {row.native ? (
+                    <NativeCard result={row.native} rank={index + 1} />
+                  ) : (
+                    <div className="result-empty">
+                      {index === 0 && data.geo.error
+                        ? data.geo.error
+                        : "No NCBI GEO result at this rank."}
+                    </div>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         </div>
