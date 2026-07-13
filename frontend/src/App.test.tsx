@@ -145,6 +145,23 @@ test("balances GEOscope's benefit with MCP compatibility in the hero", () => {
 });
 
 
+test("offers concise species-neutral example queries", () => {
+  render(<App />);
+
+  const examples = [
+    "breast tumors before and after neoadjuvant chemotherapy",
+    "NASH liver transcriptomes compared with healthy controls",
+    "PI3K signaling in insulin-resistant skeletal muscle",
+  ];
+  for (const example of examples) {
+    expect(screen.getByRole("button", { name: example })).toBeInTheDocument();
+  }
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveValue(examples[0]);
+});
+
+
 test("explains the thesis and turns a query into a live GEO comparison", async () => {
   const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify(demoResponse), {
@@ -166,7 +183,9 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
     screen.queryByRole("combobox", { name: /retrieval mode/i }),
   ).not.toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: /human breast cancer transcriptomics/i }),
+    screen.getByRole("button", {
+      name: "breast tumors before and after neoadjuvant chemotherapy",
+    }),
   ).toBeInTheDocument();
 
   const query = screen.getByRole("searchbox", { name: /describe the studies/i });
