@@ -237,3 +237,5 @@ def test_production_assets_and_frontend_routes_do_not_shadow_api(
         assert client.get("/demo").text == "<main>GEOscope</main>"
         assert "window.GEOscope" in client.get("/assets/app.js").text
         assert client.get("/api/not-a-route").status_code == 404
+        assert client.get("/mcp/not-a-route").status_code == 404
+        assert client.get("/healthz/not-a-route").status_code == 404
