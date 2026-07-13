@@ -96,10 +96,11 @@ def test_canonical_production_pipeline_is_gemini_only_and_operational() -> None:
 
 def test_unified_search_rollout_is_documented_and_configurable() -> None:
     required_environment = (
-        "OPENAI_API_KEY=",
+        "ANTHROPIC_API_KEY=",
         "GEO_RERANK_ENABLED=false",
-        "GEO_RERANK_MODEL=gpt-5.6-luna",
-        "GEO_RERANK_REASONING_EFFORT=low",
+        "GEO_RERANK_MODEL=claude-sonnet-5",
+        "GEO_RERANK_EFFORT=low",
+        "GEO_RERANK_THINKING=disabled",
         "GEO_RERANK_CANDIDATE_LIMIT=40",
         "GEO_RERANK_TIMEOUT_SECONDS=8",
         "GEO_NCBI_TIMEOUT_SECONDS=5",
@@ -108,29 +109,65 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         environment = _read(path)
         for setting in required_environment:
             assert setting in environment, f"{path}: {setting}"
+        assert "OPENAI_API_KEY" not in environment, path
 
     deployment = _read("docs/deployment/digitalocean.md")
     for phrase in (
         "GEO_RERANK_ENABLED=false",
-        "GEO_TEST_OPENAI=1",
+        "GEO_TEST_ANTHROPIC=1",
         "geo-search-eval",
         "partial live records",
-        "baseline versus Luna",
+        "baseline versus Sonnet",
         "up to 100 Elasticsearch and 100 NCBI candidates",
     ):
         assert phrase in deployment, phrase
-    assert "never commit the generated spec or include the key in reports" in deployment
+    normalized_deployment = " ".join(deployment.split())
+    assert (
+        "A production source deploy is incomplete until public provenance shows "
+        "Sonnet applied"
+        in normalized_deployment
+    )
+    assert (
+        "never commit the generated spec or include the key in reports"
+        in normalized_deployment
+    )
     assert "never write it to the generated spec" not in deployment
 
     readme = _read("README.md")
     for phrase in (
         "up to 100 Elasticsearch candidates",
         "up to 100 native NCBI GEO candidates",
-        "GPT-5.6 Luna",
+        "Claude Sonnet 5",
         "query understanding",
-        "Structured Outputs",
+        "Anthropic Structured Outputs",
     ):
         assert phrase in readme, phrase
+
+    provider_documentation = (
+        "README.md",
+        "docs/deployment/digitalocean.md",
+    )
+    smoke_queries = (
+        "mouse skeletal muscle gene expression after endurance exercise in insulin resistance",
+        "human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data",
+        "GSE310900",
+    )
+    official_references = (
+        "https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+        "https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python",
+    )
+    for path in provider_documentation:
+        text = _read(path)
+        for phrase in (
+            "Claude Sonnet 5",
+            "Anthropic Structured Outputs",
+            "GEO_TEST_ANTHROPIC=1",
+            *smoke_queries,
+            *official_references,
+        ):
+            assert phrase in text, f"{path}: {phrase}"
 
     project = tomllib.loads(_read("pyproject.toml"))
     assert project["project"]["scripts"]["geo-search-eval"] == (
@@ -141,19 +178,26 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
 
     app_spec = _read(".do/app.yaml.tmpl")
     for key in (
-        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
         "GEO_RERANK_ENABLED",
         "GEO_RERANK_MODEL",
-        "GEO_RERANK_REASONING_EFFORT",
+        "GEO_RERANK_EFFORT",
+        "GEO_RERANK_THINKING",
         "GEO_RERANK_CANDIDATE_LIMIT",
         "GEO_RERANK_TIMEOUT_SECONDS",
         "GEO_NCBI_TIMEOUT_SECONDS",
     ):
         assert f"key: {key}" in app_spec, key
+        assert f'value: "${{{key}}}"' in app_spec, key
+    assert "OPENAI_API_KEY" not in app_spec
 
     internal_design = _read(
         "docs/superpowers/specs/2026-07-13-unified-ncbi-reranking-design.md"
     )
+    supersession = " ".join(internal_design[:1_200].split())
+    assert "Superseded" in supersession
+    assert "Claude Sonnet 5 Reranker Migration Design" in supersession
+    assert "historical Luna design" in supersession
     assert "Sonnet 5 migration is deferred until after the Luna baseline" in (
         internal_design
     )

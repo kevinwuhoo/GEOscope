@@ -3,6 +3,12 @@
 **Date:** 2026-07-13
 **Status:** Approved for implementation planning
 
+> **Superseded — Sonnet 5 migration (2026-07-13):** This document preserves the
+> historical Luna design and its original decision record. The current provider
+> contract is defined by the
+> [Claude Sonnet 5 Reranker Migration Design](2026-07-13-sonnet-5-reranker-migration-design.md),
+> which replaces Luna with Sonnet in the shared MCP/Elasticsearch search layer.
+
 ## Summary
 
 GEOscope will move search-quality behavior into one shared service beneath the

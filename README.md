@@ -44,7 +44,7 @@ flowchart LR
     M[NCBI GEO E-utilities] --> N[NCBI candidates]
     J --> O[Merge + deduplicate by GSE]
     N --> O
-    O --> P[GPT-5.6 Luna reranker]
+    O --> P[Claude Sonnet 5 reranker]
     P --> Q[Shared search service]
     G --> R[Exact GSE lookup]
     M --> R
@@ -141,11 +141,11 @@ Elasticsearch provides the shared online search layer:
   prefers the richer local metadata, and records whether each result came from
   Elasticsearch, NCBI, or both. The local pool has a floor of 40 and grows with
   the caller's requested result limit before both sources reach their cap.
-- **LLM reranking** uses GPT-5.6 Luna with low reasoning effort to select and
-  order the final top 10 from the merged candidate set. Exact GSE accession
-  lookups normalize the identifier, check the local index first, fall back to
-  NCBI if needed, and bypass semantic retrieval and reranking so identifiers
-  remain deterministic.
+- **LLM reranking** uses Claude Sonnet 5 with low effort and thinking disabled
+  to select and order the final top 10 from the merged candidate set. Exact GSE
+  accession lookups normalize the identifier, check the local index first, fall
+  back to NCBI if needed, and bypass semantic retrieval and reranking so
+  identifiers remain deterministic.
 
 Elasticsearch remains the required source of indexed metadata. If live NCBI
 retrieval or reranking is unavailable, the service falls back to deterministic
@@ -220,8 +220,8 @@ Hybrid Elasticsearch retrieval improved recall within the indexed snapshot,
 but it could not surface a newly published or locally missing GSE. We therefore
 extended the shared search service to retrieve a deeper Elasticsearch pool and
 native NCBI GEO results concurrently, deduplicate them by accession, preserve
-source provenance, and rerank the combined evidence with GPT-5.6 Luna at low
-reasoning effort.
+source provenance, and rerank the combined evidence with Claude Sonnet 5 at low
+effort with thinking disabled.
 
 The service records timing, model usage, and reranking cost so relevance gains
 can be evaluated against latency and spend. It also preserves deterministic
@@ -236,22 +236,49 @@ online into Elasticsearch. They can participate in the final ranking, but
 fields absent from the E-utilities summary remain explicitly unavailable.
 
 The checked-in evaluation corpus compares an Elasticsearch-only baseline with
-the unified GPT-5.6 Luna run. It reports candidate Recall@40, final nDCG@10 and
-MRR, constraint violations, NCBI-only recovery, latency, fallback rate, token
-usage, and cost using caller-supplied current prices. Production should start
-with `GEO_RERANK_ENABLED=false`; enabling it requires `OPENAI_API_KEY`, and
-startup rejects an enabled configuration without the key or with an unsupported
-model, reasoning effort, candidate bound, or timeout.
+the unified Claude Sonnet 5 run. It reports candidate Recall@40, final nDCG@10
+and MRR, constraint violations, NCBI-only recovery, latency, fallback rate,
+token usage, and cost using caller-supplied current prices. Production should
+start with `GEO_RERANK_ENABLED=false`; enabling it requires
+`ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-sonnet-5`,
+`GEO_RERANK_EFFORT=low`, and `GEO_RERANK_THINKING=disabled`. Startup rejects an
+enabled configuration without the key or with an unsupported model, effort,
+thinking mode, candidate bound, or timeout.
 
 Our staged decision rule is evidence-driven: improve candidate generation when
 relevant studies are absent from the candidate pool; tune reranking when they
 are present but misordered; and add query understanding only if unmodified NCBI
 recall or explicit constraint handling remains inadequate after reranker
 evaluation. The current integration uses the official
-[GPT-5.6 Luna model](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-and the Responses API
-[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-contract. A different reranking model can be evaluated as a separate migration.
+[Claude Sonnet 5 model](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
+[effort controls](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Anthropic Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
+and the official [Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python).
+
+Paid provider verification is explicit and opt-in; default tests make no
+Anthropic call:
+
+```bash
+GEO_TEST_ANTHROPIC=1 uv run pytest \
+  tests/test_reranker_live.py -m provider_integration -q
+
+GEO_RERANK_ENABLED=true uv run geo-search-eval \
+  eval/unified_search_queries.jsonl \
+  --output eval/unified_search_report.json \
+  --compare-baseline \
+  --input-cost-per-million "$CURRENT_SONNET_INPUT_COST_PER_MILLION" \
+  --output-cost-per-million "$CURRENT_SONNET_OUTPUT_COST_PER_MILLION"
+```
+
+Before rollout, inspect the shared-service results for all three smoke queries:
+
+1. `mouse skeletal muscle gene expression after endurance exercise in insulin resistance`
+2. `human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data`
+3. `GSE310900`
+
+Sonnet must be attempted and applied for the two natural-language queries with
+no organism constraint violation. Exact `GSE310900` must be returned without a
+rerank attempt. Keep the generated evaluation report uncommitted.
 
 ### Ontology-normalization experiments
 

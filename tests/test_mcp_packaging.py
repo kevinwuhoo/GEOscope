@@ -6,6 +6,51 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_sonnet_rollout_deployment_contract() -> None:
+    errors: list[str] = []
+    required_environment = (
+        "ANTHROPIC_API_KEY=",
+        "GEO_RERANK_MODEL=claude-sonnet-5",
+        "GEO_RERANK_EFFORT=low",
+        "GEO_RERANK_THINKING=disabled",
+    )
+    for relative_path in (
+        "deploy/geo-mcp.env.example",
+        "deploy/app-platform.env.example",
+    ):
+        text = (ROOT / relative_path).read_text()
+        errors.extend(
+            f"{relative_path}: missing {setting}"
+            for setting in required_environment
+            if setting not in text
+        )
+        if "OPENAI_API_KEY" in text:
+            errors.append(f"{relative_path}: stale OPENAI_API_KEY")
+        if "gpt-5.6-luna" in text:
+            errors.append(f"{relative_path}: stale gpt-5.6-luna")
+        if "GEO_RERANK_REASONING_EFFORT" in text:
+            errors.append(f"{relative_path}: stale GEO_RERANK_REASONING_EFFORT")
+
+    app_spec = (ROOT / ".do" / "app.yaml.tmpl").read_text()
+    required_app_mappings = (
+        'key: ANTHROPIC_API_KEY\n        value: "${ANTHROPIC_API_KEY}"',
+        'key: GEO_RERANK_MODEL\n        value: "${GEO_RERANK_MODEL}"',
+        'key: GEO_RERANK_EFFORT\n        value: "${GEO_RERANK_EFFORT}"',
+        'key: GEO_RERANK_THINKING\n        value: "${GEO_RERANK_THINKING}"',
+    )
+    errors.extend(
+        f".do/app.yaml.tmpl: missing {mapping.splitlines()[0]}"
+        for mapping in required_app_mappings
+        if mapping not in app_spec
+    )
+    if "OPENAI_API_KEY" in app_spec:
+        errors.append(".do/app.yaml.tmpl: stale OPENAI_API_KEY")
+    if "GEO_RERANK_REASONING_EFFORT" in app_spec:
+        errors.append(".do/app.yaml.tmpl: stale GEO_RERANK_REASONING_EFFORT")
+
+    assert not errors, "\n".join(errors)
+
+
 def test_docker_packages_one_worker_combined_production_app() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "uv sync --frozen --no-dev" in dockerfile
@@ -22,6 +67,7 @@ def test_docker_packages_one_worker_combined_production_app() -> None:
 def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets() -> None:
     example = (ROOT / "deploy" / "geo-mcp.env.example").read_text()
     required = {
+        "ANTHROPIC_API_KEY",
         "ELASTICSEARCH_URL",
         "ELASTICSEARCH_USERNAME",
         "ELASTICSEARCH_PASSWORD",
@@ -45,6 +91,10 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     assert "GEO_MCP_RATE_PER_SECOND=100" in example
     assert "GEO_MCP_BURST_CAPACITY=100" in example
     assert "GEO_MCP_MAX_CONCURRENT_REQUESTS=20" in example
+    assert "GEO_RERANK_MODEL=claude-sonnet-5" in example
+    assert "GEO_RERANK_EFFORT=low" in example
+    assert "GEO_RERANK_THINKING=disabled" in example
+    assert "OPENAI_API_KEY" not in example
     assert "set-in-app-platform" in example
     assert "SENTINEL" not in example
 
@@ -55,6 +105,14 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
         'key: GEO_MCP_MAX_CONCURRENT_REQUESTS\n        value: "20"'
         in app_spec
     )
+    assert 'key: ANTHROPIC_API_KEY\n        value: "${ANTHROPIC_API_KEY}"' in app_spec
+    assert 'key: GEO_RERANK_MODEL\n        value: "${GEO_RERANK_MODEL}"' in app_spec
+    assert 'key: GEO_RERANK_EFFORT\n        value: "${GEO_RERANK_EFFORT}"' in app_spec
+    assert (
+        'key: GEO_RERANK_THINKING\n        value: "${GEO_RERANK_THINKING}"'
+        in app_spec
+    )
+    assert "OPENAI_API_KEY" not in app_spec
 
 
 def test_dockerignore_excludes_local_credentials_and_corpus() -> None:

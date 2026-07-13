@@ -67,8 +67,8 @@ services:
         value: "${GEMINI_API_KEY}"
         scope: RUN_TIME
         type: SECRET
-      - key: OPENAI_API_KEY
-        value: "${OPENAI_API_KEY}"
+      - key: ANTHROPIC_API_KEY
+        value: "${ANTHROPIC_API_KEY}"
         scope: RUN_TIME
         type: SECRET
       - key: GEO_RERANK_ENABLED
@@ -79,8 +79,12 @@ services:
         value: "${GEO_RERANK_MODEL}"
         scope: RUN_TIME
         type: GENERAL
-      - key: GEO_RERANK_REASONING_EFFORT
-        value: "${GEO_RERANK_REASONING_EFFORT}"
+      - key: GEO_RERANK_EFFORT
+        value: "${GEO_RERANK_EFFORT}"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_RERANK_THINKING
+        value: "${GEO_RERANK_THINKING}"
         scope: RUN_TIME
         type: GENERAL
       - key: GEO_RERANK_CANDIDATE_LIMIT

@@ -118,7 +118,7 @@ set -a
 . ./deploy/app-platform.env
 set +a
 umask 077
-envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${OPENAI_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_REASONING_EFFORT} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
+envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${ANTHROPIC_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_EFFORT} ${GEO_RERANK_THINKING} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
   <.do/app.yaml.tmpl >.do/app.yaml
 doctl apps spec validate .do/app.yaml
 doctl apps list --format ID,Spec.Name,DefaultIngress
@@ -147,40 +147,56 @@ online-ingested canonical Elasticsearch documents; unavailable metadata stays
 marked unavailable.
 
 Startup validates the complete search-quality configuration. Enabling
-reranking requires `OPENAI_API_KEY`; an absent key, a model other than
-`gpt-5.6-luna`, reasoning effort other than `low`, or an invalid candidate or
-timeout bound prevents startup. Keep the OpenAI key in App Platform as a secret
-at runtime. The `envsubst` step writes it into the ignored local `.do/app.yaml`;
-never commit the generated spec or include the key in reports.
+reranking requires `ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-sonnet-5`,
+`GEO_RERANK_EFFORT=low`, and `GEO_RERANK_THINKING=disabled`; an absent key or an
+invalid model, effort, thinking mode, candidate bound, or timeout prevents
+startup. Keep the Anthropic key in App Platform as a secret at runtime. The
+`envsubst` step writes it into the ignored local `.do/app.yaml`; never commit
+the generated spec or include the key in reports.
 
 With live Elasticsearch and NCBI access configured, explicitly opt in to the
-provider smoke and then record baseline versus Luna metrics. Supply current
+provider smoke and then record baseline versus Sonnet metrics. Supply current
 prices at run time rather than committing a price assumption:
 
 ```bash
-GEO_TEST_OPENAI=1 uv run pytest \
+GEO_TEST_ANTHROPIC=1 uv run pytest \
   tests/test_reranker_live.py -m provider_integration -q
 
 GEO_RERANK_ENABLED=true uv run geo-search-eval \
   eval/unified_search_queries.jsonl \
   --output eval/unified_search_report.json \
   --compare-baseline \
-  --input-cost-per-million "$CURRENT_LUNA_INPUT_COST_PER_MILLION" \
-  --output-cost-per-million "$CURRENT_LUNA_OUTPUT_COST_PER_MILLION"
+  --input-cost-per-million "$CURRENT_SONNET_INPUT_COST_PER_MILLION" \
+  --output-cost-per-million "$CURRENT_SONNET_OUTPUT_COST_PER_MILLION"
 ```
 
 Keep `eval/unified_search_report.json` uncommitted until its values are reviewed.
-Enable reranking only after the baseline versus Luna Recall@40, nDCG@10, MRR,
+Enable reranking only after the baseline versus Sonnet Recall@40, nDCG@10, MRR,
 constraint violations, NCBI-only recovery, p50/p95 latency, fallback rate,
 token use, and estimated cost are recorded. Improve candidate generation when
 relevant records are absent; tune reranking when they are present but
 misordered; propose query understanding only when unmodified NCBI recall or
 explicit constraint handling remains inadequate after that evaluation.
 
-The integration follows the official
-[GPT-5.6 Luna model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-and the Responses API
-[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+Inspect the shared MCP/Elasticsearch search behavior for each required smoke
+query in the versioned evaluation corpus:
+
+1. `mouse skeletal muscle gene expression after endurance exercise in insulin resistance`
+2. `human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data`
+3. `GSE310900`
+
+Claude Sonnet 5 must be attempted and applied for the two natural-language
+queries with no organism constraint violation. Exact `GSE310900` must return
+the accession without a rerank attempt. The integration follows the official
+[Claude Sonnet 5 model documentation](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
+[effort controls](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Anthropic Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
+and the [Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python).
+
+A production source deploy is incomplete until public provenance shows Sonnet
+applied with model `claude-sonnet-5`, effort `low`, and thinking `disabled` for
+both natural-language smoke queries. A successful source push or healthy
+process alone is not completion evidence.
 
 ## 4. DNS and public verification
 
