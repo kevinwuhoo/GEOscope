@@ -5,14 +5,34 @@ tags: [embeddings, cost, eval, models]
 
 # 25 · Embeddings & Cost
 
-← [[Home]] · feeds [[26-Datastore-Postgres]], [[23-Search-and-Retrieval]]
+← [[Home]] · production runbook: [[57-Canonical-Production-Pipeline]] · feeds
+[[23-Search-and-Retrieval]]
 
 ## TL;DR
 
-> The current decision is not API price: all three approved candidates run
-> locally and incur no per-token API fee. Pick from reviewed retrieval quality,
-> truncation, query latency, worker memory, build time, and measured Postgres
-> storage. → [[48-Alternate-Embedding-Bakeoff]]
+> **Production decision:** use only `gemini_embedding_2_3072_v1` at 3,072
+> dimensions, stored in Elasticsearch as `embedding_gemini_3072`. Corpus
+> generation uses the Gemini Batch API. BGE, MedCPT, and Qwen are
+> development/evaluation only and must remain outside the production artifact
+> root. The comparison material below is retained as experiment history. →
+> [[57-Canonical-Production-Pipeline]], [[48-Alternate-Embedding-Bakeoff]]
+
+## Production artifact and cost
+
+The production artifact lives at
+`data/processed/embedding_artifacts/gemini_embedding_2_3072_v1/`. Its required
+files are `vectors.npy`, `ids.json`, and `metadata.json`; Batch request, result,
+and state files preserve provider provenance and resume safety.
+
+The completed 2026-07-12 delta encoded 39,168 new records in 40 successful
+Batch shards and reused 249,736 existing Gemini rows. The conservative bound
+was 95,459,736 tokens / `$9.5460`; Google did not return per-row token counts,
+so the actual charge must be read from billing rather than reported as zero.
+
+## Development/evaluation model history
+
+The remaining sections describe the earlier local-model bake-off. They do not
+select, configure, or constrain the canonical production pipeline.
 
 ## The document we embed (series-level)
 
@@ -30,7 +50,7 @@ statistics are measured per variant instead of estimated.
 
 > **One embedding per document, not one per field.** Categorical fields (organism, sex, assay…) are served by facets/filters, not embeddings; only the narrative bucket gets embedded, and one concatenated vector is the v1 default. The full reasoning + when to split into multi-vector is [[28-Embedding-Granularity]].
 
-## Cost and storage for the current decision
+## Historical local-model cost and storage
 
 - **API spend:** none for BGE, MedCPT, or Qwen because all three are self-hosted.
 - **Compute:** not assumed free; record artifact build seconds, device, worker
@@ -59,7 +79,7 @@ statistics are measured per variant instead of estimated.
 **Ontology-term / entity matching (for [[22-Ontology-Normalization]], NOT document search):**
 - **SapBERT** / **BioLORD-2023** — tuned for short biomedical entity/synonym matching. Do **not** use these for document retrieval, and don't use document embedders for fine-grained ontology matching — opposite optimization targets.
 
-## Recommended path
+## Historical evaluation path
 
 1. **Measure the existing `bge-small-en-v1.5` index first** — all 222,961
    series are already embedded, so it is the honest zero-incremental-cost baseline.

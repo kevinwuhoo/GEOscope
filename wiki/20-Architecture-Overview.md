@@ -5,7 +5,7 @@ tags: [architecture, elasticsearch, gemini, prefect]
 
 # 20 · Architecture Overview
 
-← [[Home]]
+← [[Home]] · production runbook: [[57-Canonical-Production-Pipeline]]
 
 ## Current primary architecture
 
@@ -43,7 +43,7 @@ flowchart TB
 | Layer | Responsibility | Durable boundary |
 |---|---|---|
 | Prefect ingestion | Parse missing stripped SOFT records in bounded retryable batches | `data/processed/series_records/` |
-| Gemini embedding | Build or resume the complete canonical Gemini matrix | `embedding_artifacts/gemini_embedding_2_3072_v1/` |
+| Gemini embedding | Build or resume the complete canonical Gemini matrix | `data/processed/embedding_artifacts/gemini_embedding_2_3072_v1/` |
 | Elasticsearch loading | Idempotently upsert stable GSE document IDs and audit coverage | `geo-series` index |
 | Retrieval | Exact get, BM25, 3,072-dimensional dense kNN, native RRF, filters, and facets | `SearchResponse` |
 | Clients | CLI, local comparison UI, and the private FastMCP service | Closed search/filter contract |
@@ -54,10 +54,11 @@ flowchart TB
    BM25, 3,072-dimensional dense vectors, RRF, filters, and facets in one live
    service. [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] records the
    selection.
-2. **Gemini is the primary embedding model.** The fixed model key is
+2. **Gemini is the only production embedding model.** The fixed model key is
    `gemini_embedding_2_3072_v1`, backed by `gemini-embedding-2`, with vectors in
    `embedding_gemini_3072`. Its 3,072 dimensions exceed pgvector's 2,000
-   dimension limit.
+   dimension limit. BGE, MedCPT, and Qwen are development/evaluation only and
+   must remain outside the production artifact root.
 3. **The Prefect run is fail-closed.** Canonical materialization, Gemini
    artifact completion, Elasticsearch bulk upsert, and index audit must all
    complete before `geo-soft-etl` succeeds. Durable files remain resumable.

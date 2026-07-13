@@ -11,7 +11,9 @@ created: 2026-07-08
 > records, builds/resumes `gemini_embedding_2_3072_v1` (3,072 dimensions), and
 > must load and audit Elasticsearch before the run succeeds. Elasticsearch is
 > the only primary online datastore; PostgreSQL remains historical comparison
-> code. Start with [[20-Architecture-Overview]] and [[21-Ingestion-Pipeline]].
+> code. BGE, MedCPT, and Qwen are development/evaluation only. Start with
+> [[57-Canonical-Production-Pipeline]], [[20-Architecture-Overview]], and
+> [[21-Ingestion-Pipeline]].
 
 > **MCP implementation (2026-07-12):** The private FastMCP service is merged on
 > `main` with Elasticsearch-backed BM25/dense/hybrid retrieval, exact GSE lookup,
@@ -42,7 +44,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[22-Ontology-Normalization]] — field→ontology map, the mapping cascade, RAG vs. IDs
 - [[23-Search-and-Retrieval]] — hybrid retrieval, query expansion, reranking
 - [[24-Faceted-Search]] — facet model, ontology-backed hierarchical facets
-- [[25-Embeddings-and-Cost]] — model options, measured runtime/storage, and the eval plan
+- [[25-Embeddings-and-Cost]] — Gemini production decision, measured cost, and historical model evaluation
 - [[28-Embedding-Granularity]] — per-field vs whole-document embedding (field→mechanism routing)
 - [[26-Datastore-Postgres]] — historical pgvector + ParadeDB baseline (retained code, not a primary path)
 - [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]] — database bakeoff and the local-first Elasticsearch-only plan
@@ -78,11 +80,10 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 2. **Normalize** organism→NCBITaxon, sex→PATO, and assay→closed category/detail
    labels today. Tissue→UBERON is the next experiment; disease/cell type and
    hierarchy are v2+.
-3. **Embed** the completed canonical JSON record set into one canonical NumPy
-   matrix/ID/metadata directory per model; Gemini corpus embeddings use its
-   lower-cost batch API. Then index BM25, dense vectors, filters, and facets in
-   one **local Elasticsearch** container. The same scripts later point at a
-   managed host.
+3. **Embed** the completed canonical JSON record set with Gemini's lower-cost
+   Batch API, then index BM25, `embedding_gemini_3072`, filters, and facets in
+   Elasticsearch. Alternate model artifacts remain development-only and live
+   outside the production artifact root.
 4. **Serve** hybrid search + facet counts + get-by-accession through the merged
    **invite-only FastMCP service**; deploy the packaged ASGI app behind the
    production HTTPS/OAuth edge.

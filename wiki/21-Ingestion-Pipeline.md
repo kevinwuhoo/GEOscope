@@ -5,7 +5,8 @@ tags: [ingestion, pipeline, etl]
 
 # 21 · Ingestion Pipeline
 
-← [[Home]] · uses [[10-GEO-Data-Model]] · feeds [[22-Ontology-Normalization]]
+← [[Home]] · production runbook: [[57-Canonical-Production-Pipeline]] · uses
+[[10-GEO-Data-Model]] · feeds [[22-Ontology-Normalization]]
 
 ## Goal
 
@@ -52,17 +53,19 @@ source .env.elasticsearch
 set +a
 uv run geo-soft-etl \
   --allow-paid-gemini \
+  --gemini-max-cost-usd 9.55 \
   --gemini-concurrency 4
 ```
 
 After materialization, the flow builds or resumes
-`embedding_artifacts/gemini_embedding_2_3072_v1`, loads every available
-registered embedding artifact into Elasticsearch `geo-series`, refreshes once,
-and audits document count plus full `embedding_gemini_3072` coverage. Gemini
-embedding and Elasticsearch loading are required primary stages. Any parse,
-embedding, connection, bulk-item, or audit failure makes the run unsuccessful.
-Stable GSE `_id` values and durable local artifacts make the complete operation
-safe to retry.
+`data/processed/embedding_artifacts/gemini_embedding_2_3072_v1`, loads the
+Gemini-only production artifact root into Elasticsearch `geo-series`, refreshes
+once, and audits document count plus full `embedding_gemini_3072` coverage.
+Gemini embedding and Elasticsearch loading are required primary stages. Any
+parse, embedding, connection, bulk-item, or audit failure makes the run
+unsuccessful. Stable GSE `_id` values and durable local artifacts make the
+complete operation safe to retry. BGE, MedCPT, and Qwen belong in the separate
+`data/processed/embedding_artifacts-dev/` development/evaluation only root.
 
 The crawler and table stripper already produce metadata-only family SOFT files
 under `data/processed/soft_meta/`. At the 2026-07-11 checkpoint there were
@@ -77,8 +80,8 @@ The prototype flow:
 3. parses only missing outputs and publishes each JSON atomically;
 4. builds or resumes the registered Gemini NumPy matrix/ID/metadata artifact
    from the completed canonical JSON tree;
-5. loads every available registered embedding artifact into local Elasticsearch
-   and audits document count plus full Gemini coverage before reporting success.
+5. loads the Gemini-only production artifact root into Elasticsearch and audits
+   document count plus full Gemini coverage before reporting success.
 
 Deleting one derived record is the explicit v1 invalidation mechanism. The next
 run rebuilds it and replaces that GSE's configured embeddings. This intentionally

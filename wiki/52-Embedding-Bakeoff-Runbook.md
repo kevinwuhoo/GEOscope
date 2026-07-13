@@ -12,6 +12,13 @@ updated: 2026-07-11
 [[49-Alternate-Embedding-Bakeoff-Implementation-Plan]] · uses
 [[46-Retrieval-Evaluation-Plan]] and [[51-Search-Database-Bakeoff-and-Elasticsearch-Plan]]
 
+> **Production status (2026-07-12):** This is a development/evaluation only
+> comparison runbook, not the canonical production pipeline. Production uses
+> only `gemini_embedding_2_3072_v1` from a Gemini-only artifact root. BGE,
+> MedCPT, and Qwen must remain in a separate development artifact root. Use
+> [[57-Canonical-Production-Pipeline]] for current commands, file locations,
+> resume behavior, and validation.
+
 > **Prototype storage update (2026-07-11):** Model choices, prompts, dimensions,
 > cost controls, and the nine-system evaluation on this page remain current.
 > Persistence is simplified by
@@ -27,7 +34,7 @@ updated: 2026-07-11
 > start paid embedding jobs until the provider-neutral artifact tests pass and a
 > dry-run cost estimate has been recorded.
 
-## Decision and current state
+## Historical decision and pre-run state
 
 Add **Google `gemini-embedding-2` at its full 3,072 dimensions** to the bakeoff.
 Compare it fairly with BM25 and the existing/planned local pipelines:
@@ -42,7 +49,8 @@ selection target; latency, storage, and cost are reported constraints, not
 proxies for quality. Do not train a regression model, router, learned fusion, or
 reranker for this prototype.
 
-**No new embedding run has happened yet.** The BGE matrix already exists. The
+At the time this bake-off plan was written, no new embedding run had happened.
+The BGE matrix already existed. The
 old `embeddings_pubmedbert.npy` is not accepted as MedCPT because it lacks the
 required model and input provenance. MedCPT, Qwen, and Gemini still need to be
 generated.
@@ -167,7 +175,7 @@ hosted model ID is not enough configuration by itself.
 Each model produces exactly:
 
 ```text
-data/processed/embedding_artifacts/<model_key>/
+data/processed/embedding_artifacts-dev/<model_key>/
   vectors.npy
   ids.json
   metadata.json
@@ -180,7 +188,7 @@ existing matrix: after the record inventory changes, explicitly delete and
 rebuild the affected model artifact.
 
 The existing BGE and PubMedBERT `.npy` artifacts remain on disk and are not
-overwritten. Adopt BGE into its canonical directory after verifying shape/ID
+overwritten. Adopt BGE into its development directory after verifying shape/ID
 alignment. Do not
 identify the PubMedBERT artifact as MedCPT.
 
@@ -208,7 +216,7 @@ identify the PubMedBERT artifact as MedCPT.
 
 - [ ] Verify the existing matrix shape (`222,961 × 384`), dtype, finite values,
   ordered GSE alignment, and exact document composition.
-- [ ] Copy the aligned BGE matrix/IDs into the canonical BGE artifact directory
+- [ ] Copy the aligned BGE matrix/IDs into the development BGE artifact directory
   without changing the original files. If the original model revision cannot be
   proven, mark it unknown rather than inventing it.
 - [ ] If ordered alignment cannot be proven, rebuild BGE instead of adopting it.

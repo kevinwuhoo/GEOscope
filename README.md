@@ -86,6 +86,22 @@ words if the desired series is not shown.
 > per-sample metadata. `acc.cgi view=brief` is the only source that is
 > metadata-complete, data-free, and available for new series.
 
+## Canonical production pipeline
+
+`geo-soft-etl` is the single production path: metadata-only SOFT → canonical
+GSE JSON → Gemini Batch embeddings → Elasticsearch → coverage audit. Production
+uses only `gemini_embedding_2_3072_v1`, stored as
+`embedding_gemini_3072`. BGE, MedCPT, and Qwen are development/evaluation only.
+
+The durable handoffs are `data/processed/series_records/`,
+`data/processed/embedding_artifacts/gemini_embedding_2_3072_v1/`,
+`data/processed/soft_etl_report.json`, and
+`data/processed/elasticsearch_load_report.json`. A production artifact root
+must contain only the Gemini directory because the loader indexes every
+registered artifact it finds. The complete file map, resume rules, commands,
+validation invariants, and current 288,904-row checkpoint are in
+[wiki/57-Canonical-Production-Pipeline.md](wiki/57-Canonical-Production-Pipeline.md).
+
 ## Canonical SOFT records and embedding artifacts
 
 `geo-soft-etl` now owns canonical materialization, paid Gemini embedding,
@@ -98,25 +114,37 @@ and skipped without reading their source. Delete one record explicitly to
 recompute it. The flow runs directly with a bounded local Prefect thread pool;
 the Prefect server/UI is optional.
 
-Build complete aligned matrix artifacts from the canonical record tree:
+### Development/evaluation only models
+
+The following local models are retained for testing and historical comparison,
+not production. Build them into a separate development artifact root:
 
 ```bash
-uv run python -m geo_index.build_embedding_artifact --model-key bge_small_v15
-uv run python -m geo_index.build_embedding_artifact --model-key medcpt_v1
-uv run python -m geo_index.build_embedding_artifact --model-key qwen3_06b_1024_v1
+uv run python -m geo_index.build_embedding_artifact \
+  --model-key bge_small_v15 \
+  --output-root data/processed/embedding_artifacts-dev
+uv run python -m geo_index.build_embedding_artifact \
+  --model-key medcpt_v1 \
+  --output-root data/processed/embedding_artifacts-dev
+uv run python -m geo_index.build_embedding_artifact \
+  --model-key qwen3_06b_1024_v1 \
+  --output-root data/processed/embedding_artifacts-dev
 ```
 
 Each model publishes `vectors.npy`, `ids.json`, and `metadata.json` under
-`data/processed/embedding_artifacts/<model-key>/`. A valid existing directory
-whose IDs match the canonical inventory skips all encoder work. Inventory
-changes are synchronized incrementally: only new or explicitly replaced rows
-are encoded, unchanged rows are reused, and deleted rows are removed.
+the selected output root. Do not copy these directories into the production
+`data/processed/embedding_artifacts/` root. A valid existing directory whose
+IDs match the canonical inventory skips all encoder work. Inventory changes are
+synchronized incrementally: only new or explicitly replaced rows are encoded,
+unchanged rows are reused, and deleted rows are removed.
 
-The existing aligned BGE baseline can be copied into the canonical contract
-without changing its source files:
+The existing aligned BGE baseline can be copied into a development artifact
+root without changing its source files:
 
 ```bash
-uv run python -m geo_index.adopt_embeddings --model-key bge_small_v15
+uv run python -m geo_index.adopt_embeddings \
+  --model-key bge_small_v15 \
+  --output-root data/processed/embedding_artifacts-dev
 ```
 
 Gemini corpus embeddings use only bounded asynchronous Google batch/file API
@@ -191,12 +219,13 @@ cost-ceiling option shown above before it can submit. Omitting the explicit
 concurrency option uses the default of one active Gemini batch job.
 
 Gemini embedding and Elasticsearch loading are required primary stages. The
-loader includes every available registered embedding artifact, preserving
-non-Gemini model vectors while replacing documents. A run is successful only
-after every indexed document has `embedding_gemini_3072`; record parsing,
-embedding, Elasticsearch loading, or audit failures make the run unsuccessful.
-Completed records and artifacts remain safe to reuse on retry. Both paid-work
-flags are intentionally required before the flow may submit Gemini batch work.
+loader includes every registered artifact present in its configured root, so a
+production root must contain only `gemini_embedding_2_3072_v1`. A run is
+successful only after every indexed document has `embedding_gemini_3072`;
+record parsing, embedding, Elasticsearch loading, or audit failures make the
+run unsuccessful. Completed records and artifacts remain safe to reuse on
+retry. Both paid-work flags are intentionally required before the flow may
+submit Gemini batch work.
 
 Search the indexed corpus or launch the comparison UI:
 
@@ -287,7 +316,8 @@ GEO_TEST_ELASTIC=1 uv run pytest tests/test_elasticsearch_live.py -v
 
 The primary Prefect flow invokes the loader automatically. The standalone
 loader remains available for evaluation, repair, or an explicitly separated
-operation after the canonical record tree and selected artifacts are complete:
+operation after the canonical record tree and Gemini-only production artifact
+root are complete:
 
 ```bash
 uv run geo-elasticsearch-load \
@@ -300,13 +330,14 @@ Run the identical command a second time to prove the document count is
 unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
 second load replaces the same documents. On the primary path,
 `geo-soft-etl --allow-paid-gemini` builds or resumes the Gemini artifact, loads
-every available registered embedding artifact in one idempotent operation, and
-audits complete Gemini coverage in its terminal flow report.
+the Gemini-only production artifact root in one idempotent operation, and audits
+complete Gemini coverage in its terminal flow report.
 
-After BGE, MedCPT, and Qwen have full vector coverage, run the guarded read-only
-comparison. It generates real query embeddings, exercises BM25+dense native RRF
-with normalized filters and disjunctive facets, records standalone BM25/dense
-diagnostics, and writes stable Markdown tables for review:
+For development/evaluation only, after BGE, MedCPT, and Qwen have full vector
+coverage in a disposable local index, run the guarded read-only comparison. It
+generates real query embeddings, exercises BM25+dense native RRF with normalized
+filters and disjunctive facets, records standalone BM25/dense diagnostics, and
+writes stable Markdown tables for review:
 
 ```bash
 set -a

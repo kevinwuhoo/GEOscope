@@ -66,3 +66,28 @@ def test_postgres_and_old_pipeline_pages_are_marked_historical() -> None:
     glossary = _read("wiki/90-Glossary.md")
     assert "Our chosen provider is" not in glossary
     assert "current 384-dimensional" not in glossary
+
+
+def test_canonical_production_pipeline_is_gemini_only_and_operational() -> None:
+    required = (
+        "Canonical production pipeline",
+        "geo-soft-etl",
+        "gemini_embedding_2_3072_v1",
+        "embedding_gemini_3072",
+        "data/processed/series_records",
+        "data/processed/embedding_artifacts",
+        "data/processed/elasticsearch_load_report.json",
+        "development/evaluation only",
+    )
+    for path in ("README.md", "wiki/57-Canonical-Production-Pipeline.md"):
+        text = _read(path)
+        for phrase in required:
+            assert phrase in text, f"{path}: {phrase}"
+
+    for path in (
+        "wiki/Home.md",
+        "wiki/00-Overview.md",
+        "wiki/20-Architecture-Overview.md",
+        "wiki/21-Ingestion-Pipeline.md",
+    ):
+        assert "[[57-Canonical-Production-Pipeline]]" in _read(path), path

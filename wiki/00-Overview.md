@@ -20,7 +20,8 @@ The current prototype uses **Elasticsearch as its primary online datastore and
 search service**, with `gemini_embedding_2_3072_v1` providing 3,072-dimensional
 dense vectors. The earlier PostgreSQL implementation remains only as a
 historical comparison because pgvector's `vector` type is limited to 2,000
-dimensions. → [[20-Architecture-Overview]]
+dimensions. BGE, MedCPT, and Qwen remain development/evaluation only. →
+[[57-Canonical-Production-Pipeline]], [[20-Architecture-Overview]]
 
 A **metadata index + search service** over GEO that provides:
 
@@ -61,8 +62,9 @@ Two questions worth settling up front (you raised both):
 ## Constraints (from you)
 
 - **Prototype / spike**, not production.
-- **Elasticsearch-first** with Gemini 3,072-dimensional embeddings; retain the
-  measured PostgreSQL and open-model experiments for reproducibility.
+- **Elasticsearch-first** with Gemini 3,072-dimensional embeddings as the only
+  production vector; retain PostgreSQL and open-model experiments only for
+  development/evaluation reproducibility.
 - **Cost comes out of pocket** → estimate embedding cost; prefer cheap where quality is equal. (Spoiler: embedding all of GEO once is **single-digit dollars** — see [[25-Embeddings-and-Cost]]. Cost is *not* the constraint; quality and effort are.)
 
 ## Prior art, in one line
