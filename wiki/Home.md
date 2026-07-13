@@ -1,11 +1,16 @@
 ---
-title: GEO Metadata Index — Home (Map of Content)
+title: GEOscope — Home (Map of Content)
 tags: [moc, geo, search, rag]
 status: working-prototype
 created: 2026-07-08
 ---
 
-# 🧬 GEO Metadata Index
+# 🧬 GEOscope
+
+> **Project identity:** **GEOscope** is the public name for the GEO Metadata
+> Index prototype: an instrument for seeing what literal GEO search misses.
+> The name, audience, marketing page, and live-demo boundary are documented in
+> [[58-GEOscope-Marketing-and-Live-Demo]].
 
 > **Current primary path (2026-07-12):** Prefect materializes canonical GSE
 > records, builds/resumes `gemini_embedding_2_3072_v1` (3,072 dimensions), and
@@ -39,6 +44,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 - [[11-The-Metadata-Problem]] — *why* keyword search fails (the single-cell worked example)
 
 ### The design
+- [[58-GEOscope-Marketing-and-Live-Demo]] — public identity, marketing narrative, React page, and FastAPI live-demo adapter
 - [[20-Architecture-Overview]] — the whole system, end to end
 - [[21-Ingestion-Pipeline]] — GEOmetadb baseline plus the new stripped-SOFT canonical-record path
 - [[22-Ontology-Normalization]] — field→ontology map, the mapping cascade, RAG vs. IDs

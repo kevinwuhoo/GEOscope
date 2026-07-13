@@ -1,6 +1,6 @@
 # CLAUDE.md — working in this vault
 
-This is the planning vault for the **GEO Metadata Index** (see [[Home]]). Obsidian conventions: numbered notes (`NN-Title.md`), `[[wikilinks]]` resolve by note name (not path), [[Home]] is the map of content. When you add or edit notes, keep the two rules below.
+This is the planning vault for **GEOscope**, the public name of the GEO Metadata Index prototype (see [[Home]]). Obsidian conventions: numbered notes (`NN-Title.md`), `[[wikilinks]]` resolve by note name (not path), [[Home]] is the map of content. When you add or edit notes, keep the two rules below.
 
 ## Rule 1 — Cite all sources
 
