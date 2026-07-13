@@ -19,6 +19,15 @@ from .search_models import FACET_FIELDS, SearchFilters
 
 
 SearchMode = Literal["hybrid", "bm25", "dense"]
+ResultSource = Literal["elasticsearch", "ncbi", "both"]
+DegradationCategory = Literal[
+    "ncbi_timeout",
+    "ncbi_error",
+    "rerank_timeout",
+    "rerank_refusal",
+    "rerank_invalid",
+    "rerank_error",
+]
 FacetFieldName = Literal[
     "organism_ids", "sex_ids", "assay_categories", "assay_labels"
 ]
@@ -40,6 +49,37 @@ class _StrictInputModel(BaseModel):
 
 class _StrictOutputModel(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
+
+
+class SearchLatencyOutput(_StrictOutputModel):
+    elasticsearch_ms: int = Field(ge=0)
+    ncbi_ms: int = Field(ge=0)
+    reranker_ms: int = Field(ge=0)
+
+
+class SearchProvenanceOutput(_StrictOutputModel):
+    exact_accession: bool
+    elasticsearch_candidates: int = Field(ge=0, le=100)
+    ncbi_candidates: int = Field(ge=0, le=20)
+    merged_candidates: int = Field(ge=0, le=120)
+    rerank_attempted: bool
+    rerank_applied: bool
+    rerank_model: BoundedValue | None
+    rerank_reasoning_effort: Literal["low"] | None
+    rerank_input_tokens: int = Field(ge=0)
+    rerank_output_tokens: int = Field(ge=0)
+    latency: SearchLatencyOutput
+    degradation: list[DegradationCategory] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def _validate_reranker_state(self) -> Self:
+        if self.rerank_applied and not self.rerank_attempted:
+            raise ValueError("applied reranking requires an attempted rerank")
+        if self.rerank_attempted != (self.rerank_model is not None):
+            raise ValueError("rerank model must agree with attempted state")
+        if self.rerank_attempted != (self.rerank_reasoning_effort is not None):
+            raise ValueError("reasoning effort must agree with attempted state")
+        return self
 
 
 class SearchFiltersInput(_StrictInputModel):
@@ -85,7 +125,7 @@ class SearchDatasetsInput(_StrictInputModel):
     query: str
     filters: SearchFiltersInput = Field(default_factory=SearchFiltersInput)
     mode: SearchMode = "hybrid"
-    limit: int = Field(default=15, ge=1, le=50)
+    limit: int = Field(default=10, ge=1, le=50)
 
     @field_validator("query", mode="after")
     @classmethod
@@ -144,6 +184,9 @@ class _DatasetMetadata(_StrictOutputModel):
 class DatasetSummary(_DatasetMetadata):
     rank: int = Field(ge=1, le=50)
     score: float | None
+    source: ResultSource
+    retrieval_score: float | None
+    original_rank: int | None = Field(default=None, ge=1, le=100)
     snippet: Annotated[str, Field(max_length=1000)] | None
 
 
@@ -184,6 +227,7 @@ class SearchDatasetsOutput(_StrictOutputModel):
     embedding_variant: BoundedValue | None
     results: list[DatasetSummary] = Field(max_length=50)
     facets: dict[FacetFieldName, FacetResultOutput]
+    provenance: SearchProvenanceOutput
 
     @model_validator(mode="after")
     def _validate_facets(self) -> Self:

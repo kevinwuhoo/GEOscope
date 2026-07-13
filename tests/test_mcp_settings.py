@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from geo_index.mcp_settings import MCP_PATH, McpSettings
+from geo_index.mcp_settings import MCP_PATH, McpSettings, SearchQualitySettings
 
 
 VALID = {
@@ -12,6 +12,47 @@ VALID = {
     "GEO_MCP_PUBLIC_BASE_URL": "https://geoscope.kevinformatics.com",
     "GEO_MCP_ALLOWED_HOSTS": "geoscope.kevinformatics.com",
 }
+
+
+def test_search_quality_defaults_are_bounded_and_disabled() -> None:
+    quality = SearchQualitySettings.from_env({})
+
+    assert quality.rerank_enabled is False
+    assert quality.openai_api_key is None
+    assert quality.rerank_model == "gpt-5.6-luna"
+    assert quality.reasoning_effort == "low"
+    assert quality.candidate_limit == 40
+    assert quality.rerank_timeout_seconds == 8.0
+    assert quality.ncbi_timeout_seconds == 5.0
+
+
+def test_enabled_reranker_requires_openai_key() -> None:
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        SearchQualitySettings.from_env({"GEO_RERANK_ENABLED": "true"})
+
+    quality = SearchQualitySettings.from_env(
+        {"GEO_RERANK_ENABLED": "true", "OPENAI_API_KEY": " secret "}
+    )
+    assert quality.rerank_enabled is True
+    assert quality.openai_api_key == "secret"
+    assert "secret" not in repr(quality)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("GEO_RERANK_ENABLED", "yes"),
+        ("GEO_RERANK_MODEL", "gpt-5.6-sol"),
+        ("GEO_RERANK_REASONING_EFFORT", "medium"),
+        ("GEO_RERANK_CANDIDATE_LIMIT", "9"),
+        ("GEO_RERANK_CANDIDATE_LIMIT", "101"),
+        ("GEO_RERANK_TIMEOUT_SECONDS", "0"),
+        ("GEO_NCBI_TIMEOUT_SECONDS", "nan"),
+    ],
+)
+def test_search_quality_settings_fail_closed(key: str, value: str) -> None:
+    with pytest.raises(ValueError):
+        SearchQualitySettings.from_env({key: value})
 
 
 def test_public_settings_apply_safe_admission_defaults() -> None:

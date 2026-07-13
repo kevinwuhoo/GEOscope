@@ -18,6 +18,8 @@ from geo_index.mcp_models import (
     SearchDatasetsInput,
     SearchDatasetsOutput,
     SearchFiltersInput,
+    SearchLatencyOutput,
+    SearchProvenanceOutput,
 )
 from geo_index.mcp_search_service import UnknownFilterValueError
 from geo_index.mcp_server import (
@@ -58,11 +60,33 @@ def _facet(field: str) -> FacetResultOutput:
 def _summary() -> DatasetSummary:
     return DatasetSummary(
         rank=1, gse="GSE123", score=0.9, title="Study title",
+        source="elasticsearch", retrieval_score=0.9, original_rank=1,
         snippet="Summary snippet", study_type="RNA-seq", n_samples=10,
         pubmed_id=12345678, organism_ids=["NCBITaxon:9606"],
         organism_status="mapped", sex_ids=[], sex_status="absent",
         assay_categories=["transcriptomics"], assay_labels=["scRNA-seq"],
         assay_status="mapped", truncated_fields=[],
+    )
+
+
+def _provenance() -> SearchProvenanceOutput:
+    return SearchProvenanceOutput(
+        exact_accession=False,
+        elasticsearch_candidates=1,
+        ncbi_candidates=0,
+        merged_candidates=1,
+        rerank_attempted=False,
+        rerank_applied=False,
+        rerank_model=None,
+        rerank_reasoning_effort=None,
+        rerank_input_tokens=0,
+        rerank_output_tokens=0,
+        latency=SearchLatencyOutput(
+            elasticsearch_ms=1,
+            ncbi_ms=0,
+            reranker_ms=0,
+        ),
+        degradation=[],
     )
 
 
@@ -115,6 +139,7 @@ class FakeService:
             embedding_variant="gemini_embedding_2_3072_v1",
             results=[_summary()],
             facets={field: _facet(field) for field in FACET_FIELDS},
+            provenance=_provenance(),
         )
 
     def get_dataset(self, gse: str) -> GetDatasetOutput:
@@ -193,6 +218,15 @@ async def test_all_tools_delegate_normalized_inputs(
     assert fake_service.detail_calls == ["GSE123"]
     assert facet.structured_content["scope"] == "all_matches"
     assert fake_service.facet_calls[0]["query"] is None
+
+
+async def test_search_tool_uses_ten_result_default(
+    mcp, fake_service: FakeService
+) -> None:
+    async with Client(mcp) as client:
+        await client.call_tool("search_datasets", {"query": "single cell RNA"})
+
+    assert fake_service.search_calls[0]["limit"] == 10
 
 
 @pytest.mark.parametrize(

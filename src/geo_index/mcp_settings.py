@@ -95,12 +95,77 @@ def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:
     return value
 
 
+def _positive_float(env: Mapping[str, str], key: str, default: float) -> float:
+    try:
+        value = float(env.get(key, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{key} must be numeric") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{key} must be positive")
+    return value
+
+
+def _strict_bool(env: Mapping[str, str], key: str, default: bool) -> bool:
+    raw = env.get(key, "true" if default else "false").strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{key} must be true or false")
+    return raw == "true"
+
+
+@dataclass(frozen=True)
+class SearchQualitySettings:
+    openai_api_key: str | None = field(default=None, repr=False)
+    rerank_enabled: bool = False
+    rerank_model: str = "gpt-5.6-luna"
+    reasoning_effort: str = "low"
+    candidate_limit: int = 40
+    rerank_timeout_seconds: float = 8.0
+    ncbi_timeout_seconds: float = 5.0
+
+    @classmethod
+    def disabled(cls) -> SearchQualitySettings:
+        return cls()
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> SearchQualitySettings:
+        enabled = _strict_bool(env, "GEO_RERANK_ENABLED", False)
+        api_key = env.get("OPENAI_API_KEY", "").strip() or None
+        if enabled and api_key is None:
+            raise ValueError("OPENAI_API_KEY is required when reranking is enabled")
+        model = env.get("GEO_RERANK_MODEL", "gpt-5.6-luna").strip()
+        if model != "gpt-5.6-luna":
+            raise ValueError("GEO_RERANK_MODEL must be gpt-5.6-luna")
+        effort = env.get("GEO_RERANK_REASONING_EFFORT", "low").strip().lower()
+        if effort != "low":
+            raise ValueError("GEO_RERANK_REASONING_EFFORT must be low")
+        candidate_limit = _positive_int(env, "GEO_RERANK_CANDIDATE_LIMIT", 40)
+        if not 10 <= candidate_limit <= 100:
+            raise ValueError("GEO_RERANK_CANDIDATE_LIMIT must be between 10 and 100")
+        return cls(
+            openai_api_key=api_key,
+            rerank_enabled=enabled,
+            rerank_model=model,
+            reasoning_effort=effort,
+            candidate_limit=candidate_limit,
+            rerank_timeout_seconds=_positive_float(
+                env, "GEO_RERANK_TIMEOUT_SECONDS", 8.0
+            ),
+            ncbi_timeout_seconds=_positive_float(
+                env, "GEO_NCBI_TIMEOUT_SECONDS", 5.0
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class McpSettings:
     elasticsearch: ElasticsearchSettings = field(repr=False)
     public_base_url: str
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
+    search_quality: SearchQualitySettings = field(
+        default_factory=SearchQualitySettings.disabled,
+        repr=False,
+    )
     rate_per_second: float = 1.0
     burst_capacity: int = 5
     max_concurrent_requests: int = 4
@@ -143,6 +208,7 @@ class McpSettings:
             raise ValueError("GEO_MCP_RATE_PER_SECOND must be positive")
         return cls(
             elasticsearch=elasticsearch,
+            search_quality=SearchQualitySettings.from_env(env),
             public_base_url=public_base_url,
             allowed_hosts=tuple(value for value, _ in validated_hosts),
             allowed_origins=allowed_origins,

@@ -316,7 +316,7 @@ def create_mcp(
         ctx: Context,
         filters: SearchFiltersInput | None = None,
         mode: SearchMode = "hybrid",
-        limit: int = 15,
+        limit: int = 10,
     ) -> SearchDatasetsOutput:
         request = SearchDatasetsInput(
             query=query, filters=filters or SearchFiltersInput(),

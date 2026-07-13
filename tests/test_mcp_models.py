@@ -17,6 +17,8 @@ from geo_index.mcp_models import (
     SearchDatasetsInput,
     SearchDatasetsOutput,
     SearchFiltersInput,
+    SearchLatencyOutput,
+    SearchProvenanceOutput,
 )
 from geo_index.search_models import SearchFilters
 
@@ -26,6 +28,9 @@ def _summary(**overrides: object) -> dict[str, object]:
         "rank": 1,
         "gse": "GSE123",
         "score": 0.75,
+        "source": "elasticsearch",
+        "retrieval_score": 0.75,
+        "original_rank": 1,
         "title": "Study title",
         "snippet": "Short summary",
         "study_type": "Expression profiling by high throughput sequencing",
@@ -48,6 +53,9 @@ def _detail(**overrides: object) -> dict[str, object]:
     values = _summary()
     values.pop("rank")
     values.pop("score")
+    values.pop("source")
+    values.pop("retrieval_score")
+    values.pop("original_rank")
     values.pop("snippet")
     values.update(
         {
@@ -72,7 +80,29 @@ def _facet_result(field: str = "organism_ids") -> FacetResultOutput:
     )
 
 
+def _provenance() -> SearchProvenanceOutput:
+    return SearchProvenanceOutput(
+        exact_accession=False,
+        elasticsearch_candidates=40,
+        ncbi_candidates=20,
+        merged_candidates=55,
+        rerank_attempted=True,
+        rerank_applied=True,
+        rerank_model="gpt-5.6-luna",
+        rerank_reasoning_effort="low",
+        rerank_input_tokens=1200,
+        rerank_output_tokens=400,
+        latency=SearchLatencyOutput(
+            elasticsearch_ms=120,
+            ncbi_ms=80,
+            reranker_ms=200,
+        ),
+        degradation=[],
+    )
+
+
 def test_search_input_bounds_and_forbids_unknown_fields() -> None:
+    assert SearchDatasetsInput(query="x").limit == 10
     with pytest.raises(ValidationError):
         SearchDatasetsInput(query=" ", limit=15)
     with pytest.raises(ValidationError):
@@ -183,10 +213,18 @@ def test_outputs_have_exact_top_level_contracts() -> None:
         embedding_variant="gemini_embedding_2_3072_v1",
         results=[DatasetSummary(**_summary())],
         facets=facets,
+        provenance=_provenance(),
     )
     assert set(search.model_dump(mode="json")) == {
-        "query", "filters", "mode", "limit", "retrieval_version",
-        "embedding_variant", "results", "facets",
+        "query",
+        "filters",
+        "mode",
+        "limit",
+        "retrieval_version",
+        "embedding_variant",
+        "results",
+        "facets",
+        "provenance",
     }
 
     detail = GetDatasetOutput(found=True, dataset=DatasetDetail(**_detail()))
