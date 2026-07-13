@@ -2,6 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Current contract (supersedes historical task text)
+
+> **Supersession notice (approved July 13, 2026):** The contract in this
+> section supersedes every historical 20-candidate and top-20 instruction below.
+> The task-by-task text remains intact as a historical execution record; whenever
+> it conflicts with this section, follow this section.
+
+- Public search returns 10 results by default and permits a caller-selected
+  `limit` from 1 through 50.
+- Shared retrieval accepts up to 100 Elasticsearch candidates and up to 100 NCBI
+  candidates. NCBI's official E-utilities maximum page size of 10,000 records is
+  not the product contract; this integration's operational cap is 100.
+- The shared layer sends the deduplicated, filter-eligible union of up to 200
+  candidates to the reranker, then final results are sliced to the requested
+  `limit`.
+- GPT-5.6 Luna with low reasoning effort is the current reranking pass. Sonnet 5
+  migration remains a later follow-up after the Luna baseline is recorded and
+  reviewed.
+
 **Goal:** Make every GEOscope consumer use exact GSE routing, concurrent Elasticsearch and NCBI candidate generation, and GPT-5.6 Luna reranking that returns ten results by default.
 
 **Architecture:** `McpSearchService` remains the shared lifecycle and orchestration boundary beneath MCP and the marketing API. Focused modules own the canonical candidate model, NCBI E-utilities adaptation, and OpenAI Responses API reranking; the marketing API consumes the same `SearchExecution` as MCP and performs no independent NCBI request.

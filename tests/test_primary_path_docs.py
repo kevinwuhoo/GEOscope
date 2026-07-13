@@ -160,3 +160,26 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
     assert "Request up to 100 native candidates" in internal_design
     assert "not in this NCBI candidate set (up to 100)" in internal_design
     assert "top 20" not in internal_design
+
+    implementation_plan = _read(
+        "docs/superpowers/plans/2026-07-13-unified-ncbi-reranking.md"
+    )
+    supersession = " ".join(implementation_plan[:3_000].split())
+    for phrase in (
+        "supersedes every historical 20-candidate and top-20 instruction below",
+        "10 results by default",
+        "caller-selected `limit` from 1 through 50",
+        "up to 100 Elasticsearch candidates",
+        "up to 100 NCBI candidates",
+        "maximum page size of 10,000 records",
+        "operational cap is 100",
+        "deduplicated, filter-eligible union of up to 200 candidates",
+        "final results are sliced to the requested `limit`",
+        "GPT-5.6 Luna",
+        "Sonnet 5 migration remains a later follow-up",
+    ):
+        assert phrase in supersession, phrase
+    assert implementation_plan.index("## Current contract") < (
+        implementation_plan.index("## Global Constraints")
+    )
+    assert "Query up to 20 NCBI GEO Series candidates" in implementation_plan
