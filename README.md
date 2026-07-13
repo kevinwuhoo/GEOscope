@@ -141,11 +141,15 @@ Elasticsearch provides the shared online search layer:
   prefers the richer local metadata, and records whether each result came from
   Elasticsearch, NCBI, or both. The local pool has a floor of 40 and grows with
   the caller's requested result limit before both sources reach their cap.
+  Elasticsearch admits up to 100 candidates, NCBI retrieves up to its
+  configured page maximum of 100, and the deduplicated union of up to 200
+  candidates reaches the reranker.
 - **LLM reranking** uses Claude Sonnet 5 with low effort and thinking disabled
-  to select and order the final top 10 from the merged candidate set. Exact GSE
-  accession lookups normalize the identifier, check the local index first, fall
-  back to NCBI if needed, and bypass semantic retrieval and reranking so
-  identifiers remain deterministic.
+  to order the merged candidate set. The shared service returns 10 results by
+  default, while callers may request from 1 through 50. Exact GSE accession
+  lookups normalize the identifier, check the local index first, fall back to
+  NCBI if needed, and bypass semantic retrieval and reranking so identifiers
+  remain deterministic.
 
 Elasticsearch remains the required source of indexed metadata. If live NCBI
 retrieval or reranking is unavailable, the service falls back to deterministic
@@ -228,8 +232,8 @@ can be evaluated against latency and spend. It also preserves deterministic
 behavior: exact accessions take a direct lookup route, and natural-language
 queries retain Elasticsearch ordering if an optional NCBI or LLM call fails.
 Because this is implemented in the shared MCP/search layer, the website and MCP
-clients receive the same final top 10 rather than maintaining separate ranking
-logic.
+clients receive the same caller-selected result slice rather than maintaining
+separate ranking logic.
 
 NCBI-only results are partial live records, not canonical documents ingested
 online into Elasticsearch. They can participate in the final ranking, but

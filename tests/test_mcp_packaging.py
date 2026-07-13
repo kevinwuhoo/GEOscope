@@ -51,6 +51,19 @@ def test_sonnet_rollout_deployment_contract() -> None:
     assert not errors, "\n".join(errors)
 
 
+def test_deployment_runbook_documents_enabled_runtime_degradation() -> None:
+    runbook = (ROOT / "docs" / "deployment" / "digitalocean.md").read_text()
+    normalized = " ".join(runbook.split())
+    for phrase in (
+        "NCBI timeout or failure degrades to Elasticsearch-only candidate generation",
+        "Anthropic timeout, refusal, truncation, malformed response, or invalid "
+        "output fails open to deterministic pre-rerank Elasticsearch-first union ordering",
+        "Elasticsearch failure remains fatal",
+        "Provider response text and API keys are never exposed",
+    ):
+        assert phrase in normalized, phrase
+
+
 def test_docker_packages_one_worker_combined_production_app() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "uv sync --frozen --no-dev" in dockerfile

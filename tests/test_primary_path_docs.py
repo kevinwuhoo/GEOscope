@@ -134,6 +134,7 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
     assert "never write it to the generated spec" not in deployment
 
     readme = _read("README.md")
+    normalized_readme = " ".join(readme.split())
     for phrase in (
         "up to 100 Elasticsearch candidates",
         "up to 100 native NCBI GEO candidates",
@@ -142,6 +143,19 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "Anthropic Structured Outputs",
     ):
         assert phrase in readme, phrase
+
+    for path, text in (
+        ("README.md", normalized_readme),
+        ("docs/deployment/digitalocean.md", normalized_deployment),
+    ):
+        for phrase in (
+            "10 results by default",
+            "callers may request from 1 through 50",
+            "Elasticsearch admits up to 100 candidates",
+            "NCBI retrieves up to its configured page maximum of 100",
+            "deduplicated union of up to 200 candidates reaches the reranker",
+        ):
+            assert phrase in text, f"{path}: {phrase}"
 
     provider_documentation = (
         "README.md",

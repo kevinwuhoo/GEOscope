@@ -146,6 +146,19 @@ reranker. NCBI-only results are partial live records from E-utilities, not
 online-ingested canonical Elasticsearch documents; unavailable metadata stays
 marked unavailable.
 
+When reranking is enabled, the shared service returns 10 results by default,
+while callers may request from 1 through 50. Elasticsearch admits up to 100
+candidates, NCBI retrieves up to its configured page maximum of 100, and the
+deduplicated union of up to 200 candidates reaches the reranker before the
+caller-selected result slice is returned.
+
+At enabled runtime, an NCBI timeout or failure degrades to Elasticsearch-only
+candidate generation. An Anthropic timeout, refusal, truncation, malformed
+response, or invalid output fails open to deterministic pre-rerank
+Elasticsearch-first union ordering. Elasticsearch failure remains fatal.
+Provider response text and API keys are never exposed through MCP, HTTP, logs,
+or evaluation reports.
+
 Startup validates the complete search-quality configuration. Enabling
 reranking requires `ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-sonnet-5`,
 `GEO_RERANK_EFFORT=low`, and `GEO_RERANK_THINKING=disabled`; an absent key or an
