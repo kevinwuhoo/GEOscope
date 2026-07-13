@@ -49,6 +49,7 @@ from .ncbi_search import (
 from .reranker import (
     AnthropicReranker,
     InvalidRerankOutputError,
+    RerankInputTooLargeError,
     RerankRefusalError,
     RerankResult,
     RerankResponseError,
@@ -178,7 +179,7 @@ def _rerank_error_category(exc: BaseException) -> DegradationCategory:
         return "rerank_timeout"
     if isinstance(exc, RerankRefusalError):
         return "rerank_refusal"
-    if isinstance(exc, InvalidRerankOutputError):
+    if isinstance(exc, (InvalidRerankOutputError, RerankInputTooLargeError)):
         return "rerank_invalid"
     return "rerank_error"
 

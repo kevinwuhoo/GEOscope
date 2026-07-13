@@ -1,17 +1,18 @@
 import json
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import pytest
-from anthropic import APITimeoutError
+from anthropic import APIConnectionError, APIStatusError, APITimeoutError
 
 import geo_index.reranker as reranker_module
 from geo_index.reranker import (
     STATIC_RANKING_SCHEMA,
     AnthropicReranker,
     InvalidRerankOutputError,
+    RerankInputTooLargeError,
     RerankRefusalError,
     RerankResult,
     rank_candidates,
@@ -95,14 +96,72 @@ class Client:
         self.closed = True
 
 
-def make_reranker(client: Client) -> AnthropicReranker:
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class ScriptedMessages:
+    def __init__(self, actions: list[object]) -> None:
+        self.actions = list(actions)
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        action = self.actions.pop(0)
+        if callable(action):
+            return action(kwargs)
+        if isinstance(action, BaseException):
+            raise action
+        return action
+
+
+class ScriptedClient:
+    def __init__(self, actions: list[object]) -> None:
+        self.messages = ScriptedMessages(actions)
+
+    def close(self) -> None:
+        pass
+
+
+def make_reranker(
+    client: Any,
+    *,
+    timeout_seconds: float = 8,
+    clock: Callable[[], float] | None = None,
+) -> AnthropicReranker:
+    kwargs: dict[str, object] = {}
+    if clock is not None:
+        kwargs["clock"] = clock
     return AnthropicReranker(
         api_key="secret",
         model="claude-sonnet-5",
         reasoning_effort="low",
         thinking="disabled",
-        timeout_seconds=8,
+        timeout_seconds=timeout_seconds,
         client=client,
+        **kwargs,
+    )
+
+
+def connection_error() -> APIConnectionError:
+    return APIConnectionError(
+        request=httpx.Request("POST", "https://api.anthropic.com")
+    )
+
+
+def status_error(status_code: int) -> APIStatusError:
+    request = httpx.Request("POST", "https://api.anthropic.com")
+    return APIStatusError(
+        "provider request failed",
+        response=httpx.Response(status_code, request=request),
+        body=None,
     )
 
 
@@ -376,6 +435,103 @@ def test_reranker_translates_provider_timeout_to_safe_builtin_error() -> None:
     assert captured.value.__cause__ is provider_error
 
 
+def test_quick_transient_failure_receives_one_bounded_retry() -> None:
+    clock = FakeClock()
+
+    def fail_quickly(_: dict[str, object]) -> object:
+        clock.advance(0.25)
+        raise connection_error()
+
+    client = ScriptedClient(
+        [
+            fail_quickly,
+            message([{"gse": "GSE1", "relevance_score": 91}]),
+        ]
+    )
+
+    result = make_reranker(
+        client, timeout_seconds=8, clock=clock
+    ).rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert result.scores == {"GSE1": 91}
+    assert len(client.messages.calls) == 2
+    assert [call["timeout"] for call in client.messages.calls] == [8, 7.75]
+
+
+def test_two_eligible_attempts_share_one_total_monotonic_deadline() -> None:
+    clock = FakeClock()
+
+    def first_failure(_: dict[str, object]) -> object:
+        clock.advance(2)
+        raise connection_error()
+
+    def consume_remaining_budget(kwargs: dict[str, object]) -> object:
+        clock.advance(float(kwargs["timeout"]))
+        raise APITimeoutError(
+            request=httpx.Request("POST", "https://api.anthropic.com")
+        )
+
+    client = ScriptedClient([first_failure, consume_remaining_budget])
+
+    with pytest.raises(TimeoutError, match="reranker request timed out"):
+        make_reranker(
+            client, timeout_seconds=5, clock=clock
+        ).rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert clock.now == 5
+    assert len(client.messages.calls) == 2
+    assert [call["timeout"] for call in client.messages.calls] == [5, 3]
+
+
+def test_exhausted_budget_raises_safe_timeout_without_another_call() -> None:
+    clock = FakeClock()
+
+    def exhaust_budget(_: dict[str, object]) -> object:
+        clock.advance(5)
+        raise connection_error()
+
+    client = ScriptedClient([exhaust_budget])
+
+    with pytest.raises(TimeoutError, match="reranker request timed out") as captured:
+        make_reranker(
+            client, timeout_seconds=5, clock=clock
+        ).rerank("query", (candidate("GSE1", 1),), limit=1)
+
+    assert len(client.messages.calls) == 1
+    assert "provider" not in str(captured.value).lower()
+
+
+@pytest.mark.parametrize("status_code", [408, 409, 429, 500, 529, 599])
+def test_retryable_http_status_receives_one_retry(status_code: int) -> None:
+    client = ScriptedClient(
+        [
+            status_error(status_code),
+            message([{"gse": "GSE1", "relevance_score": 91}]),
+        ]
+    )
+
+    result = make_reranker(client).rerank(
+        "query", (candidate("GSE1", 1),), limit=1
+    )
+
+    assert result.scores == {"GSE1": 91}
+    assert len(client.messages.calls) == 2
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+def test_permanent_http_error_is_not_retried(status_code: int) -> None:
+    provider_error = status_error(status_code)
+    client = ScriptedClient([provider_error])
+
+    with pytest.raises(APIStatusError) as captured:
+        make_reranker(client).rerank(
+            "query", (candidate("GSE1", 1),), limit=1
+        )
+
+    assert captured.value is provider_error
+    assert len(client.messages.calls) == 1
+
+
 def test_reranker_bounds_candidate_text_before_the_provider_call() -> None:
     client = Client(message([{"gse": "GSE1", "relevance_score": 50}]))
     reranker = make_reranker(client)
@@ -388,6 +544,67 @@ def test_reranker_bounds_candidate_text_before_the_provider_call() -> None:
     messages = client.messages.kwargs["messages"]
     payload = json.loads(messages[0]["content"])  # type: ignore[index]
     assert len(payload["candidates"][0]["summary"]) == 800
+
+
+def test_worst_case_union_uses_compact_message_within_exact_byte_budget() -> None:
+    long_value = "🧬" * 256
+    candidates = tuple(
+        replace(
+            candidate(f"GSE{index}", index)
+            if index <= 100
+            else ncbi_candidate(f"GSE{index}", index - 100),
+            title="🧬" * 500,
+            snippet="🧬" * 1_000,
+            study_type="🧬" * 200,
+            organism_ids=tuple(long_value for _ in range(100)),
+            taxon="🧬" * 256,
+            assay_categories=tuple(long_value for _ in range(100)),
+            assay_labels=tuple(long_value for _ in range(100)),
+        )
+        for index in range(1, 201)
+    )
+    client = Client(
+        message(
+            [
+                {"gse": item.gse, "relevance_score": 50}
+                for item in candidates
+            ]
+        )
+    )
+
+    make_reranker(client).rerank("maximum legal metadata", candidates, limit=50)
+
+    assert reranker_module.MAX_PROVIDER_INPUT_BYTES == 1_000_000
+    assert client.messages.kwargs is not None
+    messages = client.messages.kwargs["messages"]
+    content = messages[0]["content"]  # type: ignore[index]
+    assert isinstance(content, str)
+    assert len(content.encode("utf-8")) <= 1_000_000
+    payload = json.loads(content)
+    supplied_ids = [item.gse for item in candidates]
+    retained_ids = [item["gse"] for item in payload["candidates"]]
+    assert retained_ids == supplied_ids
+    assert len(retained_ids) == len(set(retained_ids)) == 200
+    assert all(
+        item["organism_ids"]
+        and item["assay_categories"]
+        and item["assay_labels"]
+        and item["source"] in {"elasticsearch", "ncbi"}
+        for item in payload["candidates"]
+    )
+
+
+def test_identifiers_that_cannot_fit_fail_safely_before_provider_call() -> None:
+    huge_gse = "GSE1" + ("0" * 1_000_000)
+    oversized = replace(candidate("GSE1", 1), gse=huge_gse)
+    client = Client(message([]))
+
+    with pytest.raises(RerankInputTooLargeError) as captured:
+        make_reranker(client).rerank("query", (oversized,), limit=1)
+
+    assert str(captured.value) == "reranker input exceeds size limit"
+    assert huge_gse not in str(captured.value)
+    assert client.messages.call_count == 0
 
 
 def test_rank_candidates_uses_score_then_source_ranks_then_gse() -> None:
@@ -475,7 +692,7 @@ def test_reranker_closes_its_client() -> None:
     assert client.closed is True
 
 
-def test_reranker_configures_sdk_transport_for_one_retry(
+def test_reranker_disables_sdk_internal_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -495,4 +712,4 @@ def test_reranker_configures_sdk_transport_for_one_retry(
         timeout_seconds=8,
     )
 
-    assert captured == {"api_key": "secret", "timeout": 8, "max_retries": 1}
+    assert captured == {"api_key": "secret", "timeout": 8, "max_retries": 0}

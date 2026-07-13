@@ -15,6 +15,7 @@ from geo_index.mcp_settings import SearchQualitySettings
 from geo_index.ncbi_search import NativeSearchResult
 from geo_index.reranker import (
     InvalidRerankOutputError,
+    RerankInputTooLargeError,
     RerankRefusalError,
     RerankResult,
     RerankUsage,
@@ -871,6 +872,28 @@ def test_every_untrusted_reranker_result_discards_the_model_order(
     assert [result.original_rank for result in output.results] == list(range(1, 11))
     assert output.provenance.rerank_applied is False
     assert output.provenance.degradation == [category]
+
+
+def test_oversized_reranker_input_degrades_safely_with_bounded_provenance() -> None:
+    service, _, _, _, _ = _service(
+        native=FakeNativeSource(),
+        reranker=FakeReranker(
+            error=RerankInputTooLargeError("sensitive candidate payload")
+        ),
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), limit=10
+    )
+
+    assert [result.original_rank for result in output.results] == list(range(1, 11))
+    assert output.provenance.rerank_attempted is True
+    assert output.provenance.rerank_applied is False
+    assert output.provenance.rerank_input_tokens == 0
+    assert output.provenance.rerank_output_tokens == 0
+    assert output.provenance.degradation == ["rerank_invalid"]
+    assert "sensitive candidate payload" not in output.model_dump_json()
 
 
 @pytest.mark.parametrize(

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
-from anthropic import APITimeoutError, Anthropic
+from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    Anthropic,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .search_candidates import SearchCandidate
@@ -24,6 +30,7 @@ _INSTRUCTIONS = (
     "Never invent, remove, or modify an accession. Use integer scores from 0 "
     "(irrelevant) through 100 (direct match)."
 )
+MAX_PROVIDER_INPUT_BYTES = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,10 @@ class InvalidRerankOutputError(RerankResponseError):
     pass
 
 
+class RerankInputTooLargeError(ValueError):
+    """The bounded provider message cannot retain all candidate identifiers."""
+
+
 class RankingItem(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     gse: str
@@ -94,6 +105,81 @@ def _candidate_payload(candidate: SearchCandidate) -> dict[str, object]:
         "n_samples": candidate.n_samples,
         "source": candidate.source,
     }
+
+
+def _compact_text(value: str | None, limit: int) -> str | None:
+    return value[:limit] if value else None
+
+
+def _compact_array(
+    values: Sequence[str], *, items: int, characters: int
+) -> list[str]:
+    return [str(value)[:characters] for value in values[:items]]
+
+
+def _compact_candidate_payload(candidate: SearchCandidate) -> dict[str, object]:
+    return {
+        "gse": candidate.gse,
+        "title": _compact_text(candidate.title, 160),
+        "summary": _compact_text(candidate.snippet, 256),
+        "study_type": _compact_text(candidate.study_type, 80),
+        "organism_ids": _compact_array(
+            candidate.organism_ids, items=2, characters=64
+        ),
+        "taxon": _compact_text(candidate.taxon, 80),
+        "assay_categories": _compact_array(
+            candidate.assay_categories, items=2, characters=64
+        ),
+        "assay_labels": _compact_array(
+            candidate.assay_labels, items=2, characters=64
+        ),
+        "n_samples": candidate.n_samples,
+        "source": candidate.source,
+    }
+
+
+def _serialize_payload(payload: Mapping[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _provider_message(
+    query: str, candidates: Sequence[SearchCandidate], *, limit: int
+) -> str:
+    normal = _serialize_payload(
+        {
+            "query": query,
+            "requested_results": limit,
+            "candidates": [_candidate_payload(candidate) for candidate in candidates],
+        }
+    )
+    if len(normal.encode("utf-8")) <= MAX_PROVIDER_INPUT_BYTES:
+        return normal
+
+    compact_query = query[:1_000]
+    compact = _serialize_payload(
+        {
+            "query": compact_query,
+            "requested_results": limit,
+            "representation": "compact",
+            "candidates": [
+                _compact_candidate_payload(candidate) for candidate in candidates
+            ],
+        }
+    )
+    if len(compact.encode("utf-8")) <= MAX_PROVIDER_INPUT_BYTES:
+        return compact
+
+    identifiers = _serialize_payload(
+        {
+            "query": compact_query,
+            "requested_results": limit,
+            "representation": "identifiers",
+            "candidates": [{"gse": candidate.gse} for candidate in candidates],
+        }
+    )
+    if len(identifiers.encode("utf-8")) <= MAX_PROVIDER_INPUT_BYTES:
+        return identifiers
+    raise RerankInputTooLargeError("reranker input exceeds size limit")
 
 
 STATIC_RANKING_SCHEMA: dict[str, object] = {
@@ -134,6 +220,14 @@ def _response_usage(response: object) -> RerankUsage:
     )
 
 
+def _is_retryable_provider_error(exc: BaseException) -> bool:
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in {408, 409, 429} or exc.status_code >= 500
+    return False
+
+
 class AnthropicReranker:
     def __init__(
         self,
@@ -144,14 +238,17 @@ class AnthropicReranker:
         thinking: str,
         timeout_seconds: float,
         client: Any | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.thinking = thinking
+        self._timeout_seconds = timeout_seconds
+        self._clock = clock
         self._client = client or Anthropic(
             api_key=api_key,
             timeout=timeout_seconds,
-            max_retries=1,
+            max_retries=0,
         )
 
     def close(self) -> None:
@@ -164,38 +261,49 @@ class AnthropicReranker:
             return RerankResult(scores={}, input_tokens=0, output_tokens=0)
         if not 1 <= limit <= 50:
             raise ValueError("rerank result limit must be between 1 and 50")
-        try:
-            response = self._client.messages.create(
-                model=self.model,
-                system=_INSTRUCTIONS,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "query": query,
-                                "requested_results": limit,
-                                "candidates": [
-                                    _candidate_payload(candidate)
-                                    for candidate in candidates
-                                ],
-                            },
-                            separators=(",", ":"),
-                        ),
-                    }
-                ],
-                thinking={"type": self.thinking},
-                output_config={
-                    "effort": self.reasoning_effort,
-                    "format": {
-                        "type": "json_schema",
-                        "schema": STATIC_RANKING_SCHEMA,
-                    },
+        request = {
+            "model": self.model,
+            "system": _INSTRUCTIONS,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": _provider_message(query, candidates, limit=limit),
+                }
+            ],
+            "thinking": {"type": self.thinking},
+            "output_config": {
+                "effort": self.reasoning_effort,
+                "format": {
+                    "type": "json_schema",
+                    "schema": STATIC_RANKING_SCHEMA,
                 },
-                max_tokens=min(8_000, max(1_000, len(candidates) * 40)),
-            )
-        except APITimeoutError as exc:
-            raise TimeoutError("reranker request timed out") from exc
+            },
+            "max_tokens": min(8_000, max(1_000, len(candidates) * 40)),
+        }
+        deadline = self._clock() + self._timeout_seconds
+        response: object | None = None
+        for attempt in range(2):
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise TimeoutError("reranker request timed out")
+            try:
+                response = self._client.messages.create(
+                    **request,
+                    timeout=remaining,
+                )
+            except Exception as exc:
+                if self._clock() >= deadline:
+                    raise TimeoutError("reranker request timed out") from exc
+                if _is_retryable_provider_error(exc) and attempt == 0:
+                    continue
+                if isinstance(exc, APITimeoutError):
+                    raise TimeoutError("reranker request timed out") from exc
+                raise
+            if self._clock() >= deadline:
+                raise TimeoutError("reranker request timed out")
+            break
+        if response is None:
+            raise RuntimeError("reranker provider returned no response")
         usage = _response_usage(response)
         stop_reason = getattr(response, "stop_reason", None)
         if stop_reason == "refusal":
