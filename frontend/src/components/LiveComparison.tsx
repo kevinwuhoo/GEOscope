@@ -65,15 +65,15 @@ function NativeCard({ result, rank }: { result: NativeResult; rank: number }) {
 
 
 export function LiveComparison() {
-  const [query, setQuery] = useState(examples[0]);
+  const [query, setQuery] = useState("");
   const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [data, setData] = useState<DemoResponse | null>(null);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
-  async function runSearch(event?: FormEvent) {
+  async function runSearch(event?: FormEvent, selectedQuery?: string) {
     event?.preventDefault();
-    const normalized = query.trim();
+    const normalized = (selectedQuery ?? query).trim();
     if (!normalized) {
       setError("Describe the studies you want to find.");
       setState("error");
@@ -129,7 +129,7 @@ export function LiveComparison() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="e.g. breast cancer before and after neoadjuvant chemotherapy"
+            placeholder="Describe a disease, treatment, pathway, assay, or comparison"
           />
           <button type="submit" disabled={state === "loading"}>
             {state === "loading" ? "Scanning…" : "Compare results"}
@@ -138,7 +138,16 @@ export function LiveComparison() {
         <div className="example-queries" aria-label="Example queries">
           <span>Try:</span>
           {examples.map((example) => (
-            <button type="button" key={example} onClick={() => setQuery(example)}>{example}</button>
+            <button
+              type="button"
+              key={example}
+              onClick={() => {
+                setQuery(example);
+                void runSearch(undefined, example);
+              }}
+            >
+              {example}
+            </button>
           ))}
         </div>
       </form>

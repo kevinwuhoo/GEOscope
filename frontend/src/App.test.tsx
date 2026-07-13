@@ -158,7 +158,38 @@ test("offers concise species-neutral example queries", () => {
   }
   expect(
     screen.getByRole("searchbox", { name: /describe the studies/i }),
-  ).toHaveValue(examples[0]);
+  ).toHaveValue("");
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveAttribute(
+    "placeholder",
+    "Describe a disease, treatment, pathway, assay, or comparison",
+  );
+});
+
+
+test("runs an example query when selected", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify(demoResponse), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+
+  const example = "PI3K signaling in insulin-resistant skeletal muscle";
+  await user.click(screen.getByRole("button", { name: example }));
+
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveValue(example);
+  expect(await screen.findByText("GSE123")).toBeInTheDocument();
+  const requestUrl = new URL(
+    String(fetchMock.mock.calls[0]?.[0]),
+    window.location.origin,
+  );
+  expect(requestUrl.searchParams.get("q")).toBe(example);
 });
 
 
@@ -252,6 +283,10 @@ test("preserves paired ranks when source result counts differ", async () => {
   const user = userEvent.setup();
   render(<App />);
 
+  await user.type(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+    "transcriptomes of individual cells",
+  );
   await user.click(screen.getByRole("button", { name: /compare results/i }));
   await screen.findByText("GSE456");
 
