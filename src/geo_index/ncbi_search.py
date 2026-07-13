@@ -9,7 +9,7 @@ from typing import Literal, Protocol
 
 from .eutils import EutilsClient, SearchResult
 from .normalize import map_assay, map_organisms
-from .search_candidates import SearchCandidate
+from .search_candidates import MAX_SOURCE_CANDIDATES, SearchCandidate
 
 
 _GSE_RE = re.compile(r"^GSE[1-9][0-9]*$")
@@ -96,7 +96,10 @@ class NcbiCandidateSource:
             if search.count == 0:
                 return NativeSearchResult(count=0, candidates=())
             page = self._client.esummary_page(
-                "gds", search, 0, min(max(limit * 3, limit), 100)
+                "gds",
+                search,
+                0,
+                min(max(limit * 3, limit), MAX_SOURCE_CANDIDATES),
             )
         candidates: list[SearchCandidate] = []
         for uid in page.get("uids", []):
@@ -107,9 +110,14 @@ class NcbiCandidateSource:
                 break
         return NativeSearchResult(count=search.count, candidates=tuple(candidates))
 
-    def search(self, query: str, limit: int = 20) -> NativeSearchResult:
-        if not 1 <= limit <= 20:
-            raise ValueError("NCBI candidate limit must be between 1 and 20")
+    def search(
+        self, query: str, limit: int = MAX_SOURCE_CANDIDATES
+    ) -> NativeSearchResult:
+        if not 1 <= limit <= MAX_SOURCE_CANDIDATES:
+            raise ValueError(
+                "NCBI candidate limit must be between "
+                f"1 and {MAX_SOURCE_CANDIDATES}"
+            )
         return self._search_term(f"({query}) AND gse[ETYP]", limit)
 
     def lookup(self, gse: str) -> SearchCandidate | None:

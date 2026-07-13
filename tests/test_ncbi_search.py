@@ -88,12 +88,12 @@ def test_search_preserves_query_and_caps_candidates_in_native_order() -> None:
     result = source.search("  mouse:exercise?  ")
 
     assert eutils.terms == ["(  mouse:exercise?  ) AND gse[ETYP]"]
-    assert eutils.retmaxes == [60]
+    assert eutils.retmaxes == [100]
     assert [candidate.gse for candidate in result.candidates] == [
-        f"GSE{1000 + uid}" for uid in range(25, 5, -1)
+        f"GSE{1000 + uid}" for uid in range(25, 0, -1)
     ]
     assert [candidate.native_rank for candidate in result.candidates] == list(
-        range(1, 21)
+        range(1, 26)
     )
 
 
@@ -133,11 +133,11 @@ def test_unknown_esummary_metadata_is_unavailable_not_absent() -> None:
     assert candidate.assay_status == "unavailable"
 
 
-@pytest.mark.parametrize("limit", [0, 21])
+@pytest.mark.parametrize("limit", [0, 101])
 def test_search_rejects_limits_outside_the_bounded_pool(limit: int) -> None:
     eutils = Eutils()
 
-    with pytest.raises(ValueError, match="between 1 and 20"):
+    with pytest.raises(ValueError, match="between 1 and 100"):
         NcbiCandidateSource(eutils).search("query", limit=limit)
 
     assert eutils.terms == []

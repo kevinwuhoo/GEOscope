@@ -11,6 +11,8 @@ from .search_models import FACET_FIELDS, SearchFilters
 
 ResultSource = Literal["elasticsearch", "ncbi", "both"]
 _GSE_RE = re.compile(r"^GSE[1-9][0-9]*$")
+MAX_SOURCE_CANDIDATES = 100
+MAX_MERGED_CANDIDATES = MAX_SOURCE_CANDIDATES * 2
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,10 @@ class SearchCandidate:
 
 
 def candidate_pool_limit(requested_limit: int, configured_floor: int) -> int:
-    return min(100, max(40, configured_floor, requested_limit * 4))
+    return min(
+        MAX_SOURCE_CANDIDATES,
+        max(40, configured_floor, requested_limit * 4),
+    )
 
 
 def candidate_matches_filters(

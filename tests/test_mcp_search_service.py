@@ -721,7 +721,7 @@ def test_natural_search_requests_deep_pool_merges_and_reranks_top_ten() -> None:
     )
 
     assert domain.search_calls[0]["topk"] == 40
-    assert native.search_calls == [("mouse exercise", 20)]
+    assert native.search_calls == [("mouse exercise", 100)]
     assert len(execution.output.results) == 10
     assert execution.output.results[0].gse == "GSE999999"
     assert execution.output.results[0].source == "ncbi"
@@ -753,6 +753,55 @@ def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
     assert output.provenance.rerank_input_tokens == 0
     assert output.provenance.rerank_output_tokens == 0
     assert output.provenance.degradation == ["ncbi_timeout", "rerank_error"]
+
+
+def test_limit_fifty_reranks_complete_bounded_source_union_before_slicing() -> None:
+    local_documents = {
+        f"GSE{index}": _document(f"GSE{index}") for index in range(1, 101)
+    }
+    local_hits = tuple(
+        {"gse": f"GSE{index}", "score": 1 - index / 1000}
+        for index in range(1, 101)
+    )
+    native_candidates = tuple(
+        _native_candidate(f"GSE{index}", index - 50)
+        for index in range(51, 151)
+    )
+    native = FakeNativeSource(
+        search_result=NativeSearchResult(
+            count=100,
+            candidates=native_candidates,
+        )
+    )
+    reranker = FakeReranker(
+        scores={f"GSE{index}": (151 - index) % 101 for index in range(1, 151)}
+    )
+    service, _, domain, _, _ = _service(
+        client=_Client(local_documents),
+        responses=[_response(mode="hybrid", hits=local_hits)],
+        native=native,
+        reranker=reranker,
+    )
+    service.open()
+
+    execution = service.search_execution(
+        query="mouse endurance exercise",
+        filters=SearchFilters(),
+        limit=50,
+    )
+
+    assert domain.search_calls[0]["topk"] == 100
+    assert native.search_calls == [("mouse endurance exercise", 100)]
+    reranked_candidates = reranker.rerank_calls[0][1]
+    assert len(reranked_candidates) == 150
+    assert {candidate.gse for candidate in reranked_candidates} == {
+        f"GSE{index}" for index in range(1, 151)
+    }
+    assert len(execution.output.results) == 50
+    assert execution.output.provenance.elasticsearch_candidates == 100
+    assert execution.output.provenance.ncbi_candidates == 100
+    assert execution.output.provenance.merged_candidates == 150
+    assert len(execution.candidates) == 150
 
 
 @pytest.mark.parametrize(
@@ -794,7 +843,7 @@ def test_natural_sources_start_concurrently() -> None:
         query="immune", filters=SearchFilters(), limit=10
     )
 
-    assert native.search_calls == [("immune", 20)]
+    assert native.search_calls == [("immune", 100)]
 
 
 def test_elasticsearch_candidate_text_and_arrays_are_bounded_before_reranking() -> None:

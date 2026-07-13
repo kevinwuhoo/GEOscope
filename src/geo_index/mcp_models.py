@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from .search_candidates import MAX_MERGED_CANDIDATES, MAX_SOURCE_CANDIDATES
 from .search_models import FACET_FIELDS, SearchFilters
 
 
@@ -58,9 +59,9 @@ class SearchLatencyOutput(_StrictOutputModel):
 
 class SearchProvenanceOutput(_StrictOutputModel):
     exact_accession: bool
-    elasticsearch_candidates: int = Field(ge=0, le=100)
-    ncbi_candidates: int = Field(ge=0, le=20)
-    merged_candidates: int = Field(ge=0, le=120)
+    elasticsearch_candidates: int = Field(ge=0, le=MAX_SOURCE_CANDIDATES)
+    ncbi_candidates: int = Field(ge=0, le=MAX_SOURCE_CANDIDATES)
+    merged_candidates: int = Field(ge=0, le=MAX_MERGED_CANDIDATES)
     rerank_attempted: bool
     rerank_applied: bool
     rerank_model: BoundedValue | None

@@ -55,6 +55,7 @@ from .reranker import (
     rank_candidates,
 )
 from .search_candidates import (
+    MAX_SOURCE_CANDIDATES,
     SearchCandidate,
     candidate_matches_filters,
     candidate_pool_limit,
@@ -96,7 +97,9 @@ class SearchExecution:
 
 
 class NativeSource(Protocol):
-    def search(self, query: str, limit: int = 20) -> NativeSearchResult:
+    def search(
+        self, query: str, limit: int = MAX_SOURCE_CANDIDATES
+    ) -> NativeSearchResult:
         raise NotImplementedError
 
     def lookup(self, gse: str) -> SearchCandidate | None:
@@ -878,7 +881,7 @@ class McpSearchService:
                 self._clock,
                 native_source.search,
                 query,
-                20,
+                MAX_SOURCE_CANDIDATES,
             )
             local_call = elastic_future.result()
             native_call = ncbi_future.result()

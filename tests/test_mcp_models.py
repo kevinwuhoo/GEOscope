@@ -126,6 +126,30 @@ def test_provenance_rejects_invalid_bounds(overrides: dict[str, object]) -> None
         SearchProvenanceOutput(**values)
 
 
+def test_provenance_accepts_full_bounded_source_union() -> None:
+    values = _provenance().model_dump()
+    values.update(ncbi_candidates=100, merged_candidates=200)
+
+    provenance = SearchProvenanceOutput(**values)
+
+    assert provenance.ncbi_candidates == 100
+    assert provenance.merged_candidates == 200
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("ncbi_candidates", 101), ("merged_candidates", 201)],
+)
+def test_provenance_rejects_counts_above_the_bounded_source_union(
+    field: str, value: int
+) -> None:
+    values = _provenance().model_dump()
+    values[field] = value
+
+    with pytest.raises(ValidationError):
+        SearchProvenanceOutput(**values)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
