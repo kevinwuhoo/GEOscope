@@ -20,6 +20,7 @@ from .elasticsearch_config import (
 from .elasticsearch_index import index_readiness
 from .elasticsearch_query_embeddings import create_query_encoder
 from .elasticsearch_search import ElasticsearchSearchService
+from .facets import facet_label
 from .mcp_models import (
     DatasetDetail,
     DatasetSummary,
@@ -299,13 +300,19 @@ class McpSearchService:
         document: Mapping[str, object], truncated: set[str]
     ) -> dict[str, object]:
         n_samples = document.get("n_samples")
+        organism_ids = _cap_array(
+            document.get("organism_ids"), "organism_ids", truncated
+        )
         return {
             "gse": str(document.get("gse", "")),
             "title": _cap_text(document.get("title"), 500, "title", truncated),
             "study_type": _cap_text(document.get("type"), 200, "study_type", truncated),
             "n_samples": int(n_samples) if n_samples is not None else None,
             "pubmed_id": _pubmed_id(document.get("pubmed_ids")),
-            "organism_ids": _cap_array(document.get("organism_ids"), "organism_ids", truncated),
+            "organism_ids": organism_ids,
+            "organism_labels": [
+                facet_label("organism_ids", value) for value in organism_ids
+            ],
             "organism_status": _cap_text(document.get("organism_status"), 256, "organism_status", truncated),
             "sex_ids": _cap_array(document.get("sex_ids"), "sex_ids", truncated),
             "sex_status": _cap_text(document.get("sex_status"), 256, "sex_status", truncated),

@@ -124,6 +124,7 @@ class _DatasetMetadata(_StrictOutputModel):
     n_samples: Annotated[int, Field(ge=0)] | None
     pubmed_id: Annotated[int, Field(ge=1)] | None
     organism_ids: list[BoundedValue] = Field(max_length=100)
+    organism_labels: list[BoundedValue] = Field(max_length=100)
     organism_status: BoundedStatus | None
     sex_ids: list[BoundedValue] = Field(max_length=100)
     sex_status: BoundedStatus | None

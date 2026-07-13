@@ -103,6 +103,7 @@ def _search_output() -> SearchDatasetsOutput:
                 n_samples=12,
                 pubmed_id=12345678,
                 organism_ids=["NCBITaxon:9606"],
+                organism_labels=["Homo sapiens"],
                 organism_status="mapped",
                 sex_ids=[],
                 sex_status=None,

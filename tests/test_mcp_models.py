@@ -32,6 +32,7 @@ def _summary(**overrides: object) -> dict[str, object]:
         "n_samples": 12,
         "pubmed_id": 12345678,
         "organism_ids": ["NCBITaxon:9606"],
+        "organism_labels": ["Homo sapiens"],
         "organism_status": "mapped",
         "sex_ids": ["PATO:0000383"],
         "sex_status": "mapped",
@@ -153,6 +154,8 @@ def test_output_models_enforce_scalar_array_and_number_bounds() -> None:
     with pytest.raises(ValidationError):
         DatasetSummary(**_summary(organism_ids=["NCBITaxon:9606"] * 101))
     with pytest.raises(ValidationError):
+        DatasetSummary(**_summary(organism_labels=["Homo sapiens"] * 101))
+    with pytest.raises(ValidationError):
         DatasetSummary(**_summary(assay_labels=["x" * 257]))
     with pytest.raises(ValidationError):
         DatasetSummary(**_summary(title="x" * 501))
@@ -162,6 +165,14 @@ def test_output_models_enforce_scalar_array_and_number_bounds() -> None:
         DatasetSummary(**_summary(study_type="x" * 201))
     with pytest.raises(ValidationError):
         DatasetSummary(**_summary(score=math.inf))
+
+
+def test_dataset_metadata_exposes_human_readable_organism_labels() -> None:
+    summary = DatasetSummary(**_summary())
+    detail = DatasetDetail(**_detail())
+
+    assert summary.organism_labels == ["Homo sapiens"]
+    assert detail.organism_labels == ["Homo sapiens"]
 
 
 def test_truncated_fields_are_deduplicated_and_stably_sorted() -> None:
