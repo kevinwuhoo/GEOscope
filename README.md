@@ -7,8 +7,7 @@ metadata easier to discover through hybrid semantic and keyword search,
 ontology-aware normalization, and structured interfaces for both people and
 LLM agents.
 
-**[Try the live demo →](https://geoscope.kevinformatics.com)** ·
-[Explore the project wiki](wiki/Home.md)
+**[Try the live demo →](https://geoscope.kevinformatics.com)**
 
 ## Goal
 
@@ -162,10 +161,8 @@ handoffs are `data/processed/series_records`,
 `data/processed/elasticsearch_load_report.json`. BGE, MedCPT, and Qwen remain
 development/evaluation only.
 
-Environment and service setup live in the
-[canonical pipeline runbook](wiki/57-Canonical-Production-Pipeline.md). Once
-those prerequisites are available, the complete pipeline and its two local
-search surfaces reduce to:
+Once the required environment and services are available, the complete
+pipeline and its two local search surfaces reduce to:
 
 ```bash
 uv run geo-soft-etl --allow-paid-gemini --gemini-max-cost-usd 9.55
@@ -286,15 +283,3 @@ and exclude embedding generation and search reranking.
   tooling, not yet an automatically refreshed living index.
 - Structured metadata extraction was evaluated but is not part of the deployed
   full-corpus search path.
-
-## Project documentation
-
-- [Architecture overview](wiki/20-Architecture-Overview.md)
-- [Ingestion pipeline](wiki/21-Ingestion-Pipeline.md)
-- [Ontology normalization](wiki/22-Ontology-Normalization.md)
-- [Search and retrieval](wiki/23-Search-and-Retrieval.md)
-- [Embeddings and cost](wiki/25-Embeddings-and-Cost.md)
-- [MCP interface](wiki/27-MCP-Interface.md)
-- [Build log and measured findings](wiki/42-Build-Log.md)
-- [Full-corpus crawl record](wiki/56-GEO-Full-Corpus-Crawl-Runbook.md)
-- [Canonical production pipeline](wiki/57-Canonical-Production-Pipeline.md)
