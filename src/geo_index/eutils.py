@@ -88,16 +88,18 @@ class EutilsClient:
         return params
 
     def _throttle(self, *, deadline: float | None = None) -> None:
-        """Reserve one policy-compliant request slot, then wait lock-free."""
+        """Wait lock-free, then atomically claim one slot that is due now."""
 
-        with self._rate_lock:
-            now = self.clock()
-            request_at = max(now, self._next_request_at)
-            if deadline is not None and request_at >= deadline:
-                raise TimeoutError("NCBI rate gate acquisition timed out")
-            self._next_request_at = request_at + self._min_interval
-        wait_seconds = request_at - now
-        if wait_seconds > 0:
+        while True:
+            with self._rate_lock:
+                now = self.clock()
+                request_at = self._next_request_at
+                if request_at <= now:
+                    self._next_request_at = now + self._min_interval
+                    return
+                if deadline is not None and request_at >= deadline:
+                    raise TimeoutError("NCBI rate gate acquisition timed out")
+                wait_seconds = request_at - now
             self.sleep(wait_seconds)
 
     def _request_timeout(self, deadline: float | None) -> float:
