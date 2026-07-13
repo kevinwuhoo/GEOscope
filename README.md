@@ -363,16 +363,19 @@ For a later managed deployment, configure only `ELASTICSEARCH_URL` and either
 `ELASTICSEARCH_API_KEY`. The loader and search code do not depend on Docker or
 localhost.
 
-## Private hosted MCP service
+## Hosted MCP service
 
 The hosted FastMCP service exposes exactly three read-only tools over stateless
 Streamable HTTP at `/mcp`: `search_datasets`, `get_dataset`, and
 `facet_values`. Elasticsearch is its only online datastore. The deployment
 selects one active vector model; callers cannot choose a model or submit raw
-Elasticsearch queries. The default is `gemini_embedding_2_3072_v1`.
+Elasticsearch queries. Callers also do not select a retrieval mode: every
+nonblank public search uses the shared production hybrid strategy, while blank
+facet browsing is an unranked filter-only aggregation. The default embedding
+model is `gemini_embedding_2_3072_v1`.
 
 Copy the safe environment template and fill in the Elasticsearch, Gemini, and
-OAuth values without committing the resulting file:
+public-host values without committing the resulting file:
 
 ```bash
 cp deploy/geo-mcp.env.example .env.geo-mcp
@@ -384,10 +387,9 @@ uv run uvicorn geo_index.mcp_server:create_app \
   --factory --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-The identity provider must issue signed JWTs for `GEO_MCP_AUDIENCE` with the
-`geo:read` scope. A verified token's stable `sub` claim must also appear in
-`GEO_MCP_ALLOWED_SUBJECTS`. TLS terminates at the hosting edge; it must preserve
-the configured public Host value.
+The hackathon deployment is public and anonymous. TLS terminates at the hosting
+edge, which must preserve the configured public Host value. Request admission
+is bounded globally per worker rather than per user.
 
 Check process health and Elasticsearch/index readiness separately:
 
@@ -396,9 +398,9 @@ curl --fail https://geo.example.org/healthz
 curl --fail https://geo.example.org/readyz
 ```
 
-Dense and hybrid calls initialize the Gemini query encoder lazily and therefore
-require `GEMINI_API_KEY`. BM25, exact GSE lookup, blank facet browsing, health,
-and startup readiness do not call Gemini. The server validates the live
+Nonblank public searches initialize the Gemini query encoder lazily and
+therefore require `GEMINI_API_KEY`. Exact GSE lookup, blank facet browsing,
+health, and startup readiness do not call Gemini. The server validates the live
 `geo-series` mapping and active vector field before accepting tool work.
 
 Build the one-worker container with:
