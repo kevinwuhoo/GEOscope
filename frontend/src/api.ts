@@ -19,6 +19,7 @@ const geoscopeResultSchema = z.object({
   n_samples: z.number().nullable(),
   pubmed_id: z.number().nullable(),
   organism_ids: z.array(z.string()),
+  organism_labels: z.array(z.string()),
   organism_status: z.string().nullable(),
   sex_ids: z.array(z.string()),
   sex_status: z.string().nullable(),

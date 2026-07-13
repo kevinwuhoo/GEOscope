@@ -41,6 +41,7 @@ const demoResponse = {
         n_samples: 12,
         pubmed_id: 12345678,
         organism_ids: ["NCBITaxon:9606"],
+        organism_labels: ["Homo sapiens"],
         organism_status: "mapped",
         sex_ids: [],
         sex_status: null,
@@ -62,6 +63,7 @@ const demoResponse = {
         n_samples: null,
         pubmed_id: null,
         organism_ids: [],
+        organism_labels: [],
         organism_status: "unavailable",
         sex_ids: [],
         sex_status: "unavailable",
@@ -83,6 +85,7 @@ const demoResponse = {
         n_samples: 4,
         pubmed_id: null,
         organism_ids: ["NCBITaxon:9606"],
+        organism_labels: ["Homo sapiens"],
         organism_status: "mapped",
         sex_ids: [],
         sex_status: "absent",
@@ -356,6 +359,17 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   expect(pair).not.toBeNull();
   expect(pair?.querySelector(".result-card--scope")?.textContent).toContain("GSE123");
   expect(pair?.querySelector(".result-card--native")?.textContent).toContain("GSE999");
+  const scopeTags = pair?.querySelectorAll(".result-card--scope .result-tag");
+  expect(Array.from(scopeTags ?? [], (tag) => tag.textContent)).toEqual([
+    "Homo sapiens",
+    "scRNA-seq",
+    "Expression profiling by high throughput sequencing",
+  ]);
+  expect(scopeTags?.[0]).toHaveClass("result-tag--normalized");
+  expect(scopeTags?.[0]).toHaveAttribute("title", "NCBITaxon:9606");
+  expect(scopeTags?.[1]).toHaveClass("result-tag--normalized");
+  expect(scopeTags?.[1]).not.toHaveAttribute("title");
+  expect(scopeTags?.[2]).toHaveClass("result-tag--source");
   expect(
     screen.getByRole("article", { name: /geoscope result 1: chromium single-cell study/i }),
   ).toBeInTheDocument();
@@ -416,6 +430,85 @@ test("preserves paired ranks when source result counts differ", async () => {
   expect(rows[1]?.querySelector(".comparison-cell--native")).toHaveTextContent(
     /no ncbi geo result at this rank/i,
   );
+});
+
+
+test("summarizes multi-organism tags and omits unavailable tag categories", async () => {
+  const multiOrganism = {
+    ...demoResponse.geoscope.results[0],
+    organism_ids: [
+      "NCBITaxon:10090",
+      "NCBITaxon:10116",
+      "NCBITaxon:9606",
+    ],
+    organism_labels: ["Mus musculus", "Rattus norvegicus", "Homo sapiens"],
+    assay_labels: ["RNA-seq", "ChIP-seq"],
+  };
+  const noAssay = {
+    ...demoResponse.geoscope.results[0],
+    gse: "GSE456",
+    rank: 2,
+    title: "Study without normalized assay metadata",
+    organism_ids: ["NCBITaxon:9606"],
+    organism_labels: ["Homo sapiens"],
+    assay_labels: [],
+  };
+  const noTags = {
+    ...demoResponse.geoscope.results[0],
+    gse: "GSE789",
+    rank: 3,
+    title: "Study without tag metadata",
+    study_type: null,
+    organism_ids: [],
+    organism_labels: [],
+    assay_labels: [],
+  };
+  const response = {
+    ...demoResponse,
+    geoscope: {
+      ...demoResponse.geoscope,
+      results: [multiOrganism, noAssay, noTags],
+    },
+    membership: { GSE123: false, GSE456: false, GSE789: false },
+  };
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.type(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+    "transcriptomes of individual cells",
+  );
+  await user.click(screen.getByRole("button", { name: /compare results/i }));
+
+  const multiCard = await screen.findByRole("article", {
+    name: /geoscope result 1: chromium single-cell study/i,
+  });
+  expect(
+    Array.from(multiCard.querySelectorAll(".result-tag"), (tag) => tag.textContent),
+  ).toEqual([
+    "Mus musculus · Rattus norvegicus +1",
+    "RNA-seq",
+    "Expression profiling by high throughput sequencing",
+  ]);
+  const noAssayCard = screen.getByRole("article", {
+    name: /geoscope result 2: study without normalized assay metadata/i,
+  });
+  expect(
+    Array.from(noAssayCard.querySelectorAll(".result-tag"), (tag) => tag.textContent),
+  ).toEqual([
+    "Homo sapiens",
+    "Expression profiling by high throughput sequencing",
+  ]);
+  const noTagsCard = screen.getByRole("article", {
+    name: /geoscope result 3: study without tag metadata/i,
+  });
+  expect(noTagsCard.querySelector(".result-tags")).toBeNull();
 });
 
 

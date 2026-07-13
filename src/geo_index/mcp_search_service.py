@@ -553,13 +553,19 @@ class McpSearchService:
         document: Mapping[str, object], truncated: set[str]
     ) -> dict[str, object]:
         n_samples = document.get("n_samples")
+        organism_ids = _cap_array(
+            document.get("organism_ids"), "organism_ids", truncated
+        )
         return {
             "gse": str(document.get("gse", "")),
             "title": _cap_text(document.get("title"), 500, "title", truncated),
             "study_type": _cap_text(document.get("type"), 200, "study_type", truncated),
             "n_samples": int(n_samples) if n_samples is not None else None,
             "pubmed_id": _pubmed_id(document.get("pubmed_ids")),
-            "organism_ids": _cap_array(document.get("organism_ids"), "organism_ids", truncated),
+            "organism_ids": organism_ids,
+            "organism_labels": [
+                facet_label("organism_ids", value) for value in organism_ids
+            ],
             "organism_status": _cap_text(document.get("organism_status"), 256, "organism_status", truncated),
             "sex_ids": _cap_array(document.get("sex_ids"), "sex_ids", truncated),
             "sex_status": _cap_text(document.get("sex_status"), 256, "sex_status", truncated),
@@ -703,6 +709,9 @@ class McpSearchService:
         for field, values in array_fields.items():
             if len(values) > 100 or any(len(value) > 256 for value in values):
                 truncated.add(field)
+        organism_ids = _cap_array(
+            candidate.organism_ids, "organism_ids", truncated
+        )
         summary = DatasetSummary(
             rank=rank,
             score=final_score,
@@ -717,9 +726,10 @@ class McpSearchService:
             ),
             n_samples=candidate.n_samples,
             pubmed_id=candidate.pubmed_id,
-            organism_ids=_cap_array(
-                candidate.organism_ids, "organism_ids", truncated
-            ),
+            organism_ids=organism_ids,
+            organism_labels=[
+                facet_label("organism_ids", value) for value in organism_ids
+            ],
             organism_status=_cap_text(
                 candidate.organism_status, 256, "organism_status", truncated
             ),

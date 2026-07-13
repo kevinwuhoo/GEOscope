@@ -1065,12 +1065,34 @@ def test_summary_marks_only_values_strictly_over_the_output_bounds() -> None:
     ]
 
 
+def test_shared_metadata_resolves_organism_labels_and_preserves_unknown_ids() -> None:
+    client = _Client(
+        {
+            "GSE123": _document(
+                organism_ids=["NCBITaxon:9606", "NCBITaxon:999999"],
+            )
+        }
+    )
+    service, _, _, _, _ = _service(
+        client=client, responses=[_response(mode="hybrid")]
+    )
+    service.open()
+
+    result = service.search_datasets(
+        query="immune", filters=SearchFilters(), limit=5
+    ).results[0]
+
+    assert result.organism_ids == ["NCBITaxon:9606", "NCBITaxon:999999"]
+    assert result.organism_labels == ["Homo sapiens", "NCBITaxon:999999"]
+
+
 def test_exact_lookup_maps_urls_pubmed_and_missing() -> None:
     service, _, _, _, _ = _service()
     service.open()
 
     found = service.get_dataset("GSE123")
     assert found.found
+    assert found.dataset.organism_labels == ["Homo sapiens"]
     assert str(found.dataset.geo_url).endswith("acc=GSE123")
     assert str(found.dataset.pubmed_url) == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
     assert service.get_dataset("GSE999").model_dump() == {"found": False, "dataset": None}

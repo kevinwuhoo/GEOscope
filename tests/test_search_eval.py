@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import geo_index.search_eval as search_eval_module
+from geo_index.facets import facet_label
 from geo_index.mcp_models import (
     DatasetSummary,
     FacetResultOutput,
@@ -83,6 +84,7 @@ def _summary(
     source: str = "elasticsearch",
     organism_ids: list[str] | None = None,
 ) -> DatasetSummary:
+    resolved_organism_ids = organism_ids or ["NCBITaxon:10090"]
     return DatasetSummary(
         gse=gse,
         rank=rank,
@@ -92,7 +94,10 @@ def _summary(
         study_type="Expression profiling by high throughput sequencing",
         n_samples=10,
         pubmed_id=None,
-        organism_ids=organism_ids or ["NCBITaxon:10090"],
+        organism_ids=resolved_organism_ids,
+        organism_labels=[
+            facet_label("organism_ids", value) for value in resolved_organism_ids
+        ],
         organism_status="mapped",
         sex_ids=[],
         sex_status="absent",
