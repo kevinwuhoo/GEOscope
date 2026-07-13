@@ -58,8 +58,8 @@ class FakeService:
         if self.search_error: raise self.search_error
         return SearchDatasetsOutput(
             query=kwargs["query"], filters=SearchFiltersInput(**kwargs["filters"].as_dict()),
-            mode=kwargs["mode"], limit=kwargs["limit"], retrieval_version="bm25-v1",
-            embedding_variant=None, results=[],
+            limit=kwargs["limit"], retrieval_version="hybrid-v1",
+            embedding_variant="gemini_embedding_2_3072_v1", results=[],
             facets={
                 field: FacetResultOutput(
                     field=field, buckets=[], scope="candidate_pool", candidate_count=0

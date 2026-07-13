@@ -49,8 +49,7 @@ def _search_output() -> SearchDatasetsOutput:
     return SearchDatasetsOutput(
         query="transcriptomes of individual cells",
         filters=SearchFiltersInput(),
-        mode="hybrid",
-        limit=10,
+        limit=5,
         retrieval_version="geo-series-v1:gemini:embedding:hybrid",
         embedding_variant="gemini_embedding_2_3072_v1",
         results=[
@@ -242,7 +241,7 @@ async def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> N
             "/api/demo/search",
             params={
                 "q": " transcriptomes of individual cells ",
-                "mode": "hybrid",
+                "limit": "5",
             },
         )
 
@@ -255,6 +254,8 @@ async def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> N
     assert response.status_code == 200
     payload = response.json()
     assert payload["query"] == "transcriptomes of individual cells"
+    assert "mode" not in payload
+    assert "mode" not in payload["geoscope"]
     assert payload["geo"] == {
         "count": 1,
         "results": [
@@ -282,11 +283,29 @@ async def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> N
         {
             "query": "transcriptomes of individual cells",
             "filters": SearchFilters(),
-            "mode": "hybrid",
-            "limit": 10,
+            "limit": 5,
         }
     ]
     assert len(service.search_calls) == 1
+
+
+def test_demo_search_ignores_legacy_mode_query_parameter() -> None:
+    service = _DemoService()
+    app = create_app(service_factory=lambda: service)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/demo/search",
+            params={"q": "immune cells", "mode": "bm25", "limit": "5"},
+        )
+
+    assert response.status_code == 200
+    assert "mode" not in response.json()
+    assert service.execution_calls[0] == {
+        "query": "immune cells",
+        "filters": SearchFilters(),
+        "limit": 5,
+    }
 
 
 def test_demo_search_keeps_geoscope_results_when_ncbi_is_unavailable() -> None:
@@ -296,7 +315,7 @@ def test_demo_search_keeps_geoscope_results_when_ncbi_is_unavailable() -> None:
     with TestClient(app) as client:
         response = client.get(
             "/api/demo/search",
-            params={"q": "immune cells", "mode": "hybrid", "limit": "5"},
+            params={"q": "immune cells", "limit": "5"},
         )
 
     assert response.status_code == 200
@@ -315,13 +334,13 @@ def test_demo_search_accepts_the_shared_explicit_limit_range() -> None:
 
     with TestClient(app) as client:
         assert client.get(
-            "/api/demo/search", params={"q": "immune cells", "limit": "50"}
+            "/api/demo/search", params={"q": "immune cells", "limit": "20"}
         ).status_code == 200
         assert client.get(
-            "/api/demo/search", params={"q": "immune cells", "limit": "51"}
+            "/api/demo/search", params={"q": "immune cells", "limit": "21"}
         ).status_code == 422
 
-    assert service.execution_calls[0]["limit"] == 50
+    assert service.execution_calls[0]["limit"] == 20
 
 
 def test_standalone_factory_enables_the_same_luna_quality_settings(

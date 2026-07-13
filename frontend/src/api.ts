@@ -59,7 +59,6 @@ const provenanceSchema = z.object({
 
 const demoResponseSchema = z.object({
   query: z.string(),
-  mode: z.enum(["hybrid", "bm25", "dense"]),
   geo: z.object({
     count: z.number().nullable(),
     results: z.array(nativeResultSchema),
@@ -67,8 +66,6 @@ const demoResponseSchema = z.object({
   }),
   geoscope: z.object({
     query: z.string(),
-    mode: z.enum(["hybrid", "bm25", "dense"]),
-    limit: z.number().int().min(1).max(50),
     retrieval_version: z.string(),
     embedding_variant: z.string().nullable(),
     results: z.array(geoscopeResultSchema),
@@ -81,15 +78,13 @@ const demoResponseSchema = z.object({
 export type DemoResponse = z.infer<typeof demoResponseSchema>;
 export type NativeResult = z.infer<typeof nativeResultSchema>;
 export type GEOscopeResult = z.infer<typeof geoscopeResultSchema>;
-export type SearchMode = DemoResponse["mode"];
 
 
 export async function searchDemo(
   query: string,
-  mode: SearchMode,
   signal?: AbortSignal,
 ): Promise<DemoResponse> {
-  const params = new URLSearchParams({ q: query, mode, limit: "10" });
+  const params = new URLSearchParams({ q: query, limit: "8" });
   const response = await fetch(`/api/demo/search?${params}`, { signal });
   if (!response.ok) {
     throw new Error(

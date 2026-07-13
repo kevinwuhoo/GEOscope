@@ -1,418 +1,285 @@
-# GEO Metadata Index
+# GEOscope
 
-Metadata index + search service over [NCBI GEO](https://www.ncbi.nlm.nih.gov/geo/) — **v1 spike**.
+> **See what GEO search misses.**
 
-The design lives in the planning vault under [`wiki/`](wiki/Home.md) (Obsidian). Start at [`wiki/Home.md`](wiki/Home.md); the roadmap is [`wiki/40-Roadmap.md`](wiki/40-Roadmap.md).
+GEOscope is a hackathon prototype that makes [NCBI GEO](https://www.ncbi.nlm.nih.gov/geo/)
+metadata easier to discover through hybrid semantic and keyword search,
+ontology-aware normalization, and structured interfaces for both people and
+LLM agents.
 
-## Setup
+**[Try the live demo →](https://geoscope.kevinformatics.com)**
 
-Requires Python ≥3.11 and [`uv`](https://docs.astral.sh/uv/).
+## Goal
 
-```bash
-uv sync --all-extras
+Create better search for NCBI GEO by applying hybrid retrieval to its rich but
+inconsistently described sample metadata.
+
+GEO metadata is largely submitter-authored free text. The same biological
+concept can appear under different names, abbreviations, protocols, platforms,
+or characteristic keys, which makes literal search and reliable filtering
+difficult. GEOscope combines semantic recall with keyword precision and
+controlled metadata values so researchers can find relevant studies across
+those vocabulary differences.
+
+## Overview
+
+We built an end-to-end system that acquires the public GEO corpus, removes bulk
+expression tables while retaining series, platform, and sample metadata,
+materializes one canonical document per GEO Series (GSE), normalizes useful
+fields, builds embeddings, and loads everything into Elasticsearch.
+
+```mermaid
+flowchart LR
+    A[NCBI GEO family SOFT] --> B[Strip expression tables]
+    B --> C[Prefect ETL]
+    C --> D[Canonical GSE records]
+    D --> E[Normalization]
+    D --> F[Gemini embeddings]
+    E --> G[(Elasticsearch)]
+    F --> G
+    G --> H[BM25]
+    G --> I[Dense kNN]
+    H --> J[Hybrid RRF candidates]
+    I --> J
+    M[NCBI GEO E-utilities] --> N[NCBI candidates]
+    J --> O[Merge + deduplicate by GSE]
+    N --> O
+    O --> P[Sonnet 5 reranker]
+    P --> Q[Shared search service]
+    G --> R[Exact GSE lookup]
+    M --> R
+    R --> Q
+    Q --> K[Website]
+    Q --> L[MCP server]
 ```
 
-The complete development environment includes ETL orchestration, local embedding
-models, and the historical PostgreSQL comparison. The production image uses
-`uv sync --frozen --no-dev`, which installs only the online search service and
-does not include Prefect, PyTorch/sentence-transformers, or PostgreSQL clients.
+The browser experience and MCP server use the same shared search layer. It
+combines Elasticsearch retrieval with live NCBI candidates and LLM reranking,
+so query handling, filters, facets, provenance, and final ordering remain
+consistent across every consumer.
 
-For a polite, faster crawl (10 req/s instead of 3), set an [NCBI API key](https://www.ncbi.nlm.nih.gov/account/):
+## What we accomplished
 
-```bash
-export NCBI_API_KEY=...        # optional but recommended
-export NCBI_EMAIL=you@example.com
-```
+| Area | Result |
+|---|---|
+| Full-corpus acquisition | Catalogued 288,905 GSE accessions and materialized metadata for all 288,904 public records; the only residual accession was private/embargoed. |
+| Canonical ETL | Built a resumable Prefect pipeline that preserves repeated series, platform, and sample attributes, aggregates sample metadata, and atomically publishes one canonical record per GSE. |
+| Production embeddings | Built a complete **288,904 × 3,072** Gemini embedding artifact with stable GSE alignment and resumable Batch API state. |
+| Search index | Loaded and audited **288,904 Elasticsearch documents with 288,904 Gemini vectors**. Stable GSE document IDs make full reloads idempotent. |
+| Retrieval | Implemented exact accession lookup, weighted BM25, dense kNN, native reciprocal-rank fusion (RRF), normalized filters, disjunctive facets, unified NCBI candidate retrieval, and LLM reranking. |
+| Metadata normalization | Grounded organisms to NCBITaxon IDs and sex to PATO IDs; extracted controlled assay categories and detailed labels from metadata prose. |
+| Human interface | Built and deployed a responsive React/FastAPI comparison experience at [geoscope.kevinformatics.com](https://geoscope.kevinformatics.com). |
+| Agent interface | Built a FastMCP service exposing exactly three read-only tools: `search_datasets`, `get_dataset`, and `facet_values`. |
 
-## Stage 1 — download series metadata (`esummary`)
+At this checkpoint, the offline verification suite passes **391 Python tests**
+(with nine opt-in live integrations skipped), and the frontend suite passes all
+**seven tests**.
 
-Enumerates GEO **Series (GSE)** and lands each series' `esummary` record as one
-line of JSONL. Series-level only (v1 scope). Idempotent and resumable — re-run
-to continue, not duplicate.
+## Methods
 
-```bash
-# Small slice to iterate on (default term = human + mouse):
-uv run geo-fetch-summaries --limit 2000
+### 1. Acquire metadata without retaining terabytes of expression data
 
-# A specific scope:
-uv run geo-fetch-summaries --term 'GSE[ETYP] AND "Homo sapiens"[Organism]'
+We enumerated GEO Series through NCBI E-utilities, then streamed each family
+SOFT file from NCBI's bulk FTP service. During the crawl, sample, platform, and
+series-matrix data tables were removed while the complete metadata blocks were
+preserved and validated. This reduced a potentially multi-terabyte raw crawl to
+a manageable metadata corpus without discarding the fields needed for search.
 
-# Full corpus for the current term (drop --limit):
-uv run geo-fetch-summaries
-```
+The completed snapshot contains 288,904 public metadata files. The crawler is
+bounded, retried, idempotent, and resumable; one individual source file exceeded
+33 GB before being reduced to its metadata representation.
 
-Output: `data/raw/geo_series_summaries.jsonl` (+ a `.progress.json` checkpoint).
-`data/` is git-ignored. This is the **catalog**: `title`, `summary`, `taxon`,
-`gdstype`, `n_samples`, platform IDs, PubMed IDs, FTP link. It does **not**
-include the per-sample metadata the index is built from — that's stage 2.
+### 2. Build canonical, reproducible study documents
 
-## Stage 2 — download full metadata (brief SOFT)
+The Prefect flow inventories the stripped SOFT tree and parses only missing
+outputs. It preserves the original attribute maps, aggregates distinct sample
+values into each series document, produces the narrative text used for
+retrieval, and publishes files atomically. Existing valid outputs are skipped
+without reopening their source files, while deleting one output intentionally
+rebuilds only that GSE.
 
-For each series in the catalog, downloads the **metadata-only** SOFT via GEO's
-`acc.cgi` (`view=brief`): every `!Series_*` and `!Sample_*` attribute —
-including the `!Sample_characteristics_ch1` goldmine (`tissue:`, `sex:`,
-`cell line:`…), `!Series_overall_design`, and `!Sample_library_strategy` — but
-**no expression data tables**. Each series is gzipped to disk once, mirroring
-the GEO FTP bucket layout, so parsing later never re-downloads.
+### 3. Normalize metadata for reliable filters and facets
 
-```bash
-uv run geo-fetch-soft --limit 50      # iterate on a slice
-uv run geo-fetch-soft                 # everything in the catalog
-```
+Embeddings help recover semantically related text, but they cannot provide
+stable values for filtering or counting. We therefore keep raw metadata and a
+separate normalization layer:
 
-Output: `data/raw/soft/GSE<nnn>nnn/GSE<n>.soft.gz`. Idempotent — existing files
-are skipped; failures are logged to `data/raw/soft/_failures.log` for re-run.
+- organism names are mapped to **NCBITaxon** identifiers such as
+  `NCBITaxon:9606`;
+- sex values are mapped to **PATO** identifiers such as `PATO:0000383`; and
+- assay evidence is converted into controlled categories and detailed labels
+  such as `scRNA-seq`, `10x Chromium`, `ATAC-seq`, and `spatial transcriptomics`.
 
-## Browse local SOFT files
+Normalization is value-driven and records `mapped`, `unmapped`, and `absent`
+states instead of trusting noisy characteristic keys or silently guessing. For
+example, contextual rules distinguish 10x Genomics assays from microscopy
+magnification or chromium exposure.
 
-Open a lightweight local browser over the downloaded `.soft.gz` files:
+### 4. Embed the metadata narrative
 
-```bash
-uv run geo-soft-browser
-```
+Each GSE embedding is composed from its title, study type, organism names,
+summary, overall design, molecule names, sample sources, and sample
+characteristics. Production uses `gemini-embedding-2` at 3,072 dimensions.
+Batch request files, provider job state, results, aligned IDs, and artifact
+metadata are retained so interrupted or incremental builds can resume without
+silently repeating paid work.
 
-The browser expects [`rg`](https://github.com/BurntSushi/ripgrep) on `PATH` and
-uses its compressed-file search mode. Run `uv run geo-strip-soft` first to
-populate the default `data/processed/soft_meta` search tree, or check
-**Search raw files** in the UI to search `data/raw/soft` directly.
+### 5. Combine lexical, semantic, and live NCBI retrieval
 
-It listens on [http://127.0.0.1:8001](http://127.0.0.1:8001) by default.
-Searches use stripped metadata under `data/processed/soft_meta`; use the
-left-side **Search raw files** checkbox to search the original files under
-`data/raw/soft`. Selecting a GSE opens its metadata SOFT, and the right-side
-**Show original raw file** checkbox switches the viewer to its full raw family
-file. Pass `--port`, `--raw-dir`, or `--metadata-dir` to use another local
-snapshot. Each search stops after the first 10 matching GSEs, so refine the
-words if the desired series is not shown.
+Elasticsearch provides the shared online search layer:
 
-> **Why not FTP family files / esummary JSON?** The FTP `*_family.soft.gz`
-> bundles the full expression matrix (~9 MB+ per series, TB-scale for the
-> corpus) and 404s for freshly-released series. The esummary JSON omits all
-> per-sample metadata. `acc.cgi view=brief` is the only source that is
-> metadata-complete, data-free, and available for new series.
+- **BM25** searches accessions and weighted metadata fields, boosting titles
+  and summaries for precise lexical matches.
+- **Dense kNN** retrieves conceptually similar studies using the Gemini query
+  and corpus vectors.
+- **Hybrid search** combines both rankings with Elasticsearch's native RRF.
+- **Filters and facets** operate on normalized organism, sex, and assay arrays.
+  Values are ORed within a field and ANDed across fields; each facet omits its
+  own active filter when counting alternatives.
+- **Unified retrieval** concurrently gathers 40 Elasticsearch candidates and
+  20 native NCBI GEO candidates, merges them by GSE accession, prefers the
+  richer local metadata, and records whether each result came from
+  Elasticsearch, NCBI, or both.
+- **LLM reranking** uses Sonnet 5 to select and order the final top 10 from the
+  merged candidate set. Exact GSE accession lookups normalize the identifier,
+  check the local index first, fall back to NCBI if needed, and bypass semantic
+  retrieval and reranking so identifiers remain deterministic.
 
-## Canonical production pipeline
+Elasticsearch remains the required source of indexed metadata. If live NCBI
+retrieval or reranking is unavailable, the service falls back to deterministic
+Elasticsearch order; it does not fail an otherwise valid search because an
+optional enrichment step failed. The website renders the shared service's
+ranked results directly, while an MCP client can use the same results to
+produce a grounded explanation or continue a research conversation.
 
-`geo-soft-etl` is the single production path: metadata-only SOFT → canonical
-GSE JSON → Gemini Batch embeddings → Elasticsearch → coverage audit. Production
-uses only `gemini_embedding_2_3072_v1`, stored as
-`embedding_gemini_3072`. BGE, MedCPT, and Qwen are development/evaluation only.
+### Canonical production pipeline
 
-The durable handoffs are `data/processed/series_records/`,
-`data/processed/embedding_artifacts/gemini_embedding_2_3072_v1/`,
-`data/processed/soft_etl_report.json`, and
-`data/processed/elasticsearch_load_report.json`. A production artifact root
-must contain only the Gemini directory because the loader indexes every
-registered artifact it finds. The complete file map, resume rules, commands,
-validation invariants, and current 288,904-row checkpoint are in
-[wiki/57-Canonical-Production-Pipeline.md](wiki/57-Canonical-Production-Pipeline.md).
+The **Elasticsearch primary path** uses only
+`gemini_embedding_2_3072_v1`, stored as `embedding_gemini_3072`. Its durable
+handoffs are `data/processed/series_records`,
+`data/processed/embedding_artifacts`, and
+`data/processed/elasticsearch_load_report.json`. BGE, MedCPT, and Qwen remain
+development/evaluation only.
 
-## Canonical SOFT records and embedding artifacts
-
-`geo-soft-etl` now owns canonical materialization, paid Gemini embedding,
-Elasticsearch loading, and the final audit as one required flow. Configure and
-start those services before invoking it; follow the executable
-**Elasticsearch primary path** below.
-
-Existing records under `data/processed/series_records/<bucket>/` are terminal
-and skipped without reading their source. Delete one record explicitly to
-recompute it. The flow runs directly with a bounded local Prefect thread pool;
-the Prefect server/UI is optional.
-
-### Development/evaluation only models
-
-The following local models are retained for testing and historical comparison,
-not production. Build them into a separate development artifact root:
-
-```bash
-uv run python -m geo_index.build_embedding_artifact \
-  --model-key bge_small_v15 \
-  --output-root data/processed/embedding_artifacts-dev
-uv run python -m geo_index.build_embedding_artifact \
-  --model-key medcpt_v1 \
-  --output-root data/processed/embedding_artifacts-dev
-uv run python -m geo_index.build_embedding_artifact \
-  --model-key qwen3_06b_1024_v1 \
-  --output-root data/processed/embedding_artifacts-dev
-```
-
-Each model publishes `vectors.npy`, `ids.json`, and `metadata.json` under
-the selected output root. Do not copy these directories into the production
-`data/processed/embedding_artifacts/` root. A valid existing directory whose
-IDs match the canonical inventory skips all encoder work. Inventory changes are
-synchronized incrementally: only new or explicitly replaced rows are encoded,
-unchanged rows are reused, and deleted rows are removed.
-
-The existing aligned BGE baseline can be copied into a development artifact
-root without changing its source files:
+Once the required environment and services are available, the complete
+pipeline and its two local search surfaces reduce to:
 
 ```bash
-uv run python -m geo_index.adopt_embeddings \
-  --model-key bge_small_v15 \
-  --output-root data/processed/embedding_artifacts-dev
-```
-
-Gemini corpus embeddings use only bounded asynchronous Google batch/file API
-shards. The 1,000-request and 100 MiB limits bound transport files; they do not
-truncate documents. Every request preserves the complete formatted title and
-`embed_text`, including multibyte Unicode. Provider token-limit or per-row
-errors fail the build while preserving request, state, and result files for
-diagnosis and resume. Per-shard state makes uploads, jobs, and downloads
-resumable.
-
-The default corpus build intentionally does not call exact `count_tokens`,
-which would add a separate synchronous provider request for every document.
-Its byte-derived token and cost upper bounds are informational only: they are
-neither provider token counts nor proof that the provider will accept an
-input. The command cannot submit unless `GEMINI_API_KEY`,
-`--allow-paid-gemini`, and a finite `--gemini-max-cost-usd` at least as large
-as the printed upper-bound estimate are present:
-
-```bash
-set -a
-source .env
-set +a
-uv run python -m geo_index.build_embedding_artifact \
-  --model-key gemini_embedding_2_3072_v1 \
-  --gemini-concurrency 4 \
-  --gemini-max-cost-usd 9.55 \
-  --allow-paid-gemini
-```
-
-`--gemini-concurrency` controls provider-side active batch jobs while one local
-coordinator remains the sole state writer. Its default is `1`. Do not launch
-multiple builder processes against the same temporary state directory. A rerun
-resumes persisted uploads and jobs and assembles results in canonical order.
-
-## Elasticsearch primary path
-
-Elasticsearch is the primary online datastore and retrieval backend. The
-required embedding is `gemini_embedding_2_3072_v1` (`gemini-embedding-2`,
-3,072 dimensions), stored in Elasticsearch as `embedding_gemini_3072`.
-PostgreSQL cannot store this vector in pgvector's 2,000-dimensional `vector`
-type, so it is retained only as a historical comparison implementation.
-
-Configure the local or managed Elasticsearch endpoint and Gemini credentials:
-
-```bash
-cp .env.elasticsearch.example .env.elasticsearch
-# Edit ELASTICSEARCH_PASSWORD before starting.
-docker compose --env-file .env.elasticsearch \
-  -f docker-compose.elasticsearch.yml up -d
-set -a
-source .env.elasticsearch
-set +a
-export GEMINI_API_KEY=...
-```
-
-Run the complete required Prefect path—canonical records, resumable Gemini
-artifact, idempotent Elasticsearch upsert, and index/vector audit:
-
-```bash
-set -a
-source .env
-source .env.elasticsearch
-set +a
-uv run geo-soft-etl \
-  --allow-paid-gemini \
-  --gemini-max-cost-usd 9.55 \
-  --gemini-concurrency 4
-```
-
-The `uv run geo-soft-etl --allow-paid-gemini` invocation still requires the
-cost-ceiling option shown above before it can submit. Omitting the explicit
-concurrency option uses the default of one active Gemini batch job.
-
-Gemini embedding and Elasticsearch loading are required primary stages. The
-loader includes every registered artifact present in its configured root, so a
-production root must contain only `gemini_embedding_2_3072_v1`. A run is
-successful only after every indexed document has `embedding_gemini_3072`;
-record parsing, embedding, Elasticsearch loading, or audit failures make the
-run unsuccessful. Completed records and artifacts remain safe to reuse on
-retry. Both paid-work flags are intentionally required before the flow may
-submit Gemini batch work.
-
-Search the indexed corpus or launch the comparison UI:
-
-```bash
-uv run geo-search "human single-cell immune atlas" --mode hybrid --topk 15
+uv run geo-soft-etl --allow-paid-gemini --gemini-max-cost-usd 9.55
+uv run geo-search "human single-cell immune atlas" --mode hybrid --topk 10
 uv run geo-web
 ```
 
-`geo-search` and `geo-web` default to Gemini through
-`ELASTICSEARCH_ACTIVE_MODEL=gemini_embedding_2_3072_v1`. BM25-only searches do
-not call Gemini. Dense and hybrid searches create query embeddings through the
-Gemini API.
+## Experiments and findings
 
-## Historical PostgreSQL baseline
+### Metadata-source comparison
 
-The earlier **v1** Postgres search database remains reproducible for historical
-comparison from the GEOmetadb SQLite file and
-the generated JSONL/embedding artifacts. Build those artifacts first:
+We evaluated lightweight E-utilities summaries, GEOmetadb, and full family
+SOFT. E-utilities summaries omit the per-sample characteristics needed for this
+project. GEOmetadb enabled a fast 222,961-series baseline, but its snapshot did
+not cover the latest corpus. Full family SOFT had the most complete metadata but
+could contain enormous expression tables, so the deployed pipeline streams,
+strips, validates, and retains only its metadata.
 
-```bash
-uv run geo-build-series-docs
-uv run geo-embed
-```
+### Embedding bake-off
 
-Then rebuild Postgres in this order:
+We built aligned frozen-corpus artifacts for several retrieval approaches rather
+than selecting a model from a leaderboard alone:
 
-```bash
-# Destructive: drops and recreates `series`. Use only on an isolated/local DB.
-uv run python -m geo_index.pg_hybrid init
-uv run python -m geo_index.pg_hybrid load
+| Model | Dimensions | Records | Role |
+|---|---:|---:|---|
+| BGE Small v1.5 | 384 | 249,736 | Fast local baseline |
+| MedCPT | 768 | 249,736 | Biomedical query/document encoder experiment |
+| Qwen3 Embedding 0.6B | 1,024 | 249,736 | Longer-context local experiment |
+| Gemini Embedding 2 | 3,072 | 288,904 | Deployed production index |
 
-# `migrate` is idempotent and ensures every normalization column exists.
-uv run geo-normalize migrate
-uv run geo-normalize run
+The local artifacts exposed practical differences in build time and
+truncation: BGE and MedCPT truncated substantially more long GEO records, while
+the final Qwen configuration truncated 767 of 249,736. The deployed Gemini
+pipeline preserves complete formatted inputs and fails visibly if a provider
+rejects an oversized record.
 
-# Builds BM25, HNSW, and the four normalized-array GIN indexes.
-uv run python -m geo_index.pg_hybrid index
-uv run geo-normalize report
-```
+We also built a repeatable seven-query live comparison that records BM25,
+dense, and hybrid rankings plus filter and facet evidence for BGE, MedCPT, and
+Qwen. This made retrieval behavior inspectable rather than treating “semantic
+search” as a black box.
 
-`load` checks that `geo_series.jsonl`, `embeddings.npy`, and
-`embeddings.ids.json` have identical GSE ordering before inserting anything.
-Running normalization before index creation avoids maintaining the new GIN
-indexes during the full normalization update.
+### Historical PostgreSQL baseline and Elasticsearch cutover
 
-To upgrade an already-populated database without rebuilding BM25, HNSW,
-normalization, or embeddings, run only this command after receiving database
-change approval:
+The first hybrid implementation used PostgreSQL, pgvector, and a BM25 extension.
+We later moved the primary path to Elasticsearch so text analysis, vector
+search, native RRF, filtering, and aggregation could live in one shared service.
+Gemini's 3,072-dimensional vectors also exceed pgvector's 2,000-dimensional
+`vector` limit. The PostgreSQL path remains as reproducible experiment history.
 
-```bash
-uv run python -m geo_index.pg_hybrid filter-index
-```
+### Unified retrieval and LLM reranking
 
-Filters are series-level: selecting values across fields means the GSE contains
-each value somewhere, not that one GSM sample contains all of them.
+Hybrid Elasticsearch retrieval improved recall within the indexed snapshot,
+but it could not surface a newly published or locally missing GSE. We therefore
+extended the shared search service to retrieve a deeper Elasticsearch pool and
+native NCBI GEO results concurrently, deduplicate them by accession, preserve
+source provenance, and rerank the combined evidence with Sonnet 5.
 
-## Local Elasticsearch service
+The service records timing, model usage, and reranking cost so relevance gains
+can be evaluated against latency and spend. It also preserves deterministic
+behavior: exact accessions take a direct lookup route, and natural-language
+queries retain Elasticsearch ordering if an optional NCBI or LLM call fails.
+Because this is implemented in the shared MCP/search layer, the website and MCP
+clients receive the same final top 10 rather than maintaining separate ranking
+logic.
 
-The prototype Elasticsearch service is pinned to 9.4.2, binds only to
-`127.0.0.1:9200`, persists its data in a named Docker volume, and enables a
-local trial license so native RRF can be verified. Create the ignored local
-environment file and choose a local-only password:
+### Ontology-normalization experiments
 
-```bash
-cp .env.elasticsearch.example .env.elasticsearch
-# Edit ELASTICSEARCH_PASSWORD before starting.
-docker compose --env-file .env.elasticsearch \
-  -f docker-compose.elasticsearch.yml up -d
-docker compose --env-file .env.elasticsearch \
-  -f docker-compose.elasticsearch.yml ps
-```
+We prototyped deterministic normalization across nine candidate fields on the
+222,961-series baseline. Among records that actually reported a value, the
+simple rules and curated lookups reached **92% organism**, **93% sex**, and
+**99% assay-label** coverage. Heavy-tailed free text reached much lower ceilings
+— **50% disease**, **40% tissue**, and **12% cell type** — showing where lexical
+ontology candidates, biomedical entity embeddings, or grounded LLM validation
+would be necessary.
 
-The Compose file preserves disk protection with local absolute watermarks of
-1 GB free (low), 750 MB (high), and 500 MB (flood stage). Expand Docker's disk
-allocation before loading the real corpus; the tiny synthetic test can run
-within those bounds, but the full metadata and vector index cannot fit in a
-nearly-full Docker VM.
+This experiment also established an important measurement rule: “not reported”
+must be separated from “reported but unmapped.” Otherwise missing source
+metadata is incorrectly counted as a normalization failure.
 
-Export the same URL and credentials for the Python client, then run the
-synthetic container tests:
+### Structured metadata extraction
 
-```bash
-set -a
-source .env.elasticsearch
-set +a
-GEO_TEST_ELASTIC=1 uv run pytest tests/test_elasticsearch_live.py -v
-```
+We prototyped evidence-backed structured extraction from the canonical metadata
+for biospecimens, biological conditions, interventions, genetic context,
+demographics, assays, geography, technology, and study design. We compared
+multiple OpenAI structured-output profiles on a selected pilot, then built a
+lower-cost Gemini Flash-Lite Batch implementation and ran it over 10,000 GSEs.
 
-The primary Prefect flow invokes the loader automatically. The standalone
-loader remains available for evaluation, repair, or an explicitly separated
-operation after the canonical record tree and Gemini-only production artifact
-root are complete:
+All **15 Batch jobs succeeded**. The local evidence and schema validator
+accepted **9,439 outputs** and preserved **561 failures** for diagnosis rather
+than publishing partial claims.
 
-```bash
-uv run geo-elasticsearch-load \
-  --records-root data/processed/series_records \
-  --artifacts-root data/processed/embedding_artifacts \
-  --report data/processed/elasticsearch_load_report.json
-```
+The structured-extraction experiments cost **$121.61 in total**: **$47.52** for
+the OpenAI structured-output pilot and **$74.10** for the 10,000-record Gemini
+run, calculated from recorded token usage at the experiment's frozen rates.
+The Gemini request manifest had estimated **$57.66** before the run, with a
+conservative maximum of **$110.10**.
 
-Run the identical command a second time to prove the document count is
-unchanged: bulk actions use GSE as `_id` and `index` as the operation, so the
-second load replaces the same documents. On the primary path,
-`geo-soft-etl --allow-paid-gemini` builds or resumes the Gemini artifact, loads
-the Gemini-only production artifact root in one idempotent operation, and audits
-complete Gemini coverage in its terminal flow report.
+At the measured Gemini rate, extracting structured metadata for all **288,904**
+public records would cost approximately **$2,141**; applying the same
+conservative maximum gives a ceiling of approximately **$3,181**. That projected
+full-corpus expense was too high for the hackathon, so structured extraction
+remained an evaluated experiment rather than a production indexing stage. The
+deployed index instead uses deterministic normalization plus embeddings;
+LLM-extracted claims are not production facets. These accounting figures are
+derived from local run reports and recorded usage rather than provider invoices,
+and exclude embedding generation and search reranking.
 
-For development/evaluation only, after BGE, MedCPT, and Qwen have full vector
-coverage in a disposable local index, run the guarded read-only comparison. It
-generates real query embeddings, exercises BM25+dense native RRF with normalized
-filters and disjunctive facets, records standalone BM25/dense diagnostics, and
-writes stable Markdown tables for review:
+## Current scope
 
-```bash
-set -a
-source .env.elasticsearch
-set +a
-GEO_TEST_ELASTIC=1 uv run geo-elasticsearch-compare \
-  --queries eval/elasticsearch_live_queries.jsonl \
-  --topk 5 \
-  --output eval/elasticsearch-live-comparison.md
-```
-
-The internal comparison always runs the three fixed registry models and does not
-add a public model selector. It never resets or writes `geo-series`; ordinary
-tests do not contact Elasticsearch or load query models.
-
-For a later managed deployment, configure only `ELASTICSEARCH_URL` and either
-`ELASTICSEARCH_USERNAME` plus `ELASTICSEARCH_PASSWORD`, or
-`ELASTICSEARCH_API_KEY`. The loader and search code do not depend on Docker or
-localhost.
-
-## Private hosted MCP service
-
-The hosted FastMCP service exposes exactly three read-only tools over stateless
-Streamable HTTP at `/mcp`: `search_datasets`, `get_dataset`, and
-`facet_values`. Elasticsearch is its only online datastore. The deployment
-selects one active vector model; callers cannot choose a model or submit raw
-Elasticsearch queries. The default is `gemini_embedding_2_3072_v1`.
-
-Copy the safe environment template and fill in the Elasticsearch, Gemini, and
-OAuth values without committing the resulting file:
-
-```bash
-cp deploy/geo-mcp.env.example .env.geo-mcp
-# Edit every replace-me value and configure the public hostname.
-set -a
-source .env.geo-mcp
-set +a
-uv run uvicorn geo_index.mcp_server:create_app \
-  --factory --host 127.0.0.1 --port 8000 --workers 1
-```
-
-The identity provider must issue signed JWTs for `GEO_MCP_AUDIENCE` with the
-`geo:read` scope. A verified token's stable `sub` claim must also appear in
-`GEO_MCP_ALLOWED_SUBJECTS`. TLS terminates at the hosting edge; it must preserve
-the configured public Host value.
-
-Check process health and Elasticsearch/index readiness separately:
-
-```bash
-curl --fail https://geo.example.org/healthz
-curl --fail https://geo.example.org/readyz
-```
-
-Dense and hybrid calls initialize the Gemini query encoder lazily and therefore
-require `GEMINI_API_KEY`. BM25, exact GSE lookup, blank facet browsing, health,
-and startup readiness do not call Gemini. The server validates the live
-`geo-series` mapping and active vector field before accepting tool work.
-
-Build the one-worker container with:
-
-```bash
-docker build -t geo-mcp:elasticsearch .
-```
-
-Offline MCP tests use fakes. With a populated local `geo-series`, run the
-opt-in end-to-end in-process MCP client smoke against real Elasticsearch:
-
-```bash
-set -a
-source .env.elasticsearch
-set +a
-GEO_TEST_ELASTIC=1 uv run pytest tests/test_mcp_elasticsearch_smoke.py -v
-```
+- GEOscope indexes **series-level GSE metadata**, not expression matrices.
+- Sample metadata is aggregated into each series. A filter therefore means the
+  series contains each selected value somewhere; it does not prove one sample
+  contains every selected value.
+- Production normalization currently covers organism, sex, and assay. Tissue,
+  disease, cell type, and ontology-hierarchy rollups remain experiments or
+  future work.
+- The current corpus is a completed public snapshot with resumable top-up
+  tooling, not yet an automatically refreshed living index.
+- Structured metadata extraction was evaluated but is not part of the deployed
+  full-corpus search path.

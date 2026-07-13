@@ -7,7 +7,6 @@ import App from "./App";
 
 const demoResponse = {
   query: "transcriptomes of individual cells",
-  mode: "hybrid",
   geo: {
     count: 14,
     results: [
@@ -28,8 +27,7 @@ const demoResponse = {
       assay_categories: [],
       assay_labels: [],
     },
-    mode: "hybrid",
-    limit: 10,
+    limit: 8,
     retrieval_version: "geo-series-v1:gemini:embedding:hybrid",
     embedding_variant: "gemini_embedding_2_3072_v1",
     results: [
@@ -142,8 +140,26 @@ test("presents the focused NCBI GEO marketing story", () => {
   render(<App />);
 
   expect(
-    screen.getByRole("heading", { name: /see what ncbi geo search misses/i }),
+    screen.getByRole("heading", {
+      name: /see what searching ncbi geo misses/i,
+      level: 1,
+    }),
   ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      /finds the geo studies you need by understanding the biological meaning/i,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "GEOscope finds the GEO studies you need by understanding the biological meaning of your question, not just the exact words used in a submission.",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("navigation", { name: /primary navigation/i })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /open live demo/i })).toHaveAttribute(
+    "href",
+    "#live-demo",
+  );
   expect(
     screen.getAllByText(/hybrid bm25 \+ embedding retrieval/i).length,
   ).toBeGreaterThan(0);
@@ -161,6 +177,85 @@ test("presents the focused NCBI GEO marketing story", () => {
 });
 
 
+test("balances GEOscope's benefit with MCP compatibility in the hero", () => {
+  render(<App />);
+
+  const hero = document.querySelector(".hero");
+  expect(hero?.querySelector(".mcp-install")).not.toBeNull();
+  expect(
+    screen.getByRole("heading", { name: /bring geoscope to your agent/i, level: 3 }),
+  ).toBeInTheDocument();
+  const copyButton = screen.getByRole("button", { name: /copy mcp url/i });
+  expect(copyButton.textContent).toBe("");
+  expect(copyButton.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+  expect(screen.getByRole("link", { name: /try a live comparison/i })).toHaveAttribute(
+    "href",
+    "#live-demo",
+  );
+  const clients = screen.getByRole("list", { name: /compatible mcp clients/i });
+  expect(clients).toHaveTextContent("ChatGPT");
+  expect(clients).toHaveTextContent("Claude");
+  expect(clients).toHaveTextContent("Cursor");
+  expect(clients).toHaveTextContent("GitHub Copilot");
+  expect(
+    screen.getByRole("heading", {
+      name: /search the same research question two ways/i,
+    }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/hybrid metadata search with the literal keyword results/i),
+  ).toBeInTheDocument();
+});
+
+
+test("offers concise species-neutral example queries", () => {
+  render(<App />);
+
+  const examples = [
+    "breast tumors before and after neoadjuvant chemotherapy",
+    "NASH liver transcriptomes compared with healthy controls",
+    "PI3K signaling in insulin-resistant skeletal muscle",
+  ];
+  for (const example of examples) {
+    expect(screen.getByRole("button", { name: example })).toBeInTheDocument();
+  }
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveValue("");
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveAttribute(
+    "placeholder",
+    "Describe a disease, treatment, pathway, assay, or comparison",
+  );
+});
+
+
+test("runs an example query when selected", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify(demoResponse), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+
+  const example = "PI3K signaling in insulin-resistant skeletal muscle";
+  await user.click(screen.getByRole("button", { name: example }));
+
+  expect(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+  ).toHaveValue(example);
+  expect(await screen.findByText("GSE123")).toBeInTheDocument();
+  const requestUrl = new URL(
+    String(fetchMock.mock.calls[0]?.[0]),
+    window.location.origin,
+  );
+  expect(requestUrl.searchParams.get("q")).toBe(example);
+});
+
+
 test("explains the thesis and turns a query into a live GEO comparison", async () => {
   const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify(demoResponse), {
@@ -172,14 +267,19 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   render(<App />);
 
   expect(
-    screen.getByRole("heading", { name: /see what ncbi geo search misses/i }),
+    screen.getByRole("heading", {
+      name: /see what searching ncbi geo misses/i,
+      level: 1,
+    }),
   ).toBeInTheDocument();
   expect(screen.getAllByText("NCBITaxon:9606").length).toBeGreaterThan(0);
   expect(
     screen.queryByRole("combobox", { name: /retrieval mode/i }),
   ).not.toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: /human breast cancer transcriptomics/i }),
+    screen.getByRole("button", {
+      name: "breast tumors before and after neoadjuvant chemotherapy",
+    }),
   ).toBeInTheDocument();
 
   const query = screen.getByRole("searchbox", { name: /describe the studies/i });
@@ -187,12 +287,15 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   await user.type(query, "transcriptomes of individual cells");
   await user.click(screen.getByRole("button", { name: /compare results/i }));
 
-  expect(fetchMock.mock.calls[0]?.[0]).toEqual(
-    expect.stringContaining("mode=hybrid"),
+  const requestUrl = new URL(
+    String(fetchMock.mock.calls[0]?.[0]),
+    window.location.origin,
   );
-  expect(fetchMock.mock.calls[0]?.[0]).toEqual(
-    expect.stringContaining("limit=10"),
+  expect(requestUrl.searchParams.get("q")).toBe(
+    "transcriptomes of individual cells",
   );
+  expect(requestUrl.searchParams.get("limit")).toBe("8");
+  expect(requestUrl.searchParams.has("mode")).toBe(false);
   expect(await screen.findByText("GSE123")).toBeInTheDocument();
   expect(screen.getByText("GSE999")).toBeInTheDocument();
   expect(
@@ -217,9 +320,17 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   expect(
     screen.getByRole("article", { name: /geoscope result 7: fresh live ncbi series/i }),
   ).toHaveTextContent("07");
-  expect(
-    screen.getByText(/3 of 10 requested geoscope results compared/i),
-  ).toBeInTheDocument();
+  const nativeSearchLink = screen.getByRole("link", {
+    name: /open this search on ncbi geo/i,
+  });
+  const nativeSearchUrl = new URL(nativeSearchLink.getAttribute("href") ?? "");
+  expect(nativeSearchLink).toHaveAttribute("target", "_blank");
+  expect(nativeSearchLink).toHaveAttribute("rel", "noopener noreferrer");
+  expect(nativeSearchUrl.origin).toBe("https://www.ncbi.nlm.nih.gov");
+  expect(nativeSearchUrl.pathname).toBe("/gds/");
+  expect(nativeSearchUrl.searchParams.get("term")).toBe(
+    "transcriptomes of individual cells AND gse[ETYP]",
+  );
 });
 
 
@@ -247,6 +358,10 @@ test("preserves paired ranks when source result counts differ", async () => {
   const user = userEvent.setup();
   render(<App />);
 
+  await user.type(
+    screen.getByRole("searchbox", { name: /describe the studies/i }),
+    "transcriptomes of individual cells",
+  );
   await user.click(screen.getByRole("button", { name: /compare results/i }));
   await screen.findByText("GSE456");
 

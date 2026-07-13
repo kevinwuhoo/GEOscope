@@ -7,7 +7,7 @@ import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -28,7 +28,7 @@ class SearchService(Protocol):
     def close(self) -> None: ...
 
     def search_execution(
-        self, *, query: str, filters: SearchFilters, mode: str, limit: int
+        self, *, query: str, filters: SearchFilters, limit: int
     ) -> SearchExecution: ...
 
 
@@ -57,8 +57,7 @@ def install_marketing_routes(
     @app.get("/api/demo/search")
     async def demo_search(
         q: str = Query(min_length=1, max_length=1000),
-        mode: Literal["hybrid", "bm25", "dense"] = "hybrid",
-        limit: int = Query(default=10, ge=1, le=50),
+        limit: int = Query(default=8, ge=1, le=20),
     ) -> dict[str, object]:
         query = q.strip()
         if not query:
@@ -68,7 +67,6 @@ def install_marketing_routes(
             service.search_execution,
             query=query,
             filters=SearchFilters(),
-            mode=mode,
             limit=limit,
         )
         native: dict[str, object] = {
@@ -97,7 +95,6 @@ def install_marketing_routes(
         )
         return {
             "query": query,
-            "mode": mode,
             "geo": native,
             "geoscope": execution.output.model_dump(mode="json"),
             "membership": membership,

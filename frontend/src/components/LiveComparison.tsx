@@ -4,10 +4,16 @@ import { DemoResponse, GEOscopeResult, NativeResult, searchDemo } from "../api";
 
 
 const examples = [
-  "human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data",
-  "liver transcriptomics comparing nonalcoholic steatohepatitis with healthy human controls",
-  "mouse skeletal muscle gene expression after endurance exercise in insulin resistance",
+  "breast tumors before and after neoadjuvant chemotherapy",
+  "NASH liver transcriptomes compared with healthy controls",
+  "PI3K signaling in insulin-resistant skeletal muscle",
 ];
+
+
+function ncbiGeoSearchUrl(query: string) {
+  const params = new URLSearchParams({ term: `${query} AND gse[ETYP]` });
+  return `https://www.ncbi.nlm.nih.gov/gds/?${params.toString()}`;
+}
 
 
 function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?: boolean }) {
@@ -78,15 +84,15 @@ function NativeCard({ result, rank }: { result: NativeResult; rank: number }) {
 
 
 export function LiveComparison() {
-  const [query, setQuery] = useState(examples[0]);
+  const [query, setQuery] = useState("");
   const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [data, setData] = useState<DemoResponse | null>(null);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
-  async function runSearch(event?: FormEvent) {
+  async function runSearch(event?: FormEvent, selectedQuery?: string) {
     event?.preventDefault();
-    const normalized = query.trim();
+    const normalized = (selectedQuery ?? query).trim();
     if (!normalized) {
       setError("Describe the studies you want to find.");
       setState("error");
@@ -98,12 +104,12 @@ export function LiveComparison() {
     setState("loading");
     setError("");
     try {
-      const response = await searchDemo(normalized, "hybrid", controller.signal);
+      const response = await searchDemo(normalized, controller.signal);
       setData(response);
       setState("success");
       const params = new URLSearchParams(window.location.search);
       params.set("q", normalized);
-      params.set("mode", "hybrid");
+      params.delete("mode");
       window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
@@ -126,9 +132,12 @@ export function LiveComparison() {
     <section className="section live-demo" id="live-demo" aria-labelledby="demo-title">
       <div className="demo-intro">
         <div>
-          <h2 id="demo-title">Compare retrieval, result by result.</h2>
+          <h2 id="demo-title">Search the same research question two ways.</h2>
         </div>
-        <p>See the difference for yourself. GEOscope results on the left, NCBI GEO results on the right.</p>
+        <p>
+          Enter a research question, then compare GEOscope’s hybrid metadata search
+          with the literal keyword results from NCBI GEO.
+        </p>
       </div>
 
       <form className="search-console" role="search" onSubmit={runSearch}>
@@ -139,7 +148,7 @@ export function LiveComparison() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="e.g. breast cancer before and after neoadjuvant chemotherapy"
+            placeholder="Describe a disease, treatment, pathway, assay, or comparison"
           />
           <button type="submit" disabled={state === "loading"}>
             {state === "loading" ? "Scanning…" : "Compare results"}
@@ -148,7 +157,16 @@ export function LiveComparison() {
         <div className="example-queries" aria-label="Example queries">
           <span>Try:</span>
           {examples.map((example) => (
-            <button type="button" key={example} onClick={() => setQuery(example)}>{example}</button>
+            <button
+              type="button"
+              key={example}
+              onClick={() => {
+                setQuery(example);
+                void runSearch(undefined, example);
+              }}
+            >
+              {example}
+            </button>
           ))}
         </div>
       </form>
@@ -157,7 +175,7 @@ export function LiveComparison() {
         {state === "loading" && "Searching GEOscope and NCBI GEO…"}
         {state === "error" && <span>{error}</span>}
         {state === "idle" && "Ready for a live backend comparison."}
-        {state === "success" && data && `${data.geoscope.results.length} of ${data.geoscope.limit} requested GEOscope results compared with ${data.geo.results.length} NCBI GEO results.`}
+        {state === "success" && data && `${data.geoscope.results.length} GEOscope results compared with ${data.geo.results.length} NCBI GEO results.`}
       </div>
 
       {state === "success" && data && (
@@ -169,7 +187,16 @@ export function LiveComparison() {
             </div>
             <div className="result-column__header result-column__header--native">
               <div><span className="source-shape source-shape--geo" />NCBI GEO keyword search</div>
-              <span>{data.geo.count === null ? "unavailable" : `${data.geo.count.toLocaleString()} total`}</span>
+              <div className="native-search-actions">
+                <span>{data.geo.count === null ? "unavailable" : `${data.geo.count.toLocaleString()} total`}</span>
+                <a
+                  href={ncbiGeoSearchUrl(data.query)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open this search on NCBI GEO ↗
+                </a>
+              </div>
             </div>
           </div>
           <div className="comparison-results">

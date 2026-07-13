@@ -1,6 +1,3 @@
-import { McpInstall } from "./McpInstall";
-
-
 const capabilities = [
   {
     verb: "Search language and meaning",
@@ -40,7 +37,6 @@ export function CapabilityFlow() {
           </article>
         ))}
       </div>
-      <McpInstall />
     </section>
   );
 }

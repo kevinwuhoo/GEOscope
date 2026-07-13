@@ -1,6 +1,6 @@
-import { AccessionScope } from "./components/AccessionScope";
 import { CapabilityFlow } from "./components/CapabilityFlow";
 import { LiveComparison } from "./components/LiveComparison";
+import { McpInstall } from "./components/McpInstall";
 import { ResearcherExample } from "./components/ResearcherExample";
 
 import "./styles.css";
@@ -24,22 +24,17 @@ export default function App() {
           <span className="wordmark__geo">GEO</span><span>scope</span>
           <i aria-hidden="true" />
         </a>
-        <nav aria-label="Primary navigation">
-          <a href="#live-demo">Live proof</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#mcp">MCP for agents</a>
-        </nav>
         <a className="header-cta" href="#live-demo">Open live demo <span aria-hidden="true">↘</span></a>
       </header>
 
       <main id="main">
         <section className="hero" id="top" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <h1 id="hero-title">See what NCBI GEO search misses.</h1>
+            <h1 id="hero-title">See what searching NCBI GEO misses.</h1>
             <p className="hero-lede">
-              GEOscope turns inconsistent genomics metadata into precise,
-              ontology-aware discovery—so the study you need is not hidden behind
-              the words its submitter happened to use.
+              GEOscope finds the GEO studies you need by understanding the
+              biological meaning of your question, not just the exact words used in
+              a submission.
             </p>
             <div className="hero-actions">
               <a className="primary-cta" href="#live-demo">Try a live comparison <span aria-hidden="true">↓</span></a>
@@ -51,7 +46,7 @@ export default function App() {
               <div><strong>MCP</strong><span>agent-ready retrieval</span></div>
             </div>
           </div>
-          <AccessionScope />
+          <McpInstall />
         </section>
 
         <div className="signal-strip" aria-label="GEOscope capabilities" tabIndex={0}>

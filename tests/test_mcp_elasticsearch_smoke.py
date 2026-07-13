@@ -4,7 +4,6 @@ import os
 
 import pytest
 from fastmcp import Client
-from fastmcp.server.auth import AccessToken
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
 from geo_index.mcp_search_service import McpSearchService
@@ -22,30 +21,17 @@ def _settings() -> McpSettings:
     return McpSettings(
         elasticsearch=ElasticsearchSettings.from_env(),
         public_base_url="https://geo.test",
-        jwks_uri="https://issuer.test/jwks",
-        issuer="https://issuer.test/",
-        audience="geo-mcp-test",
-        authorization_server="https://issuer.test",
-        allowed_subjects=frozenset({"live-smoke"}),
         allowed_hosts=("geo.test",),
         allowed_origins=(),
         rate_per_second=1000,
         burst_capacity=100,
+        max_concurrent_requests=100,
     )
 
 
-async def test_live_elasticsearch_serves_all_three_mcp_tools(monkeypatch) -> None:
+async def test_live_elasticsearch_serves_all_three_mcp_tools() -> None:
     settings = _settings()
     service = McpSearchService.from_settings(settings)
-    token = AccessToken(
-        token="offline-live-smoke-token",
-        client_id="offline-live-smoke-client",
-        scopes=["geo:read"],
-        claims={"sub": "live-smoke"},
-    )
-    monkeypatch.setattr(
-        "fastmcp.server.middleware.authorization.get_access_token", lambda: token
-    )
     mcp = create_mcp(settings, service)
 
     async with Client(mcp) as client:
@@ -57,15 +43,14 @@ async def test_live_elasticsearch_serves_all_three_mcp_tools(monkeypatch) -> Non
             "facet_values", {"field": "organism_ids", "limit": 5}
         )
         assert facet.is_error is False
-        mode = os.environ.get("GEO_MCP_SMOKE_MODE", "bm25")
-        assert mode in {"bm25", "dense", "hybrid"}
         result = await client.call_tool(
             "search_datasets",
-            {"query": "cancer", "mode": mode, "limit": 3},
+            {"query": "cancer", "limit": 3},
         )
         assert result.is_error is False
-        assert result.structured_content["embedding_variant"] == (
-            None if mode == "bm25" else settings.elasticsearch.active_model_key
+        assert (
+            result.structured_content["embedding_variant"]
+            == settings.elasticsearch.active_model_key
         )
         rows = result.structured_content["results"]
         assert rows

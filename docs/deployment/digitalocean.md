@@ -132,6 +132,10 @@ to the `default-sfo3` VPC, with edge caching disabled and `/healthz` liveness.
 Set Google Gemini project quotas to at most 60 embedding requests/minute and
 5,000/day.
 
+The anonymous demo uses one process-wide token bucket at 100 requests/second
+with burst 100, plus a 20-request concurrency cap. These are global safeguards,
+not per-user quotas. MCP request bodies remain capped at 256 KB.
+
 ## 4. DNS and public verification
 
 If DNS is not managed by DigitalOcean, point the `geoscope` CNAME at the
@@ -144,7 +148,7 @@ curl --fail --silent https://geoscope.kevinformatics.com/healthz
 curl --fail --silent https://geoscope.kevinformatics.com/readyz
 curl --fail --silent https://geoscope.kevinformatics.com/ >/dev/null
 curl --fail --silent \
-  'https://geoscope.kevinformatics.com/api/demo/search?q=single%20cell&mode=hybrid&limit=3' \
+  'https://geoscope.kevinformatics.com/api/demo/search?q=single%20cell&limit=3' \
   >/dev/null
 ```
 

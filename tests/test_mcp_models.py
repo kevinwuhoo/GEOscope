@@ -187,7 +187,7 @@ def test_provenance_rejects_inconsistent_reranker_state(
 
 
 def test_search_input_bounds_and_forbids_unknown_fields() -> None:
-    assert SearchDatasetsInput(query="x").limit == 10
+    assert SearchDatasetsInput(query="x").limit == 15
     with pytest.raises(ValidationError):
         SearchDatasetsInput(query=" ", limit=15)
     with pytest.raises(ValidationError):
@@ -242,18 +242,20 @@ def test_filters_reject_more_than_twenty_values() -> None:
     assert all(properties[field]["maxItems"] == 20 for field in SearchFilters().as_dict())
 
 
-def test_query_mode_and_gse_are_strict_and_normalized() -> None:
+def test_query_gse_and_public_fields_are_strict_and_normalized() -> None:
     request = SearchDatasetsInput(query="  single cell RNA  ")
     assert request.query == "single cell RNA"
 
-    browse = FacetValuesInput(field="organism_ids", query="   ", mode="dense")
+    browse = FacetValuesInput(field="organism_ids", query="   ")
     assert browse.query is None
     assert GetDatasetInput(gse="  gse123 ").gse == "GSE123"
     for value in ("GSE0", "GSM123", "GSE-1", 123):
         with pytest.raises(ValidationError):
             GetDatasetInput(gse=value)
     with pytest.raises(ValidationError):
-        SearchDatasetsInput(query="x", mode="semantic")
+        SearchDatasetsInput(query="x", mode="hybrid")
+    with pytest.raises(ValidationError):
+        FacetValuesInput(field="organism_ids", mode="hybrid")
     with pytest.raises(ValidationError):
         FacetValuesInput(field="tissue_ids")
 
@@ -292,7 +294,6 @@ def test_outputs_have_exact_top_level_contracts() -> None:
     search = SearchDatasetsOutput(
         query="single cell RNA",
         filters=SearchFiltersInput(organism_ids=["NCBITaxon:9606"]),
-        mode="hybrid",
         limit=5,
         retrieval_version="geo-series-v1:gemini:embedding_gemini_3072:hybrid",
         embedding_variant="gemini_embedding_2_3072_v1",
@@ -303,7 +304,6 @@ def test_outputs_have_exact_top_level_contracts() -> None:
     assert set(search.model_dump(mode="json")) == {
         "query",
         "filters",
-        "mode",
         "limit",
         "retrieval_version",
         "embedding_variant",

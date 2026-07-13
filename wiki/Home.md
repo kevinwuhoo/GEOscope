@@ -45,6 +45,7 @@ This is an [[41-Open-Questions|Obsidian-style]] planning vault. Start at [[00-Ov
 
 ### The design
 - [[58-GEOscope-Marketing-and-Live-Demo]] — public identity, marketing narrative, React page, and FastAPI live-demo adapter
+- [[57-Canonical-Production-Pipeline]] — authoritative production commands, files, resume rules, and audits
 - [[20-Architecture-Overview]] — the whole system, end to end
 - [[21-Ingestion-Pipeline]] — GEOmetadb baseline plus the new stripped-SOFT canonical-record path
 - [[22-Ontology-Normalization]] — field→ontology map, the mapping cascade, RAG vs. IDs
