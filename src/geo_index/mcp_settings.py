@@ -114,10 +114,11 @@ def _strict_bool(env: Mapping[str, str], key: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class SearchQualitySettings:
-    openai_api_key: str | None = field(default=None, repr=False)
+    anthropic_api_key: str | None = field(default=None, repr=False)
     rerank_enabled: bool = False
-    rerank_model: str = "gpt-5.6-luna"
+    rerank_model: str = "claude-sonnet-5"
     reasoning_effort: str = "low"
+    thinking: str = "disabled"
     candidate_limit: int = 40
     rerank_timeout_seconds: float = 8.0
     ncbi_timeout_seconds: float = 5.0
@@ -129,23 +130,27 @@ class SearchQualitySettings:
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> SearchQualitySettings:
         enabled = _strict_bool(env, "GEO_RERANK_ENABLED", False)
-        api_key = env.get("OPENAI_API_KEY", "").strip() or None
+        api_key = env.get("ANTHROPIC_API_KEY", "").strip() or None
         if enabled and api_key is None:
-            raise ValueError("OPENAI_API_KEY is required when reranking is enabled")
-        model = env.get("GEO_RERANK_MODEL", "gpt-5.6-luna").strip()
-        if model != "gpt-5.6-luna":
-            raise ValueError("GEO_RERANK_MODEL must be gpt-5.6-luna")
-        effort = env.get("GEO_RERANK_REASONING_EFFORT", "low").strip().lower()
+            raise ValueError("ANTHROPIC_API_KEY is required when reranking is enabled")
+        model = env.get("GEO_RERANK_MODEL", "claude-sonnet-5").strip()
+        if model != "claude-sonnet-5":
+            raise ValueError("GEO_RERANK_MODEL must be claude-sonnet-5")
+        effort = env.get("GEO_RERANK_EFFORT", "low").strip()
         if effort != "low":
-            raise ValueError("GEO_RERANK_REASONING_EFFORT must be low")
+            raise ValueError("GEO_RERANK_EFFORT must be low")
+        thinking = env.get("GEO_RERANK_THINKING", "disabled").strip()
+        if thinking != "disabled":
+            raise ValueError("GEO_RERANK_THINKING must be disabled")
         candidate_limit = _positive_int(env, "GEO_RERANK_CANDIDATE_LIMIT", 40)
         if not 10 <= candidate_limit <= 100:
             raise ValueError("GEO_RERANK_CANDIDATE_LIMIT must be between 10 and 100")
         return cls(
-            openai_api_key=api_key,
+            anthropic_api_key=api_key,
             rerank_enabled=enabled,
             rerank_model=model,
             reasoning_effort=effort,
+            thinking=thinking,
             candidate_limit=candidate_limit,
             rerank_timeout_seconds=_positive_float(
                 env, "GEO_RERANK_TIMEOUT_SECONDS", 8.0

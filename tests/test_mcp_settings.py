@@ -18,32 +18,54 @@ def test_search_quality_defaults_are_bounded_and_disabled() -> None:
     quality = SearchQualitySettings.from_env({})
 
     assert quality.rerank_enabled is False
-    assert quality.openai_api_key is None
-    assert quality.rerank_model == "gpt-5.6-luna"
+    assert quality.anthropic_api_key is None
+    assert quality.rerank_model == "claude-sonnet-5"
     assert quality.reasoning_effort == "low"
+    assert quality.thinking == "disabled"
     assert quality.candidate_limit == 40
     assert quality.rerank_timeout_seconds == 8.0
     assert quality.ncbi_timeout_seconds == 5.0
 
 
-def test_enabled_reranker_requires_openai_key() -> None:
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+def test_enabled_reranker_requires_anthropic_key() -> None:
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
         SearchQualitySettings.from_env({"GEO_RERANK_ENABLED": "true"})
 
+
+def test_enabled_sonnet_settings_are_fixed_and_secret_is_redacted() -> None:
     quality = SearchQualitySettings.from_env(
-        {"GEO_RERANK_ENABLED": "true", "OPENAI_API_KEY": " secret "}
+        {
+            "GEO_RERANK_ENABLED": "true",
+            "ANTHROPIC_API_KEY": " secret ",
+            "GEO_RERANK_MODEL": "claude-sonnet-5",
+            "GEO_RERANK_EFFORT": "low",
+            "GEO_RERANK_THINKING": "disabled",
+        }
     )
-    assert quality.rerank_enabled is True
-    assert quality.openai_api_key == "secret"
+    assert quality.anthropic_api_key == "secret"
+    assert quality.rerank_model == "claude-sonnet-5"
+    assert quality.reasoning_effort == "low"
+    assert quality.thinking == "disabled"
     assert "secret" not in repr(quality)
 
 
 @pytest.mark.parametrize(
     ("key", "value"),
     [
+        ("GEO_RERANK_MODEL", "gpt-5.6-luna"),
+        ("GEO_RERANK_EFFORT", "medium"),
+        ("GEO_RERANK_THINKING", "enabled"),
+    ],
+)
+def test_sonnet_settings_reject_unapproved_values(key: str, value: str) -> None:
+    with pytest.raises(ValueError):
+        SearchQualitySettings.from_env({key: value})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
         ("GEO_RERANK_ENABLED", "yes"),
-        ("GEO_RERANK_MODEL", "gpt-5.6-sol"),
-        ("GEO_RERANK_REASONING_EFFORT", "medium"),
         ("GEO_RERANK_CANDIDATE_LIMIT", "9"),
         ("GEO_RERANK_CANDIDATE_LIMIT", "101"),
         ("GEO_RERANK_TIMEOUT_SECONDS", "0"),
@@ -60,9 +82,10 @@ def test_mcp_settings_wires_search_quality_from_env() -> None:
         VALID
         | {
             "GEO_RERANK_ENABLED": "true",
-            "OPENAI_API_KEY": " nested-secret ",
-            "GEO_RERANK_MODEL": "gpt-5.6-luna",
-            "GEO_RERANK_REASONING_EFFORT": "LOW",
+            "ANTHROPIC_API_KEY": " nested-secret ",
+            "GEO_RERANK_MODEL": "claude-sonnet-5",
+            "GEO_RERANK_EFFORT": "low",
+            "GEO_RERANK_THINKING": "disabled",
             "GEO_RERANK_CANDIDATE_LIMIT": "64",
             "GEO_RERANK_TIMEOUT_SECONDS": "3.5",
             "GEO_NCBI_TIMEOUT_SECONDS": "2.25",
@@ -70,9 +93,10 @@ def test_mcp_settings_wires_search_quality_from_env() -> None:
     )
 
     assert settings.search_quality.rerank_enabled is True
-    assert settings.search_quality.openai_api_key == "nested-secret"
-    assert settings.search_quality.rerank_model == "gpt-5.6-luna"
+    assert settings.search_quality.anthropic_api_key == "nested-secret"
+    assert settings.search_quality.rerank_model == "claude-sonnet-5"
     assert settings.search_quality.reasoning_effort == "low"
+    assert settings.search_quality.thinking == "disabled"
     assert settings.search_quality.candidate_limit == 64
     assert settings.search_quality.rerank_timeout_seconds == 3.5
     assert settings.search_quality.ncbi_timeout_seconds == 2.25
