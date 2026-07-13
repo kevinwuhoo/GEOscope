@@ -211,17 +211,20 @@ def test_truncated_facet_vocabulary_fails_closed() -> None:
     assert not service.is_open
 
 
-def test_bm25_does_not_construct_query_encoder_but_dense_does() -> None:
+def test_public_search_always_uses_hybrid_retrieval() -> None:
     encoder = _Encoder()
-    responses = [_response(mode="bm25"), _response(mode="dense")]
+    responses = [_response(mode="hybrid")]
     service, _, _, _, domain = _service(encoder=encoder, responses=responses)
     service.open()
 
-    service.search_datasets(query="immune", filters=SearchFilters(), mode="bm25", limit=5)
-    assert encoder.queries == []
-    service.search_datasets(query="immune", filters=SearchFilters(), mode="dense", limit=5)
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), limit=5
+    )
+
+    assert domain().calls[0]["mode"] == "hybrid"
+    assert domain().calls[0]["topk"] == 5
     assert encoder.queries == ["immune"]
-    assert domain().calls[1]["topk"] == 5
+    assert output.embedding_variant == "gemini_embedding_2_3072_v1"
     service.close()
     assert encoder.closed
 
@@ -236,10 +239,12 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
             )
         }
     )
-    service, _, _, _, _ = _service(client=client)
+    service, _, _, _, _ = _service(
+        client=client, responses=[_response(mode="hybrid")]
+    )
     service.open()
     output = service.search_datasets(
-        query="immune", filters=SearchFilters(), mode="bm25", limit=5
+        query="immune", filters=SearchFilters(), limit=5
     )
 
     assert output.results[0].gse == "GSE123"
@@ -251,9 +256,9 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
     assert output.results[0].truncated_fields == ["assay_labels", "snippet", "title"]
     assert output.retrieval_version == (
         "geo-series-v1:gemini_embedding_2_3072_v1:"
-        "embedding_gemini_3072:bm25"
+        "embedding_gemini_3072:hybrid"
     )
-    assert output.embedding_variant is None
+    assert output.embedding_variant == "gemini_embedding_2_3072_v1"
     assert set(output.facets) == set(FACET_FIELDS)
 
 
@@ -275,30 +280,36 @@ def test_unknown_filter_is_rejected_before_search() -> None:
         service.search_datasets(
             query="immune",
             filters=SearchFilters(organism_ids=("NCBITaxon:10090",)),
-            mode="bm25",
             limit=5,
         )
     assert domain().calls == []
 
 
-def test_facet_values_supports_blank_and_nonblank_queries() -> None:
+def test_facet_values_use_filter_only_for_blank_and_hybrid_for_query() -> None:
+    encoder = _Encoder()
     blank = SearchResponse(hits=(), facets=_facets("all_matches"), provenance=None)
-    service, _, _, _, domain = _service(responses=[blank, _response(mode="hybrid")])
+    service, _, _, _, domain = _service(
+        encoder=encoder,
+        responses=[blank, _response(mode="hybrid")],
+    )
     service.open()
 
     all_values = service.facet_values(
-        field="organism_ids", query=None, filters=SearchFilters(), mode="hybrid", limit=10
+        field="organism_ids", query=None, filters=SearchFilters(), limit=10
     )
     assert all_values.scope == "all_matches"
     assert all_values.retrieval_version == "facet-all-matches-v1"
     assert all_values.embedding_variant is None
 
     candidates = service.facet_values(
-        field="organism_ids", query="immune", filters=SearchFilters(), mode="hybrid", limit=10
+        field="organism_ids", query="immune", filters=SearchFilters(), limit=10
     )
     assert candidates.scope == "candidate_pool"
     assert candidates.embedding_variant == "gemini_embedding_2_3072_v1"
     assert domain().calls[0]["query"] == ""
+    assert domain().calls[0]["mode"] == "bm25"
+    assert domain().calls[1]["mode"] == "hybrid"
+    assert encoder.queries == ["immune"]
 
 
 def test_ping_requires_open_service_and_rechecks_readiness() -> None:

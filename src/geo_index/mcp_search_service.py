@@ -281,7 +281,7 @@ class McpSearchService:
 
     @staticmethod
     def _validate_search_request(
-        query: str, filters: SearchFilters, mode: str, limit: int
+        query: str, filters: SearchFilters, limit: int
     ) -> str:
         if not isinstance(query, str):
             raise TypeError("query must be a string")
@@ -290,8 +290,6 @@ class McpSearchService:
             raise ValueError("query must contain between 1 and 1,000 characters")
         if not isinstance(filters, SearchFilters):
             raise TypeError("filters must be SearchFilters")
-        if mode not in {"hybrid", "bm25", "dense"}:
-            raise ValueError(f"unsupported retrieval mode: {mode}")
         if type(limit) is not int or not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
         return normalized
@@ -361,15 +359,15 @@ class McpSearchService:
         )
 
     def search_datasets(
-        self, *, query: str, filters: SearchFilters, mode: str, limit: int
+        self, *, query: str, filters: SearchFilters, limit: int
     ) -> SearchDatasetsOutput:
-        query = self._validate_search_request(query, filters, mode, limit)
+        query = self._validate_search_request(query, filters, limit)
         self._require_filters(filters)
         client, search = self._require_open()
         response = search.search(
             query,
             filters=filters,
-            mode=mode,
+            mode="hybrid",
             topk=limit,
             bucket_limit=50,
         )
@@ -396,12 +394,10 @@ class McpSearchService:
         return SearchDatasetsOutput(
             query=query,
             filters=SearchFiltersInput(**filters.as_dict()),
-            mode=mode,
+            mode="hybrid",
             limit=limit,
             retrieval_version=_retrieval_version(response.provenance),
-            embedding_variant=(
-                None if mode == "bm25" else self.elasticsearch.active_model_key
-            ),
+            embedding_variant=self.elasticsearch.active_model_key,
             results=summaries,
             facets=facets,
         )
@@ -436,7 +432,6 @@ class McpSearchService:
         field: FacetField,
         query: str | None,
         filters: SearchFilters,
-        mode: str,
         limit: int,
     ) -> FacetValuesOutput:
         if field not in FACET_FIELDS:
@@ -448,7 +443,7 @@ class McpSearchService:
             raise ValueError("query must contain at most 1,000 characters")
         self._require_filters(filters)
         _, search = self._require_open()
-        effective_mode = mode if normalized_query else "bm25"
+        effective_mode = "hybrid" if normalized_query else "bm25"
         response = search.search(
             normalized_query,
             filters=filters,
@@ -472,7 +467,7 @@ class McpSearchService:
             ),
             embedding_variant=(
                 self.elasticsearch.active_model_key
-                if normalized_query and mode != "bm25"
+                if normalized_query
                 else None
             ),
         )
