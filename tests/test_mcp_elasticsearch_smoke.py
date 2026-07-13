@@ -69,6 +69,17 @@ async def test_live_elasticsearch_serves_all_three_mcp_tools(monkeypatch) -> Non
         )
         rows = result.structured_content["results"]
         assert rows
+        exact = await client.call_tool(
+            "search_datasets",
+            {"query": f"  {rows[0]['gse'].lower()}  ", "mode": mode, "limit": 3},
+        )
+        assert exact.is_error is False
+        assert [row["gse"] for row in exact.structured_content["results"]] == [
+            rows[0]["gse"]
+        ]
+        assert exact.structured_content["provenance"]["exact_accession"] is True
+        assert exact.structured_content["provenance"]["rerank_attempted"] is False
+        assert exact.structured_content["embedding_variant"] is None
         detail = await client.call_tool("get_dataset", {"gse": rows[0]["gse"]})
         assert detail.is_error is False
         assert detail.structured_content["found"] is True

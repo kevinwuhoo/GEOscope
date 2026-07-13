@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,14 @@ from geo_index.mcp_search_service import (
     McpSearchService,
     UnknownFilterValueError,
 )
+from geo_index.mcp_settings import SearchQualitySettings
+from geo_index.ncbi_search import NativeSearchResult
+from geo_index.reranker import (
+    InvalidRerankOutputError,
+    RerankRefusalError,
+    RerankResult,
+)
+from geo_index.search_candidates import SearchCandidate
 from geo_index.search_models import (
     FACET_FIELDS,
     FacetBucket,
@@ -24,6 +34,8 @@ SETTINGS = ElasticsearchSettings(
     api_key="secret",
     active_model_key="gemini_embedding_2_3072_v1",
 )
+
+_UNSET = object()
 
 
 def _document(gse: str = "GSE123", **overrides: object) -> dict[str, object]:
@@ -74,22 +86,141 @@ def _response(*, mode: str = "bm25", hits: tuple[dict[str, object], ...] | None 
     )
 
 
+def _native_candidate(gse: str, rank: int, **overrides: object) -> SearchCandidate:
+    values: dict[str, object] = {
+        "gse": gse,
+        "title": f"Native {gse}",
+        "snippet": "Native study summary",
+        "study_type": "Expression profiling",
+        "n_samples": None,
+        "pubmed_id": None,
+        "organism_ids": ("NCBITaxon:9606",),
+        "organism_status": "mapped",
+        "sex_ids": (),
+        "sex_status": "unavailable",
+        "assay_categories": ("transcriptomics",),
+        "assay_labels": ("RNA-seq",),
+        "assay_status": "mapped",
+        "source": "ncbi",
+        "retrieval_score": None,
+        "original_rank": None,
+        "native_rank": rank,
+        "taxon": "Homo sapiens",
+    }
+    values.update(overrides)
+    return SearchCandidate(**values)  # type: ignore[arg-type]
+
+
+class FakeNativeSource:
+    def __init__(
+        self,
+        *,
+        exact: SearchCandidate | None = None,
+        search_result: NativeSearchResult | None = None,
+        error: Exception | None = None,
+        on_search=None,
+        close_events: list[str] | None = None,
+    ) -> None:
+        self.exact = exact
+        self.search_result = search_result or NativeSearchResult(count=0, candidates=())
+        self.error = error
+        self.on_search = on_search
+        self.search_calls: list[tuple[str, int]] = []
+        self.lookup_calls: list[str] = []
+        self.closed = False
+        self.close_events = close_events
+
+    def search(self, query: str, limit: int = 20) -> NativeSearchResult:
+        self.search_calls.append((query, limit))
+        if self.on_search is not None:
+            self.on_search()
+        if self.error is not None:
+            raise self.error
+        return self.search_result
+
+    def lookup(self, gse: str) -> SearchCandidate | None:
+        self.lookup_calls.append(gse)
+        if self.error is not None:
+            raise self.error
+        return self.exact
+
+    def close(self) -> None:
+        self.closed = True
+        if self.close_events is not None:
+            self.close_events.append("ncbi")
+
+
+class FakeReranker:
+    model = "gpt-5.6-luna"
+    reasoning_effort = "low"
+
+    def __init__(
+        self,
+        *,
+        scores: dict[str, int] | None = None,
+        error: Exception | None = None,
+        close_error: Exception | None = None,
+        close_events: list[str] | None = None,
+    ) -> None:
+        self.scores = scores
+        self.error = error
+        self.close_error = close_error
+        self.rerank_calls: list[tuple[str, tuple[SearchCandidate, ...], int]] = []
+        self.closed = False
+        self.close_events = close_events
+
+    def rerank(
+        self, query: str, candidates: tuple[SearchCandidate, ...], *, limit: int
+    ) -> RerankResult:
+        self.rerank_calls.append((query, tuple(candidates), limit))
+        if self.error is not None:
+            raise self.error
+        scores = self.scores or {
+            candidate.gse: len(candidates) - index
+            for index, candidate in enumerate(candidates)
+        }
+        return RerankResult(scores=scores, input_tokens=123, output_tokens=45)
+
+    def close(self) -> None:
+        self.closed = True
+        if self.close_events is not None:
+            self.close_events.append("reranker")
+        if self.close_error is not None:
+            raise self.close_error
+
+
 class _Client:
-    def __init__(self, documents: dict[str, dict[str, object]] | None = None) -> None:
-        self.documents = documents or {"GSE123": _document()}
+    def __init__(
+        self,
+        documents: dict[str, dict[str, object]] | None = None,
+        *,
+        facet_values: dict[str, tuple[str, ...]] | None = None,
+        close_events: list[str] | None = None,
+    ) -> None:
+        self.documents = documents or {
+            **{f"GSE{i}": _document(f"GSE{i}") for i in range(1, 41)},
+            "GSE123": _document(),
+        }
+        self.facet_values = facet_values or {
+            "organism_ids": ("NCBITaxon:9606",),
+            "sex_ids": ("PATO:0000383",),
+            "assay_categories": ("transcriptomics",),
+            "assay_labels": ("scRNA-seq",),
+        }
         self.closed = False
         self.search_calls: list[dict[str, object]] = []
+        self.close_events = close_events
 
     def search(self, **kwargs: object) -> dict[str, object]:
         self.search_calls.append(kwargs)
         aggregations = {
-            field: {"buckets": [{"key": value, "doc_count": 1}]}
-            for field, value in {
-                "organism_ids": "NCBITaxon:9606",
-                "sex_ids": "PATO:0000383",
-                "assay_categories": "transcriptomics",
-                "assay_labels": "scRNA-seq",
-            }.items()
+            field: {
+                "buckets": [
+                    {"key": value, "doc_count": 1}
+                    for value in self.facet_values[field]
+                ]
+            }
+            for field in FACET_FIELDS
         }
         return {"aggregations": aggregations}
 
@@ -104,22 +235,46 @@ class _Client:
 
     def close(self) -> None:
         self.closed = True
+        if self.close_events is not None:
+            self.close_events.append("client")
 
 
 class _DomainSearch:
-    def __init__(self, encode_query, responses: list[SearchResponse] | None = None):
+    def __init__(
+        self,
+        encode_query,
+        responses: list[SearchResponse] | None = None,
+        *,
+        exact_document: object = _UNSET,
+        on_search=None,
+    ):
         self.encode_query = encode_query
-        self.responses = list(responses or [_response()])
-        self.calls: list[dict[str, object]] = []
+        default_hits = tuple(
+            {"gse": f"GSE{i}", "score": 1 - i / 100} for i in range(1, 41)
+        )
+        self.responses = list(responses or [_response(hits=default_hits)])
+        self.exact_document = (
+            _document() if exact_document is _UNSET else exact_document
+        )
+        self.on_search = on_search
+        self.search_calls: list[dict[str, object]] = []
 
     def search(self, query: str, **kwargs: object) -> SearchResponse:
-        self.calls.append({"query": query, **kwargs})
+        self.search_calls.append({"query": query, **kwargs})
+        if self.on_search is not None:
+            self.on_search()
         if kwargs["mode"] != "bm25":
             self.encode_query(query)
         return self.responses.pop(0)
 
     def get_dataset(self, gse: str) -> dict[str, object] | None:
-        return _document(gse) if gse == "GSE123" else None
+        if not isinstance(self.exact_document, dict):
+            return None
+        return (
+            dict(self.exact_document)
+            if self.exact_document.get("gse") == gse
+            else None
+        )
 
 
 class _Encoder:
@@ -140,16 +295,32 @@ def _service(
     client: _Client | None = None,
     encoder: _Encoder | None = None,
     responses: list[SearchResponse] | None = None,
+    exact_document: object = _UNSET,
+    native: FakeNativeSource | None = None,
+    reranker: FakeReranker | None = None,
+    domain_on_search=None,
+    facet_values: dict[str, tuple[str, ...]] | None = None,
+    quality: SearchQualitySettings | None = None,
 ):
-    active_client = client or _Client()
+    active_client = client or _Client(facet_values=facet_values)
     active_encoder = encoder or _Encoder()
+    active_native = native or FakeNativeSource()
     readiness_calls: list[tuple[object, str]] = []
-    domain: _DomainSearch | None = None
+    domain = _DomainSearch(
+        active_encoder.encode,
+        responses,
+        exact_document=exact_document,
+        on_search=domain_on_search,
+    )
 
     def search_factory(client, *, active_model_key, encode_query):
-        nonlocal domain
-        domain = _DomainSearch(encode_query, responses)
+        domain.encode_query = encode_query
         return domain
+
+    active_quality = quality or SearchQualitySettings(
+        openai_api_key="test-key" if reranker is not None else None,
+        rerank_enabled=reranker is not None,
+    )
 
     service = McpSearchService(
         elasticsearch=SETTINGS,
@@ -157,12 +328,15 @@ def _service(
         query_encoder_factory=lambda key: active_encoder,
         search_service_factory=search_factory,
         readiness_check=lambda client, key: readiness_calls.append((client, key)),
+        quality=active_quality,
+        ncbi_source_factory=lambda timeout: active_native,
+        reranker_factory=(lambda settings: reranker) if reranker is not None else None,
     )
-    return service, active_client, active_encoder, readiness_calls, lambda: domain
+    return service, active_client, domain, active_encoder, readiness_calls
 
 
 def test_open_validates_readiness_loads_fixed_vocabulary_and_close_is_idempotent() -> None:
-    service, client, encoder, readiness_calls, _ = _service()
+    service, client, _, encoder, readiness_calls = _service()
     service.open()
 
     assert service.is_open
@@ -191,6 +365,78 @@ def test_startup_failure_closes_client_and_leaves_service_closed() -> None:
     assert not service.is_open
 
 
+def test_open_and_close_own_ncbi_and_enabled_reranker_resources() -> None:
+    events: list[str] = []
+    client = _Client(close_events=events)
+    native = FakeNativeSource(close_events=events)
+    reranker = FakeReranker(close_events=events)
+    service, _, _, encoder, _ = _service(
+        client=client, native=native, reranker=reranker
+    )
+
+    service.open()
+    assert service._ncbi_source is native
+    assert service._reranker is reranker
+
+    service.close()
+    service.close()
+
+    assert events == ["reranker", "ncbi", "client"]
+    assert not encoder.closed
+    assert service._ncbi_source is None
+    assert service._reranker is None
+
+
+def test_reranker_startup_failure_closes_ncbi_and_client() -> None:
+    events: list[str] = []
+    client = _Client(close_events=events)
+    native = FakeNativeSource(close_events=events)
+    quality = SearchQualitySettings(openai_api_key="test-key", rerank_enabled=True)
+    service = McpSearchService(
+        elasticsearch=SETTINGS,
+        client_factory=lambda settings: client,
+        search_service_factory=lambda client, **kwargs: _DomainSearch(
+            kwargs["encode_query"]
+        ),
+        readiness_check=lambda client, key: None,
+        quality=quality,
+        ncbi_source_factory=lambda timeout: native,
+        reranker_factory=lambda settings: (_ for _ in ()).throw(
+            RuntimeError("reranker startup failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="reranker startup failed"):
+        service.open()
+
+    assert events == ["ncbi", "client"]
+    assert not service.is_open
+    assert service._ncbi_source is None
+    assert service._reranker is None
+
+
+def test_close_attempts_every_resource_when_reranker_close_fails() -> None:
+    events: list[str] = []
+    client = _Client(close_events=events)
+    native = FakeNativeSource(close_events=events)
+    reranker = FakeReranker(
+        close_events=events,
+        close_error=RuntimeError("reranker close failed"),
+    )
+    service, _, _, _, _ = _service(
+        client=client,
+        native=native,
+        reranker=reranker,
+    )
+    service.open()
+
+    with pytest.raises(RuntimeError, match="reranker close failed"):
+        service.close()
+
+    assert events == ["reranker", "ncbi", "client"]
+    assert not service.is_open
+
+
 def test_truncated_facet_vocabulary_fails_closed() -> None:
     class TruncatedClient(_Client):
         def search(self, **kwargs: object) -> dict[str, object]:
@@ -214,14 +460,14 @@ def test_truncated_facet_vocabulary_fails_closed() -> None:
 def test_bm25_does_not_construct_query_encoder_but_dense_does() -> None:
     encoder = _Encoder()
     responses = [_response(mode="bm25"), _response(mode="dense")]
-    service, _, _, _, domain = _service(encoder=encoder, responses=responses)
+    service, _, domain, _, _ = _service(encoder=encoder, responses=responses)
     service.open()
 
     service.search_datasets(query="immune", filters=SearchFilters(), mode="bm25", limit=5)
     assert encoder.queries == []
     service.search_datasets(query="immune", filters=SearchFilters(), mode="dense", limit=5)
     assert encoder.queries == ["immune"]
-    assert domain().calls[1]["topk"] == 5
+    assert domain.search_calls[1]["topk"] == 40
     service.close()
     assert encoder.closed
 
@@ -236,7 +482,10 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
             )
         }
     )
-    service, _, _, _, _ = _service(client=client)
+    service, _, _, _, _ = _service(
+        client=client,
+        responses=[_response(hits=({"gse": "GSE123", "score": 0.75},))],
+    )
     service.open()
     output = service.search_datasets(
         query="immune", filters=SearchFilters(), mode="bm25", limit=5
@@ -257,6 +506,258 @@ def test_search_hydrates_ranked_hits_maps_provenance_and_bounds_output() -> None
     assert set(output.facets) == set(FACET_FIELDS)
 
 
+def test_exact_indexed_gse_bypasses_embedding_search_ncbi_and_reranking() -> None:
+    service, _, domain, encoder, _ = _service(
+        exact_document=_document("GSE310900"),
+        native=FakeNativeSource(),
+        reranker=FakeReranker(),
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="  gse310900 ", filters=SearchFilters(), mode="hybrid", limit=10
+    )
+
+    assert [result.gse for result in output.results] == ["GSE310900"]
+    assert output.results[0].source == "elasticsearch"
+    assert output.provenance.exact_accession is True
+    assert domain.search_calls == []
+    assert encoder.queries == []
+    assert service._ncbi_source.lookup_calls == []
+    assert service._reranker.rerank_calls == []
+    assert output.retrieval_version == "geo-series-v1:exact-accession"
+    assert output.embedding_variant is None
+
+
+def test_exact_gse_missing_locally_uses_ncbi_without_reranking() -> None:
+    native = FakeNativeSource(exact=_native_candidate("GSE310900", 1))
+    service, _, domain, encoder, _ = _service(
+        exact_document=None,
+        native=native,
+        reranker=FakeReranker(),
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="GSE310900", filters=SearchFilters(), mode="hybrid", limit=10
+    )
+
+    assert output.results[0].source == "ncbi"
+    assert output.results[0].gse == "GSE310900"
+    assert native.lookup_calls == ["GSE310900"]
+    assert domain.search_calls == []
+    assert encoder.queries == []
+    assert service._reranker.rerank_calls == []
+    assert output.retrieval_version == "ncbi-gds:exact-accession-v1"
+
+
+def test_exact_ncbi_record_that_cannot_prove_filter_returns_no_results() -> None:
+    native = FakeNativeSource(exact=_native_candidate("GSE310900", 1))
+    service, _, domain, _, _ = _service(
+        exact_document=None,
+        native=native,
+        reranker=FakeReranker(),
+        facet_values={
+            "organism_ids": ("NCBITaxon:9606",),
+            "sex_ids": ("PATO:0000383", "PATO:0000384"),
+            "assay_categories": ("transcriptomics",),
+            "assay_labels": ("scRNA-seq",),
+        },
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="GSE310900",
+        filters=SearchFilters(sex_ids=("PATO:0000384",)),
+        mode="hybrid",
+        limit=10,
+    )
+
+    assert output.results == []
+    assert output.provenance.exact_accession is True
+    assert output.provenance.merged_candidates == 0
+    assert output.facets["sex_ids"].candidate_count == 0
+    assert native.lookup_calls == ["GSE310900"]
+    assert domain.search_calls == []
+    assert output.retrieval_version == "ncbi-gds:exact-accession-v1"
+
+
+def test_exact_lookup_failure_is_bounded_and_fails_open() -> None:
+    native = FakeNativeSource(error=TimeoutError("provider secret"))
+    service, _, _, _, _ = _service(exact_document=None, native=native)
+    service.open()
+
+    output = service.search_datasets(
+        query="GSE310900", filters=SearchFilters(), mode="bm25", limit=10
+    )
+
+    assert output.results == []
+    assert output.retrieval_version == "geo-series-v1:exact-accession-miss"
+    assert output.provenance.degradation == ["ncbi_timeout"]
+    assert output.provenance.ncbi_candidates == 0
+    assert native.lookup_calls == ["GSE310900"]
+
+
+def test_exact_facets_respect_the_transport_bucket_bound() -> None:
+    labels = [f"label-{index}" for index in range(60)]
+    service, _, _, _, _ = _service(
+        exact_document=_document("GSE310900", assay_labels=labels)
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="GSE310900", filters=SearchFilters(), mode="bm25", limit=10
+    )
+
+    assert len(output.facets["assay_labels"].buckets) == 50
+    assert output.facets["assay_labels"].candidate_count == 1
+
+
+def test_natural_search_requests_deep_pool_merges_and_reranks_top_ten() -> None:
+    native = FakeNativeSource(
+        search_result=NativeSearchResult(
+            count=1,
+            candidates=(_native_candidate("GSE999999", 1),),
+        )
+    )
+    reranker = FakeReranker(
+        scores={"GSE999999": 100, **{f"GSE{i}": 50 - i for i in range(1, 41)}}
+    )
+    service, _, domain, _, _ = _service(native=native, reranker=reranker)
+    service.open()
+
+    execution = service.search_execution(
+        query="mouse exercise",
+        filters=SearchFilters(),
+        mode="hybrid",
+        limit=10,
+    )
+
+    assert domain.search_calls[0]["topk"] == 40
+    assert native.search_calls == [("mouse exercise", 20)]
+    assert len(execution.output.results) == 10
+    assert execution.output.results[0].gse == "GSE999999"
+    assert execution.output.results[0].source == "ncbi"
+    assert execution.output.results[0].score == 100
+    assert execution.output.provenance.rerank_applied is True
+    assert execution.output.provenance.rerank_model == "gpt-5.6-luna"
+    assert execution.output.provenance.rerank_reasoning_effort == "low"
+    assert execution.output.provenance.rerank_input_tokens == 123
+    assert execution.output.provenance.rerank_output_tokens == 45
+    assert execution.native is native.search_result
+    assert len(execution.candidates) == 41
+
+
+def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
+    service, _, _, _, _ = _service(
+        native=FakeNativeSource(error=TimeoutError("NCBI timeout")),
+        reranker=FakeReranker(error=RuntimeError("OpenAI unavailable")),
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), mode="hybrid", limit=10
+    )
+
+    assert [result.original_rank for result in output.results] == list(range(1, 11))
+    assert output.provenance.rerank_applied is False
+    assert output.provenance.rerank_attempted is True
+    assert output.provenance.rerank_model == "gpt-5.6-luna"
+    assert output.provenance.rerank_input_tokens == 0
+    assert output.provenance.rerank_output_tokens == 0
+    assert output.provenance.degradation == ["ncbi_timeout", "rerank_error"]
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (TimeoutError("slow"), "rerank_timeout"),
+        (RerankRefusalError("refused"), "rerank_refusal"),
+        (InvalidRerankOutputError("bad ids"), "rerank_invalid"),
+    ],
+)
+def test_every_untrusted_reranker_result_discards_the_model_order(
+    error: Exception, category: str
+) -> None:
+    service, _, _, _, _ = _service(
+        native=FakeNativeSource(), reranker=FakeReranker(error=error)
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), mode="hybrid", limit=10
+    )
+
+    assert [result.original_rank for result in output.results] == list(range(1, 11))
+    assert output.provenance.rerank_applied is False
+    assert output.provenance.degradation == [category]
+
+
+def test_natural_sources_start_concurrently() -> None:
+    barrier = threading.Barrier(2, timeout=1)
+    native = FakeNativeSource(on_search=barrier.wait)
+    service, _, _, _, _ = _service(
+        domain_on_search=barrier.wait,
+        native=native,
+        reranker=FakeReranker(),
+    )
+    service.open()
+
+    service.search_datasets(
+        query="immune", filters=SearchFilters(), mode="hybrid", limit=10
+    )
+
+    assert native.search_calls == [("immune", 20)]
+
+
+def test_elasticsearch_candidate_text_and_arrays_are_bounded_before_reranking() -> None:
+    documents = {
+        gse: _document(
+            gse,
+            title="t" * 600,
+            summary="s" * 1200,
+            type="y" * 300,
+            organism_ids=["o" * 300] * 110,
+            organism_status="m" * 300,
+            sex_ids=["x" * 300] * 110,
+            sex_status="u" * 300,
+            assay_categories=["c" * 300] * 110,
+            assay_labels=["l" * 300] * 110,
+            assay_status="a" * 300,
+        )
+        for gse in ("GSE1", "GSE2")
+    }
+    hits = (
+        {"gse": "GSE1", "score": 0.9},
+        {"gse": "GSE2", "score": 0.8},
+    )
+    reranker = FakeReranker(scores={"GSE1": 2, "GSE2": 1})
+    service, _, _, _, _ = _service(
+        client=_Client(documents),
+        responses=[_response(hits=hits)],
+        reranker=reranker,
+    )
+    service.open()
+
+    output = service.search_datasets(
+        query="immune", filters=SearchFilters(), mode="bm25", limit=10
+    )
+
+    candidates = reranker.rerank_calls[0][1]
+    assert len(candidates[0].title or "") == 500
+    assert len(candidates[0].snippet or "") == 1000
+    assert len(candidates[0].study_type or "") == 200
+    assert len(candidates[0].organism_ids) == 100
+    assert len(candidates[0].organism_ids[0]) == 256
+    assert len(candidates[0].organism_status or "") == 256
+    assert len(candidates[0].sex_ids) == 100
+    assert len(candidates[0].assay_categories) == 100
+    assert len(candidates[0].assay_labels) == 100
+    assert len(candidates[0].assay_status or "") == 256
+    assert "title" in output.results[0].truncated_fields
+    assert "snippet" in output.results[0].truncated_fields
+
+
 def test_exact_lookup_maps_urls_pubmed_and_missing() -> None:
     service, _, _, _, _ = _service()
     service.open()
@@ -269,7 +770,7 @@ def test_exact_lookup_maps_urls_pubmed_and_missing() -> None:
 
 
 def test_unknown_filter_is_rejected_before_search() -> None:
-    service, _, _, _, domain = _service()
+    service, _, domain, _, _ = _service()
     service.open()
     with pytest.raises(UnknownFilterValueError, match="unknown organism_ids"):
         service.search_datasets(
@@ -278,12 +779,12 @@ def test_unknown_filter_is_rejected_before_search() -> None:
             mode="bm25",
             limit=5,
         )
-    assert domain().calls == []
+    assert domain.search_calls == []
 
 
 def test_facet_values_supports_blank_and_nonblank_queries() -> None:
     blank = SearchResponse(hits=(), facets=_facets("all_matches"), provenance=None)
-    service, _, _, _, domain = _service(responses=[blank, _response(mode="hybrid")])
+    service, _, domain, _, _ = _service(responses=[blank, _response(mode="hybrid")])
     service.open()
 
     all_values = service.facet_values(
@@ -298,11 +799,11 @@ def test_facet_values_supports_blank_and_nonblank_queries() -> None:
     )
     assert candidates.scope == "candidate_pool"
     assert candidates.embedding_variant == "gemini_embedding_2_3072_v1"
-    assert domain().calls[0]["query"] == ""
+    assert domain.search_calls[0]["query"] == ""
 
 
 def test_ping_requires_open_service_and_rechecks_readiness() -> None:
-    service, client, _, readiness_calls, _ = _service()
+    service, client, _, _, readiness_calls = _service()
     with pytest.raises(RuntimeError, match="not open"):
         service.ping()
     service.open()
