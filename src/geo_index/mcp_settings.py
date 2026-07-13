@@ -85,20 +85,25 @@ def _validated_origin(value: str) -> str:
     return _https_url(value, key="GEO_MCP_ALLOWED_ORIGINS", origin_only=True)
 
 
+def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:
+    try:
+        value = int(env.get(key, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if value <= 0:
+        raise ValueError(f"{key} must be positive")
+    return value
+
+
 @dataclass(frozen=True)
 class McpSettings:
     elasticsearch: ElasticsearchSettings = field(repr=False)
     public_base_url: str
-    jwks_uri: str
-    issuer: str
-    audience: str
-    authorization_server: str
-    allowed_subjects: frozenset[str] = field(repr=False)
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
-    rate_per_second: float = 5.0
-    burst_capacity: int = 10
-    required_scope: str = "geo:read"
+    rate_per_second: float = 1.0
+    burst_capacity: int = 5
+    max_concurrent_requests: int = 4
 
     @property
     def mcp_url(self) -> str:
@@ -113,27 +118,6 @@ class McpSettings:
             _required(env, "GEO_MCP_PUBLIC_BASE_URL"),
             key="GEO_MCP_PUBLIC_BASE_URL",
             origin_only=True,
-        )
-        jwks_uri = _https_url(
-            _required(env, "GEO_MCP_JWKS_URI"),
-            key="GEO_MCP_JWKS_URI",
-            origin_only=False,
-        )
-        issuer = _https_url(
-            _required(env, "GEO_MCP_ISSUER"),
-            key="GEO_MCP_ISSUER",
-            origin_only=False,
-        )
-        audience = _required(env, "GEO_MCP_AUDIENCE")
-        authorization_server = _https_url(
-            _required(env, "GEO_MCP_AUTHORIZATION_SERVER"),
-            key="GEO_MCP_AUTHORIZATION_SERVER",
-            origin_only=True,
-        )
-        subjects = _split_csv(
-            _required(env, "GEO_MCP_ALLOWED_SUBJECTS"),
-            key="GEO_MCP_ALLOWED_SUBJECTS",
-            required=True,
         )
         host_values = _split_csv(
             _required(env, "GEO_MCP_ALLOWED_HOSTS"),
@@ -152,27 +136,19 @@ class McpSettings:
         )
         allowed_origins = tuple(_validated_origin(value) for value in origin_values)
         try:
-            rate_per_second = float(env.get("GEO_MCP_RATE_PER_SECOND", "5"))
+            rate_per_second = float(env.get("GEO_MCP_RATE_PER_SECOND", "1"))
         except ValueError as exc:
             raise ValueError("GEO_MCP_RATE_PER_SECOND must be numeric") from exc
         if not math.isfinite(rate_per_second) or rate_per_second <= 0:
             raise ValueError("GEO_MCP_RATE_PER_SECOND must be positive")
-        try:
-            burst_capacity = int(env.get("GEO_MCP_BURST_CAPACITY", "10"))
-        except ValueError as exc:
-            raise ValueError("GEO_MCP_BURST_CAPACITY must be an integer") from exc
-        if burst_capacity <= 0:
-            raise ValueError("GEO_MCP_BURST_CAPACITY must be positive")
         return cls(
             elasticsearch=elasticsearch,
             public_base_url=public_base_url,
-            jwks_uri=jwks_uri,
-            issuer=issuer,
-            audience=audience,
-            authorization_server=authorization_server,
-            allowed_subjects=frozenset(subjects),
             allowed_hosts=tuple(value for value, _ in validated_hosts),
             allowed_origins=allowed_origins,
             rate_per_second=rate_per_second,
-            burst_capacity=burst_capacity,
+            burst_capacity=_positive_int(env, "GEO_MCP_BURST_CAPACITY", 5),
+            max_concurrent_requests=_positive_int(
+                env, "GEO_MCP_MAX_CONCURRENT_REQUESTS", 4
+            ),
         )

@@ -23,16 +23,13 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     example = (ROOT / "deploy" / "geo-mcp.env.example").read_text()
     required = {
         "ELASTICSEARCH_URL",
-        "ELASTICSEARCH_API_KEY",
+        "ELASTICSEARCH_USERNAME",
+        "ELASTICSEARCH_PASSWORD",
         "ELASTICSEARCH_ACTIVE_MODEL",
         "GEMINI_API_KEY",
         "GEO_MCP_PUBLIC_BASE_URL",
-        "GEO_MCP_JWKS_URI",
-        "GEO_MCP_ISSUER",
-        "GEO_MCP_AUDIENCE",
-        "GEO_MCP_AUTHORIZATION_SERVER",
-        "GEO_MCP_ALLOWED_SUBJECTS",
         "GEO_MCP_ALLOWED_HOSTS",
+        "GEO_MCP_MAX_CONCURRENT_REQUESTS",
     }
     keys = {
         line.split("=", 1)[0]
@@ -40,10 +37,12 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
         if line and not line.startswith("#") and "=" in line
     }
     assert required <= keys
+    assert "GEO_MCP_JWKS_URI" not in example
+    assert "GEO_MCP_ALLOWED_SUBJECTS" not in example
     assert "GEO_PG_DSN" not in example
     assert "GEO_EMBEDDING_VARIANT" not in example
     assert "gemini_embedding_2_3072_v1" in example
-    assert "replace-me" in example
+    assert "set-in-app-platform" in example
     assert "SENTINEL" not in example
 
 

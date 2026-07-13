@@ -6,7 +6,6 @@ from typing import Any
 import fastmcp
 import pytest
 from fastmcp import Client
-from fastmcp.server.auth import AccessToken
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
 from geo_index.mcp_models import (
@@ -39,15 +38,11 @@ def _settings() -> McpSettings:
             active_model_key="gemini_embedding_2_3072_v1",
         ),
         public_base_url="https://geo.example.org",
-        jwks_uri="https://issuer.example.org/jwks",
-        issuer="https://issuer.example.org/",
-        audience="geo-mcp",
-        authorization_server="https://issuer.example.org",
-        allowed_subjects=frozenset({"invited-user"}),
         allowed_hosts=("geo.example.org",),
         allowed_origins=("https://client.example.org",),
         rate_per_second=1000,
         burst_capacity=100,
+        max_concurrent_requests=100,
     )
 
 
@@ -145,14 +140,7 @@ def fake_service() -> FakeService:
 
 
 @pytest.fixture
-def mcp(fake_service: FakeService, monkeypatch):
-    token = AccessToken(
-        token="offline-test-token", client_id="offline-test-client",
-        scopes=["geo:read"], claims={"sub": "invited-user"},
-    )
-    monkeypatch.setattr(
-        "fastmcp.server.middleware.authorization.get_access_token", lambda: token
-    )
+def mcp(fake_service: FakeService):
     return create_mcp(_settings(), fake_service)
 
 
@@ -260,7 +248,7 @@ def test_create_app_uses_elasticsearch_adapter_and_http_guards(monkeypatch) -> N
         lambda received: sentinel_service,
     )
     monkeypatch.setattr("geo_index.mcp_server.create_mcp", lambda *args, **kwargs: FakeMcp())
-    app = create_app(settings=settings, auth_provider=object())
+    app = create_app(settings=settings)
 
     assert app.app.app is sentinel_app
     assert app.app.max_body_bytes == MAX_REQUEST_BODY_BYTES
