@@ -32,7 +32,7 @@
 - Consumes: the existing `MCP_URL` export and `McpInstall` placement in `App`.
 - Produces: `MCP_CLIENTS`, an ordered readonly client array; accessible tabs/panels; and `copyCommand(command, clientName)` clipboard behavior.
 
-- [ ] **Step 1: Import the official logo assets**
+- [x] **Step 1: Import the official logo assets**
 
 Copy the installed first-party Claude and Codex application icons without altering their pixels:
 
@@ -44,7 +44,7 @@ cp /Applications/ChatGPT.app/Contents/Resources/icon-codex-dark-color.png fronte
 
 Download the official full-color Gemini CLI icon SVG from the Gemini CLI brand kit, inspect it as text, and add that exact SVG as `frontend/src/assets/mcp-clients/gemini-cli.svg`.
 
-- [ ] **Step 2: Write failing behavior tests**
+- [x] **Step 2: Write failing behavior tests**
 
 Replace the old generic compatibility/copy assertions in `frontend/src/App.test.tsx` with focused tests equivalent to:
 
@@ -102,7 +102,7 @@ test("copies each selected MCP command and clears stale feedback", async () => {
 
 Keep the existing clipboard-failure test, but target `Copy command` and expect “Select the command and copy it manually.”
 
-- [ ] **Step 3: Run the tests and verify RED**
+- [x] **Step 3: Run the tests and verify RED**
 
 Run:
 
@@ -114,7 +114,7 @@ Working directory: `frontend`
 
 Expected: FAIL because no tabs, official logo images, or client-specific commands exist yet.
 
-- [ ] **Step 4: Implement the minimal component behavior**
+- [x] **Step 4: Implement the minimal component behavior**
 
 In `McpInstall.tsx`, import the three local assets and define the ordered data:
 
@@ -146,7 +146,7 @@ export const MCP_CLIENTS = [
 
 Use `useRef` for the three tab buttons. On click, set the active key and clear status. On `ArrowLeft`, `ArrowRight`, `Home`, or `End`, select and focus the correct tab with wraparound. Render all three linked `role="tabpanel"` elements and hide the inactive panels. Each active panel contains its instruction, a scrollable `<pre><code>`, and a visible `Copy command` button. Copy the selected command and announce either `Copied <client> command.` or `Select the command and copy it manually.`
 
-- [ ] **Step 5: Style the tabs and command panel**
+- [x] **Step 5: Style the tabs and command panel**
 
 Replace the obsolete URL-field, compatibility-list, and fake-mark rules in `styles.css` with:
 
@@ -166,7 +166,7 @@ Replace the obsolete URL-field, compatibility-list, and fake-mark rules in `styl
 
 Retain existing global focus-visible treatment and remove the obsolete 390px URL-field overrides.
 
-- [ ] **Step 6: Run the focused tests and verify GREEN**
+- [x] **Step 6: Run the focused tests and verify GREEN**
 
 Run:
 
@@ -178,7 +178,7 @@ Working directory: `frontend`
 
 Expected: all `App.test.tsx` tests pass with no warnings.
 
-- [ ] **Step 7: Run full frontend verification**
+- [x] **Step 7: Run full frontend verification**
 
 Run:
 
@@ -191,7 +191,7 @@ Working directory: `frontend`
 
 Expected: the complete Vitest suite passes and the Vite production build exits successfully.
 
-- [ ] **Step 8: Inspect the final diff**
+- [x] **Step 8: Inspect the final diff**
 
 Run:
 

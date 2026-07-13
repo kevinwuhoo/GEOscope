@@ -124,6 +124,13 @@ const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(
   "clipboard",
 );
 
+const CLAUDE_COMMAND =
+  "claude mcp add --scope user --transport http geoscope https://geoscope.kevinformatics.com/mcp";
+const CODEX_COMMAND =
+  "codex mcp add geoscope --url https://geoscope.kevinformatics.com/mcp";
+const GEMINI_COMMAND =
+  "gemini mcp add --scope user --transport http geoscope https://geoscope.kevinformatics.com/mcp";
+
 
 afterEach(() => {
   cleanup();
@@ -177,7 +184,7 @@ test("presents the focused NCBI GEO marketing story", () => {
 });
 
 
-test("balances GEOscope's benefit with MCP compatibility in the hero", () => {
+test("offers the requested MCP clients with official local logos", () => {
   render(<App />);
 
   const hero = document.querySelector(".hero");
@@ -185,18 +192,29 @@ test("balances GEOscope's benefit with MCP compatibility in the hero", () => {
   expect(
     screen.getByRole("heading", { name: /bring geoscope to your agent/i, level: 3 }),
   ).toBeInTheDocument();
-  const copyButton = screen.getByRole("button", { name: /copy mcp url/i });
-  expect(copyButton.textContent).toBe("");
-  expect(copyButton.querySelector("svg[aria-hidden='true']")).not.toBeNull();
   expect(screen.getByRole("link", { name: /try a live comparison/i })).toHaveAttribute(
     "href",
     "#live-demo",
   );
-  const clients = screen.getByRole("list", { name: /compatible mcp clients/i });
-  expect(clients).toHaveTextContent("ChatGPT");
-  expect(clients).toHaveTextContent("Claude");
-  expect(clients).toHaveTextContent("Cursor");
-  expect(clients).toHaveTextContent("GitHub Copilot");
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+    "Claude Code",
+    "Codex",
+    "Gemini CLI",
+  ]);
+  expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+  expect(tabs[0]).toHaveAttribute("tabindex", "0");
+  expect(screen.getByText(CLAUDE_COMMAND)).toBeVisible();
+  const logoSources = tabs.map((tab) =>
+    tab.querySelector("img")?.getAttribute("src"),
+  );
+  expect(logoSources.every(Boolean)).toBe(true);
+  expect(logoSources[0]).toContain("claude-code");
+  expect(logoSources[1]).toContain("codex");
+  expect(logoSources[2]).toMatch(/(?:gemini-cli|^data:image\/svg\+xml)/);
+  expect(
+    screen.queryByRole("list", { name: /compatible mcp clients/i }),
+  ).not.toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
       name: /search the same research question two ways/i,
@@ -205,6 +223,32 @@ test("balances GEOscope's benefit with MCP compatibility in the hero", () => {
   expect(
     screen.getByText(/hybrid metadata search with the literal keyword results/i),
   ).toBeInTheDocument();
+});
+
+
+test("switches MCP instructions with pointer and keyboard input", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const tabs = screen.getAllByRole("tab");
+
+  await user.click(tabs[1]);
+  expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+  expect(tabs[1]).toHaveAttribute("tabindex", "0");
+  expect(tabs[0]).toHaveAttribute("tabindex", "-1");
+  expect(screen.getByText(CODEX_COMMAND)).toBeVisible();
+
+  tabs[1].focus();
+  await user.keyboard("{ArrowRight}");
+  expect(tabs[2]).toHaveFocus();
+  expect(tabs[2]).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText(GEMINI_COMMAND)).toBeVisible();
+
+  await user.keyboard("{ArrowRight}");
+  expect(tabs[0]).toHaveFocus();
+  await user.keyboard("{End}");
+  expect(tabs[2]).toHaveFocus();
+  await user.keyboard("{Home}");
+  expect(tabs[0]).toHaveFocus();
 });
 
 
@@ -374,7 +418,7 @@ test("preserves paired ranks when source result counts differ", async () => {
 });
 
 
-test("copies the production MCP endpoint", async () => {
+test("copies each selected MCP command and clears stale feedback", async () => {
   const user = userEvent.setup();
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
@@ -383,10 +427,20 @@ test("copies the production MCP endpoint", async () => {
   });
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: /copy mcp url/i }));
+  await user.click(screen.getByRole("button", { name: /copy command/i }));
+  expect(writeText).toHaveBeenLastCalledWith(CLAUDE_COMMAND);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    /copied claude code command/i,
+  );
 
-  expect(writeText).toHaveBeenCalledWith("https://geoscope.kevinformatics.com/mcp");
-  expect(screen.getByRole("status")).toHaveTextContent(/copied/i);
+  await user.click(screen.getByRole("tab", { name: /^codex$/i }));
+  expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  await user.click(screen.getByRole("button", { name: /copy command/i }));
+  expect(writeText).toHaveBeenLastCalledWith(CODEX_COMMAND);
+
+  await user.click(screen.getByRole("tab", { name: /gemini cli/i }));
+  await user.click(screen.getByRole("button", { name: /copy command/i }));
+  expect(writeText).toHaveBeenLastCalledWith(GEMINI_COMMAND);
 });
 
 
@@ -398,9 +452,9 @@ test("keeps manual MCP copy guidance when clipboard access fails", async () => {
   });
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: /copy mcp url/i }));
+  await user.click(screen.getByRole("button", { name: /copy command/i }));
 
   expect(screen.getByRole("status")).toHaveTextContent(
-    /select the url and copy it manually/i,
+    /select the command and copy it manually/i,
   );
 });
