@@ -1,4 +1,4 @@
-"""OpenAI Structured Output reranking for bounded GEO candidates."""
+"""Anthropic Structured Output reranking for bounded GEO candidates."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from openai import OpenAI
+from anthropic import APITimeoutError, Anthropic
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .search_candidates import SearchCandidate
@@ -89,45 +89,25 @@ def _candidate_payload(candidate: SearchCandidate) -> dict[str, object]:
     }
 
 
-def _ranking_schema(gses: Sequence[str]) -> dict[str, object]:
-    return {
-        "type": "json_schema",
-        "name": "geo_candidate_ranking",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "rankings": {
-                    "type": "array",
-                    "minItems": len(gses),
-                    "maxItems": len(gses),
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "gse": {"type": "string", "enum": list(gses)},
-                            "relevance_score": {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 100,
-                            },
-                        },
-                        "required": ["gse", "relevance_score"],
-                    },
-                }
+STATIC_RANKING_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "rankings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "gse": {"type": "string"},
+                    "relevance_score": {"type": "integer"},
+                },
+                "required": ["gse", "relevance_score"],
             },
-            "required": ["rankings"],
-        },
-    }
-
-
-def _contains_refusal(response: object) -> bool:
-    for item in getattr(response, "output", ()):
-        for part in getattr(item, "content", ()):
-            if getattr(part, "type", None) == "refusal":
-                return True
-    return False
+        }
+    },
+    "required": ["rankings"],
+}
 
 
 def _response_usage(response: object) -> RerankUsage:
@@ -147,19 +127,21 @@ def _response_usage(response: object) -> RerankUsage:
     )
 
 
-class OpenAIReranker:
+class AnthropicReranker:
     def __init__(
         self,
         *,
         api_key: str,
         model: str,
         reasoning_effort: str,
+        thinking: str,
         timeout_seconds: float,
         client: Any | None = None,
     ) -> None:
         self.model = model
         self.reasoning_effort = reasoning_effort
-        self._client = client or OpenAI(
+        self.thinking = thinking
+        self._client = client or Anthropic(
             api_key=api_key,
             timeout=timeout_seconds,
             max_retries=1,
@@ -175,36 +157,71 @@ class OpenAIReranker:
             return RerankResult(scores={}, input_tokens=0, output_tokens=0)
         if not 1 <= limit <= 50:
             raise ValueError("rerank result limit must be between 1 and 50")
-        response = self._client.responses.create(
-            model=self.model,
-            reasoning={"effort": self.reasoning_effort},
-            instructions=_INSTRUCTIONS,
-            input=json.dumps(
-                {
-                    "query": query,
-                    "requested_results": limit,
-                    "candidates": [
-                        _candidate_payload(candidate) for candidate in candidates
-                    ],
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                system=_INSTRUCTIONS,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "query": query,
+                                "requested_results": limit,
+                                "candidates": [
+                                    _candidate_payload(candidate)
+                                    for candidate in candidates
+                                ],
+                            },
+                            separators=(",", ":"),
+                        ),
+                    }
+                ],
+                thinking={"type": self.thinking},
+                output_config={
+                    "effort": self.reasoning_effort,
+                    "format": {
+                        "type": "json_schema",
+                        "schema": STATIC_RANKING_SCHEMA,
+                    },
                 },
-                separators=(",", ":"),
-            ),
-            text={
-                "format": _ranking_schema(
-                    [candidate.gse for candidate in candidates]
-                )
-            },
-            store=False,
-            max_output_tokens=min(8_000, max(1_000, len(candidates) * 40)),
-        )
+                max_tokens=min(8_000, max(1_000, len(candidates) * 40)),
+            )
+        except APITimeoutError as exc:
+            raise TimeoutError("reranker request timed out") from exc
         usage = _response_usage(response)
-        if _contains_refusal(response):
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason == "refusal":
             raise RerankRefusalError(
                 "reranker refused the request",
                 usage=usage,
             )
+        if stop_reason == "max_tokens":
+            raise InvalidRerankOutputError(
+                "reranker response was truncated",
+                usage=usage,
+            )
+        if stop_reason != "end_turn":
+            raise InvalidRerankOutputError(
+                "reranker returned unexpected stop reason",
+                usage=usage,
+            )
+        content = getattr(response, "content", None)
+        if not isinstance(content, (list, tuple)) or len(content) != 1:
+            raise InvalidRerankOutputError(
+                "reranker returned an invalid content block",
+                usage=usage,
+            )
+        block = content[0]
+        if getattr(block, "type", None) != "text" or not isinstance(
+            getattr(block, "text", None), str
+        ):
+            raise InvalidRerankOutputError(
+                "reranker returned an invalid content block",
+                usage=usage,
+            )
         try:
-            parsed = RankingEnvelope.model_validate_json(response.output_text)
+            parsed = RankingEnvelope.model_validate_json(block.text)
         except (ValidationError, ValueError, TypeError) as exc:
             raise InvalidRerankOutputError(
                 "reranker returned invalid JSON",
