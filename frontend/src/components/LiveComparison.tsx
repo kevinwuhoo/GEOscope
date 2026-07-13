@@ -4,9 +4,9 @@ import { DemoResponse, GEOscopeResult, NativeResult, searchDemo } from "../api";
 
 
 const examples = [
-  "human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data",
-  "liver transcriptomics comparing nonalcoholic steatohepatitis with healthy human controls",
-  "mouse skeletal muscle gene expression after endurance exercise in insulin resistance",
+  "breast tumors before and after neoadjuvant chemotherapy",
+  "NASH liver transcriptomes compared with healthy controls",
+  "PI3K signaling in insulin-resistant skeletal muscle",
 ];
 
 
