@@ -6,12 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_docker_packages_one_worker_elasticsearch_mcp() -> None:
+def test_docker_packages_one_worker_combined_production_app() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "uv sync --frozen --no-dev" in dockerfile
-    assert "geo_index.mcp_server:create_app" in dockerfile
+    assert "geo_index.production_app:create_app" in dockerfile
     assert (
-        'CMD ["uvicorn", "geo_index.mcp_server:create_app", "--factory", '
+        'CMD ["uvicorn", "geo_index.production_app:create_app", "--factory", '
         '"--host", "0.0.0.0", "--port", "8000", "--workers", "1"]'
         in dockerfile
     )
