@@ -7,7 +7,6 @@ import App from "./App";
 
 const demoResponse = {
   query: "transcriptomes of individual cells",
-  mode: "hybrid",
   geo: {
     count: 14,
     results: [
@@ -28,7 +27,6 @@ const demoResponse = {
       assay_categories: [],
       assay_labels: [],
     },
-    mode: "hybrid",
     limit: 8,
     retrieval_version: "geo-series-v1:gemini:embedding:hybrid",
     embedding_variant: "gemini_embedding_2_3072_v1",
@@ -176,9 +174,15 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   await user.type(query, "transcriptomes of individual cells");
   await user.click(screen.getByRole("button", { name: /compare results/i }));
 
-  expect(fetchMock.mock.calls[0]?.[0]).toEqual(
-    expect.stringContaining("mode=hybrid"),
+  const requestUrl = new URL(
+    String(fetchMock.mock.calls[0]?.[0]),
+    window.location.origin,
   );
+  expect(requestUrl.searchParams.get("q")).toBe(
+    "transcriptomes of individual cells",
+  );
+  expect(requestUrl.searchParams.get("limit")).toBe("8");
+  expect(requestUrl.searchParams.has("mode")).toBe(false);
   expect(await screen.findByText("GSE123")).toBeInTheDocument();
   expect(screen.getByText("GSE999")).toBeInTheDocument();
   const pair = screen.getByText("GSE123").closest(".comparison-row");

@@ -181,7 +181,6 @@ def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> None:
             "/api/demo/search",
             params={
                 "q": " transcriptomes of individual cells ",
-                "mode": "hybrid",
                 "limit": "5",
             },
         )
@@ -189,6 +188,8 @@ def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["query"] == "transcriptomes of individual cells"
+    assert "mode" not in payload
+    assert "mode" not in payload["geoscope"]
     assert payload["geo"]["results"][0]["gse"] == "GSE999"
     assert payload["geoscope"]["results"][0]["gse"] == "GSE123"
     assert payload["membership"] == {"GSE123": False}
@@ -196,10 +197,28 @@ def test_demo_search_uses_shared_mcp_service_and_returns_comparison() -> None:
         {
             "query": "transcriptomes of individual cells",
             "filters": SearchFilters(),
-            "mode": "hybrid",
             "limit": 5,
         }
     ]
+
+
+def test_demo_search_ignores_legacy_mode_query_parameter() -> None:
+    service = _DemoService()
+    app = create_app(service_factory=lambda: service, geo_factory=_Geo)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/demo/search",
+            params={"q": "immune cells", "mode": "bm25", "limit": "5"},
+        )
+
+    assert response.status_code == 200
+    assert "mode" not in response.json()
+    assert service.calls[0] == {
+        "query": "immune cells",
+        "filters": SearchFilters(),
+        "limit": 5,
+    }
 
 
 def test_demo_search_keeps_geoscope_results_when_ncbi_is_unavailable() -> None:
@@ -208,7 +227,7 @@ def test_demo_search_keeps_geoscope_results_when_ncbi_is_unavailable() -> None:
     with TestClient(app) as client:
         response = client.get(
             "/api/demo/search",
-            params={"q": "immune cells", "mode": "hybrid", "limit": "5"},
+            params={"q": "immune cells", "limit": "5"},
         )
 
     assert response.status_code == 200

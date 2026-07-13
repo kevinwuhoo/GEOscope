@@ -85,12 +85,12 @@ export function LiveComparison() {
     setState("loading");
     setError("");
     try {
-      const response = await searchDemo(normalized, "hybrid", controller.signal);
+      const response = await searchDemo(normalized, controller.signal);
       setData(response);
       setState("success");
       const params = new URLSearchParams(window.location.search);
       params.set("q", normalized);
-      params.set("mode", "hybrid");
+      params.delete("mode");
       window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
