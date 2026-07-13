@@ -23,6 +23,25 @@ function GEOscopeCard({ result, inNative }: { result: GEOscopeResult; inNative?:
           {result.gse}
         </a>
       </div>
+      {(result.source !== "elasticsearch" || inNative === false) && (
+        <div className="result-source-badges" aria-label="Result source">
+          {result.source === "ncbi" && (
+            <span className="result-source-badge result-source-badge--ncbi">
+              Live NCBI result · not yet indexed
+            </span>
+          )}
+          {result.source === "both" && (
+            <span className="result-source-badge result-source-badge--both">
+              Found by both GEOscope and displayed NCBI results
+            </span>
+          )}
+          {inNative === false && (
+            <span className="result-source-badge result-source-badge--miss">
+              Not in the displayed NCBI top 20
+            </span>
+          )}
+        </div>
+      )}
       <h4>{title}</h4>
       {result.snippet && <p>{result.snippet}</p>}
       <div className="result-tags">
@@ -138,7 +157,7 @@ export function LiveComparison() {
         {state === "loading" && "Searching GEOscope and NCBI GEO…"}
         {state === "error" && <span>{error}</span>}
         {state === "idle" && "Ready for a live backend comparison."}
-        {state === "success" && data && `${data.geoscope.results.length} GEOscope results compared with ${data.geo.results.length} NCBI GEO results.`}
+        {state === "success" && data && `${data.geoscope.results.length} of ${data.geoscope.limit} requested GEOscope results compared with ${data.geo.results.length} NCBI GEO results.`}
       </div>
 
       {state === "success" && data && (

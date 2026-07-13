@@ -26,6 +26,35 @@ const geoscopeResultSchema = z.object({
   assay_labels: z.array(z.string()),
   assay_status: z.string().nullable(),
   truncated_fields: z.array(z.string()).default([]),
+  source: z.enum(["elasticsearch", "ncbi", "both"]),
+  retrieval_score: z.number().nullable(),
+  original_rank: z.number().int().positive().nullable(),
+});
+
+const provenanceSchema = z.object({
+  exact_accession: z.boolean(),
+  elasticsearch_candidates: z.number().int().min(0).max(100),
+  ncbi_candidates: z.number().int().min(0).max(20),
+  merged_candidates: z.number().int().min(0).max(120),
+  rerank_attempted: z.boolean(),
+  rerank_applied: z.boolean(),
+  rerank_model: z.string().min(1).max(256).nullable(),
+  rerank_reasoning_effort: z.literal("low").nullable(),
+  rerank_input_tokens: z.number().int().nonnegative(),
+  rerank_output_tokens: z.number().int().nonnegative(),
+  latency: z.object({
+    elasticsearch_ms: z.number().int().nonnegative(),
+    ncbi_ms: z.number().int().nonnegative(),
+    reranker_ms: z.number().int().nonnegative(),
+  }),
+  degradation: z.array(z.enum([
+    "ncbi_timeout",
+    "ncbi_error",
+    "rerank_timeout",
+    "rerank_refusal",
+    "rerank_invalid",
+    "rerank_error",
+  ])).max(6),
 });
 
 const demoResponseSchema = z.object({
@@ -39,10 +68,12 @@ const demoResponseSchema = z.object({
   geoscope: z.object({
     query: z.string(),
     mode: z.enum(["hybrid", "bm25", "dense"]),
+    limit: z.number().int().min(1).max(50),
     retrieval_version: z.string(),
     embedding_variant: z.string().nullable(),
     results: z.array(geoscopeResultSchema),
     facets: z.record(z.string(), z.unknown()),
+    provenance: provenanceSchema,
   }).passthrough(),
   membership: z.record(z.string(), z.boolean()).nullable(),
 });
@@ -58,7 +89,7 @@ export async function searchDemo(
   mode: SearchMode,
   signal?: AbortSignal,
 ): Promise<DemoResponse> {
-  const params = new URLSearchParams({ q: query, mode, limit: "8" });
+  const params = new URLSearchParams({ q: query, mode, limit: "10" });
   const response = await fetch(`/api/demo/search?${params}`, { signal });
   if (!response.ok) {
     throw new Error(

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from geo_index.elasticsearch_config import ElasticsearchSettings
-from geo_index.mcp_settings import McpSettings
+from geo_index.mcp_settings import McpSettings, SearchQualitySettings
 from geo_index.production_app import create_app
 
 
@@ -27,16 +27,6 @@ class FakeService:
 
     def ping(self) -> None:
         self.ping_calls += 1
-
-
-class FakeGeo:
-    def keyword_search(self, query: str, limit: int) -> dict[str, object]:
-        return {"count": 0, "results": []}
-
-    def membership(
-        self, query: str, accessions: list[str]
-    ) -> dict[str, bool] | None:
-        return {}
 
 
 def _settings() -> McpSettings:
@@ -74,9 +64,7 @@ def test_one_app_serves_health_frontend_and_anonymous_mcp(tmp_path: Path) -> Non
     dist.mkdir()
     (dist / "index.html").write_text("<main>GEOscope</main>")
     service = FakeService()
-    app = create_app(
-        settings=_settings(), service=service, geo=FakeGeo(), static_dir=dist
-    )
+    app = create_app(settings=_settings(), service=service, static_dir=dist)
 
     with TestClient(
         app,
@@ -102,3 +90,38 @@ def test_one_app_serves_health_frontend_and_anonymous_mcp(tmp_path: Path) -> Non
 
     assert service.open_calls == 1
     assert service.close_calls == 1
+
+
+def test_default_factory_constructs_the_shared_quality_aware_service(
+    monkeypatch,
+) -> None:
+    constructed: dict[str, object] = {}
+
+    def from_settings(settings: McpSettings) -> FakeService:
+        service = FakeService()
+        service.quality = settings.search_quality
+        constructed["service"] = service
+        return service
+
+    monkeypatch.setenv("ELASTICSEARCH_URL", "http://10.124.0.2:9200")
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "elastic")
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "secret")
+    monkeypatch.setenv(
+        "GEO_MCP_PUBLIC_BASE_URL", "https://geoscope.kevinformatics.com"
+    )
+    monkeypatch.setenv(
+        "GEO_MCP_ALLOWED_HOSTS", "geoscope.kevinformatics.com"
+    )
+    monkeypatch.setenv("GEO_RERANK_ENABLED", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(
+        "geo_index.production_app.McpSearchService.from_settings", from_settings
+    )
+
+    app = create_app()
+
+    assert app.state.search_service is constructed["service"]
+    assert app.state.search_service.quality == SearchQualitySettings(
+        openai_api_key="test-openai-key",
+        rerank_enabled=True,
+    )

@@ -29,7 +29,7 @@ const demoResponse = {
       assay_labels: [],
     },
     mode: "hybrid",
-    limit: 8,
+    limit: 10,
     retrieval_version: "geo-series-v1:gemini:embedding:hybrid",
     embedding_variant: "gemini_embedding_2_3072_v1",
     results: [
@@ -50,11 +50,74 @@ const demoResponse = {
         assay_labels: ["scRNA-seq"],
         assay_status: "mapped",
         truncated_fields: [],
+        source: "elasticsearch",
+        retrieval_score: 0.91,
+        original_rank: 1,
+      },
+      {
+        gse: "GSE888",
+        rank: 7,
+        score: null,
+        title: "Fresh live NCBI series",
+        snippet: "A live NCBI candidate with partial metadata.",
+        study_type: "Expression profiling",
+        n_samples: null,
+        pubmed_id: null,
+        organism_ids: [],
+        organism_status: "unavailable",
+        sex_ids: [],
+        sex_status: "unavailable",
+        assay_categories: [],
+        assay_labels: [],
+        assay_status: "unavailable",
+        truncated_fields: [],
+        source: "ncbi",
+        retrieval_score: null,
+        original_rank: null,
+      },
+      {
+        gse: "GSE777",
+        rank: 9,
+        score: 0.72,
+        title: "Series found by both sources",
+        snippet: "A merged local and live NCBI candidate.",
+        study_type: "Expression profiling",
+        n_samples: 4,
+        pubmed_id: null,
+        organism_ids: ["NCBITaxon:9606"],
+        organism_status: "mapped",
+        sex_ids: [],
+        sex_status: "absent",
+        assay_categories: ["transcriptomics"],
+        assay_labels: [],
+        assay_status: "mapped",
+        truncated_fields: [],
+        source: "both",
+        retrieval_score: 0.72,
+        original_rank: 4,
       },
     ],
     facets: {},
+    provenance: {
+      exact_accession: false,
+      elasticsearch_candidates: 2,
+      ncbi_candidates: 2,
+      merged_candidates: 3,
+      rerank_attempted: true,
+      rerank_applied: true,
+      rerank_model: "gpt-5.6-luna",
+      rerank_reasoning_effort: "low",
+      rerank_input_tokens: 123,
+      rerank_output_tokens: 45,
+      latency: {
+        elasticsearch_ms: 12,
+        ncbi_ms: 20,
+        reranker_ms: 31,
+      },
+      degradation: [],
+    },
   },
-  membership: { GSE123: false },
+  membership: { GSE123: false, GSE888: true, GSE777: true },
 };
 
 
@@ -127,8 +190,20 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   expect(fetchMock.mock.calls[0]?.[0]).toEqual(
     expect.stringContaining("mode=hybrid"),
   );
+  expect(fetchMock.mock.calls[0]?.[0]).toEqual(
+    expect.stringContaining("limit=10"),
+  );
   expect(await screen.findByText("GSE123")).toBeInTheDocument();
   expect(screen.getByText("GSE999")).toBeInTheDocument();
+  expect(
+    screen.getByText(/live ncbi result · not yet indexed/i),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/found by both geoscope and displayed ncbi results/i),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/not in the displayed ncbi top 20/i),
+  ).toBeInTheDocument();
   const pair = screen.getByText("GSE123").closest(".comparison-row");
   expect(pair).not.toBeNull();
   expect(pair?.querySelector(".result-card--scope")?.textContent).toContain("GSE123");
@@ -138,6 +213,12 @@ test("explains the thesis and turns a query into a live GEO comparison", async (
   ).toBeInTheDocument();
   expect(
     screen.getByRole("article", { name: /ncbi geo result 1: literal keyword match/i }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("article", { name: /geoscope result 7: fresh live ncbi series/i }),
+  ).toHaveTextContent("07");
+  expect(
+    screen.getByText(/3 of 10 requested geoscope results compared/i),
   ).toBeInTheDocument();
 });
 
@@ -153,7 +234,7 @@ test("preserves paired ranks when source result counts differ", async () => {
     ...demoResponse,
     geoscope: {
       ...demoResponse.geoscope,
-      results: [...demoResponse.geoscope.results, secondResult],
+      results: [demoResponse.geoscope.results[0], secondResult],
     },
     membership: { ...demoResponse.membership, GSE456: false },
   };

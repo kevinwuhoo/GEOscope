@@ -12,7 +12,7 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .marketing_api import EutilsGeoComparison, GeoComparison, install_marketing_routes
+from .marketing_api import install_marketing_routes
 from .mcp_search_service import McpSearchService
 from .mcp_server import McpService, create_mcp_http_mount
 from .mcp_settings import McpSettings
@@ -38,12 +38,10 @@ class _McpRootEndpoint:
 def create_app(
     settings: McpSettings | None = None,
     service: McpService | None = None,
-    geo: GeoComparison | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
     settings = settings or McpSettings.from_env(os.environ)
     service = service or McpSearchService.from_settings(settings)
-    geo = geo or EutilsGeoComparison()
     mcp_mount = create_mcp_http_mount(settings, service, path="/")
     if not callable(mcp_mount.lifespan):
         raise RuntimeError("FastMCP HTTP lifespan is unavailable")
@@ -51,16 +49,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with mcp_mount.lifespan(app):
-            try:
-                yield
-            finally:
-                close = getattr(geo, "close", None)
-                if callable(close):
-                    close()
+            yield
 
     app = FastAPI(title="GEOscope", lifespan=lifespan)
     app.state.search_service = service
-    app.state.geo = geo
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
