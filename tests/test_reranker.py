@@ -162,6 +162,37 @@ def test_reranker_uses_sonnet_messages_contract_with_static_schema() -> None:
         assert dynamic_constraint not in serialized_schema
 
 
+def test_reranker_instruction_zeroes_only_single_organism_mismatches() -> None:
+    client = Client(
+        message([{"gse": "GSE1", "relevance_score": 90}])
+    )
+
+    make_reranker(client).rerank(
+        "mouse exercise",
+        (candidate("GSE1", 1),),
+        limit=1,
+    )
+
+    assert client.messages.kwargs is not None
+    instruction = client.messages.kwargs["system"]
+    assert isinstance(instruction, str)
+    assert (
+        "When the query explicitly requests exactly one organism or species"
+        in instruction
+    )
+    assert (
+        "if neither its organism_ids nor its taxon matches that organism"
+        in instruction
+    )
+    assert "must receive relevance score 0" in instruction
+    assert (
+        "queries that explicitly request multiple organisms or a cross-species "
+        "or comparative study"
+        in instruction
+    )
+    assert "Return every supplied GSE exactly once" in instruction
+
+
 def test_reranker_parses_one_text_block_and_preserves_usage() -> None:
     valid = SimpleNamespace(
         stop_reason="end_turn",

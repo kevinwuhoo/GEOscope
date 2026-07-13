@@ -94,6 +94,18 @@ def test_canonical_production_pipeline_is_gemini_only_and_operational() -> None:
         assert "[[57-Canonical-Production-Pipeline]]" in _read(path), path
 
 
+def test_current_search_docs_pin_the_reranker_timeout_default() -> None:
+    expected = (
+        "The shared reranker request timeout defaults to 30 seconds via "
+        "`GEO_RERANK_TIMEOUT_SECONDS=30`; keep the environment override available "
+        "for operational tuning"
+    )
+
+    for path in ("README.md", "docs/deployment/digitalocean.md"):
+        normalized = " ".join(_read(path).split())
+        assert expected in normalized, path
+
+
 def test_unified_search_rollout_is_documented_and_configurable() -> None:
     required_environment = (
         "ANTHROPIC_API_KEY=",
@@ -102,7 +114,7 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "GEO_RERANK_EFFORT=low",
         "GEO_RERANK_THINKING=disabled",
         "GEO_RERANK_CANDIDATE_LIMIT=40",
-        "GEO_RERANK_TIMEOUT_SECONDS=8",
+        "GEO_RERANK_TIMEOUT_SECONDS=30",
         "GEO_NCBI_TIMEOUT_SECONDS=5",
     )
     for path in ("deploy/geo-mcp.env.example", "deploy/app-platform.env.example"):

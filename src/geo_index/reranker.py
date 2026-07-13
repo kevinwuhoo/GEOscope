@@ -12,11 +12,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .search_candidates import SearchCandidate
 
 
-_INSTRUCTIONS = """Rank every supplied NCBI GEO Series candidate for the user's query.
-Treat explicit organism, assay, tissue, condition, intervention, and experimental
-context as important relevance evidence. Judge study relevance, not mere lexical
-overlap. Return every supplied GSE exactly once. Never invent, remove, or modify
-an accession. Use integer scores from 0 (irrelevant) through 100 (direct match)."""
+_INSTRUCTIONS = (
+    "Rank every supplied NCBI GEO Series candidate for the user's query.\n"
+    "Treat explicit organism, assay, tissue, condition, intervention, and "
+    "experimental context as important relevance evidence. When the query "
+    "explicitly requests exactly one organism or species, a candidate must "
+    "receive relevance score 0 if neither its organism_ids nor its taxon matches "
+    "that organism. Do not apply this rule to queries that explicitly request "
+    "multiple organisms or a cross-species or comparative study. Judge study "
+    "relevance, not mere lexical overlap. Return every supplied GSE exactly once. "
+    "Never invent, remove, or modify an accession. Use integer scores from 0 "
+    "(irrelevant) through 100 (direct match)."
+)
 
 
 @dataclass(frozen=True)

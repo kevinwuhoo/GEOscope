@@ -249,6 +249,10 @@ start with `GEO_RERANK_ENABLED=false`; enabling it requires
 enabled configuration without the key or with an unsupported model, effort,
 thinking mode, candidate bound, or timeout.
 
+The shared reranker request timeout defaults to 30 seconds via
+`GEO_RERANK_TIMEOUT_SECONDS=30`; keep the environment override available for
+operational tuning.
+
 Our staged decision rule is evidence-driven: improve candidate generation when
 relevant studies are absent from the candidate pool; tune reranking when they
 are present but misordered; and add query understanding only if unmodified NCBI

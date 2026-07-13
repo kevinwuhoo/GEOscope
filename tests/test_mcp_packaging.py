@@ -13,6 +13,7 @@ def test_sonnet_rollout_deployment_contract() -> None:
         "GEO_RERANK_MODEL=claude-sonnet-5",
         "GEO_RERANK_EFFORT=low",
         "GEO_RERANK_THINKING=disabled",
+        "GEO_RERANK_TIMEOUT_SECONDS=30",
     )
     for relative_path in (
         "deploy/geo-mcp.env.example",
@@ -37,6 +38,7 @@ def test_sonnet_rollout_deployment_contract() -> None:
         'key: GEO_RERANK_MODEL\n        value: "${GEO_RERANK_MODEL}"',
         'key: GEO_RERANK_EFFORT\n        value: "${GEO_RERANK_EFFORT}"',
         'key: GEO_RERANK_THINKING\n        value: "${GEO_RERANK_THINKING}"',
+        'key: GEO_RERANK_TIMEOUT_SECONDS\n        value: "${GEO_RERANK_TIMEOUT_SECONDS}"',
     )
     errors.extend(
         f".do/app.yaml.tmpl: missing {mapping.splitlines()[0]}"
@@ -55,6 +57,9 @@ def test_deployment_runbook_documents_enabled_runtime_degradation() -> None:
     runbook = (ROOT / "docs" / "deployment" / "digitalocean.md").read_text()
     normalized = " ".join(runbook.split())
     for phrase in (
+        "The shared reranker request timeout defaults to 30 seconds via "
+        "`GEO_RERANK_TIMEOUT_SECONDS=30`; keep the environment override available "
+        "for operational tuning",
         "NCBI timeout or failure degrades to Elasticsearch-only candidate generation",
         "Anthropic timeout, refusal, truncation, malformed response, or invalid "
         "output fails open to deterministic pre-rerank Elasticsearch-first union ordering",
@@ -107,6 +112,7 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     assert "GEO_RERANK_MODEL=claude-sonnet-5" in example
     assert "GEO_RERANK_EFFORT=low" in example
     assert "GEO_RERANK_THINKING=disabled" in example
+    assert "GEO_RERANK_TIMEOUT_SECONDS=30" in example
     assert "OPENAI_API_KEY" not in example
     assert "set-in-app-platform" in example
     assert "SENTINEL" not in example

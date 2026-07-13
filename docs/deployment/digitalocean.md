@@ -167,6 +167,10 @@ startup. Keep the Anthropic key in App Platform as a secret at runtime. The
 `envsubst` step writes it into the ignored local `.do/app.yaml`; never commit
 the generated spec or include the key in reports.
 
+The shared reranker request timeout defaults to 30 seconds via
+`GEO_RERANK_TIMEOUT_SECONDS=30`; keep the environment override available for
+operational tuning.
+
 With live Elasticsearch and NCBI access configured, explicitly opt in to the
 provider smoke and then record baseline versus Sonnet metrics. Supply current
 prices at run time rather than committing a price assumption:

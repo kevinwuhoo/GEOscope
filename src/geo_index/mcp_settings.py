@@ -120,7 +120,7 @@ class SearchQualitySettings:
     reasoning_effort: str = "low"
     thinking: str = "disabled"
     candidate_limit: int = 40
-    rerank_timeout_seconds: float = 8.0
+    rerank_timeout_seconds: float = 30.0
     ncbi_timeout_seconds: float = 5.0
 
     @classmethod
@@ -153,7 +153,7 @@ class SearchQualitySettings:
             thinking=thinking,
             candidate_limit=candidate_limit,
             rerank_timeout_seconds=_positive_float(
-                env, "GEO_RERANK_TIMEOUT_SECONDS", 8.0
+                env, "GEO_RERANK_TIMEOUT_SECONDS", 30.0
             ),
             ncbi_timeout_seconds=_positive_float(
                 env, "GEO_NCBI_TIMEOUT_SECONDS", 5.0

@@ -16,6 +16,7 @@ VALID = {
 
 def test_search_quality_defaults_are_bounded_and_disabled() -> None:
     quality = SearchQualitySettings.from_env({})
+    disabled = SearchQualitySettings.disabled()
 
     assert quality.rerank_enabled is False
     assert quality.anthropic_api_key is None
@@ -23,8 +24,9 @@ def test_search_quality_defaults_are_bounded_and_disabled() -> None:
     assert quality.reasoning_effort == "low"
     assert quality.thinking == "disabled"
     assert quality.candidate_limit == 40
-    assert quality.rerank_timeout_seconds == 8.0
+    assert quality.rerank_timeout_seconds == 30.0
     assert quality.ncbi_timeout_seconds == 5.0
+    assert disabled.rerank_timeout_seconds == 30.0
 
 
 def test_enabled_reranker_requires_anthropic_key() -> None:
