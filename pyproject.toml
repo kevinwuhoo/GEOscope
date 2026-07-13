@@ -5,6 +5,7 @@ description = "Metadata index + search service over NCBI GEO (v1 spike)"
 requires-python = ">=3.11"
 dependencies = [
     "elasticsearch>=9.4,<10",
+    "fastapi>=0.135,<1",
     "fastmcp>=3.4.4,<4",
     "google-genai>=2.9.0",
     "httpx>=0.27",
@@ -25,6 +26,7 @@ geo-build-series-docs = "geo_index.build_series_docs:main"
 geo-embed = "geo_index.build_embeddings:main"
 geo-search = "geo_index.elasticsearch_cli:main"
 geo-web = "geo_index.web:main"
+geoscope-web = "geo_index.marketing_api:main"
 geo-normalize = "geo_index.normalize:main"
 geo-soft-browser = "geo_index.soft_browser.server:main"
 geo-elasticsearch-load = "geo_index.elasticsearch_loader:main"

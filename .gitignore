@@ -9,6 +9,10 @@ __pycache__/
 .pytest_cache/
 .worktrees/
 **/.obsidian/
+.pnpm-store/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
 
 # Env / secrets
 .env

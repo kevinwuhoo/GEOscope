@@ -852,6 +852,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "elasticsearch" },
+    { name = "fastapi" },
     { name = "fastmcp" },
     { name = "google-genai" },
     { name = "httpx" },
@@ -873,6 +874,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "elasticsearch", specifier = ">=9.4,<10" },
+    { name = "fastapi", specifier = ">=0.135,<1" },
     { name = "fastmcp", specifier = ">=3.4.4,<4" },
     { name = "google-genai", specifier = ">=2.9.0" },
     { name = "httpx", specifier = ">=0.27" },
