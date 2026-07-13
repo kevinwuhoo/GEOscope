@@ -17,6 +17,9 @@ frontend/dist/
 # Env / secrets
 .env
 .env.elasticsearch
+.env.elasticsearch.production
+deploy/app-platform.env
+.do/app.yaml
 
 # Obsidian — share vault config, but not per-machine workspace state
 .obsidian/workspace.json

@@ -1,0 +1,93 @@
+name: geoscope
+region: sfo
+vpc:
+  id: "${DO_VPC_ID}"
+disable_edge_cache: true
+domains:
+  - domain: geoscope.kevinformatics.com
+    type: PRIMARY
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+ingress:
+  rules:
+    - component:
+        name: geoscope
+        preserve_path_prefix: true
+      match:
+        path:
+          prefix: /
+    - redirect:
+        authority: geoscope.kevinformatics.com
+        scheme: https
+        redirect_code: 308
+      match:
+        authority:
+          exact: ${STARTER_DOMAIN}
+services:
+  - name: geoscope
+    github:
+      repo: "${DO_GITHUB_REPO}"
+      branch: "${DO_GITHUB_BRANCH}"
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: Dockerfile
+    http_port: 8000
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    liveness_health_check:
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 6
+      http_path: /healthz
+      port: 8000
+    termination:
+      drain_seconds: 15
+      grace_period_seconds: 120
+    envs:
+      - key: ELASTICSEARCH_URL
+        value: http://10.124.0.2:9200
+        scope: RUN_TIME
+        type: GENERAL
+      - key: ELASTICSEARCH_USERNAME
+        value: elastic
+        scope: RUN_TIME
+        type: GENERAL
+      - key: ELASTICSEARCH_PASSWORD
+        value: "${ELASTICSEARCH_PASSWORD}"
+        scope: RUN_TIME
+        type: SECRET
+      - key: ELASTICSEARCH_ACTIVE_MODEL
+        value: gemini_embedding_2_3072_v1
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEMINI_API_KEY
+        value: "${GEMINI_API_KEY}"
+        scope: RUN_TIME
+        type: SECRET
+      - key: GEO_MCP_PUBLIC_BASE_URL
+        value: https://geoscope.kevinformatics.com
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_MCP_ALLOWED_HOSTS
+        value: geoscope.kevinformatics.com
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_MCP_ALLOWED_ORIGINS
+        value: ""
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_MCP_RATE_PER_SECOND
+        value: "1"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_MCP_BURST_CAPACITY
+        value: "5"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: GEO_MCP_MAX_CONCURRENT_REQUESTS
+        value: "4"
+        scope: RUN_TIME
+        type: GENERAL
