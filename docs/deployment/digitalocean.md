@@ -1,7 +1,9 @@
 # DigitalOcean deployment
 
 This runbook deploys the public, anonymous hackathon service. Elasticsearch is
-credentialed and reachable only on Droplet loopback and the private VPC.
+credentialed and reachable only on Droplet loopback and the private VPC. The
+application sends a second, nonblocking copy of its runtime logs to Vector on
+that VPC for cold storage in Cloudflare R2.
 
 ## Resource facts
 
@@ -14,17 +16,30 @@ credentialed and reachable only on Droplet loopback and the private VPC.
 | VPC/datacenter | `default-sfo3` / `sfo3` |
 | Public domain | `geoscope.kevinformatics.com` |
 | Elasticsearch | `9.4.2`, index `geo-series` |
+| Vector | `0.57.0`, private listener `10.124.0.2:8686` |
+| Runtime archive | R2 bucket `geoscope-runtime-logs` |
 | Required corpus | `288904` documents and Gemini vectors |
 
 The Droplet keeps its provider-assigned public address because an existing
 standard Droplet cannot be converted to private-only. Elasticsearch is never
 published on that interface. Restrict TCP 22 to the administrator address and
-TCP 9200 to the App Platform VPC source in the DigitalOcean Cloud Firewall;
-deny every other inbound rule.
+TCP 9200 and 8686 only to the App Platform VPC egress private IP in the
+DigitalOcean Cloud Firewall; deny every other inbound rule.
 
-## 1. Bootstrap Elasticsearch
+## 1. Bootstrap Elasticsearch and prepare Vector
 
-Generate the credential locally without displaying it:
+In Cloudflare, create an R2 Standard bucket named
+`geoscope-runtime-logs`. Create an S3-compatible API token with **Object Read &
+Write**, scoped to that bucket only, and record its access key ID, secret
+access key, and endpoint. The endpoint is normally
+`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; jurisdictional buckets require
+their jurisdiction-specific endpoint. See Cloudflare's
+[R2 S3 setup](https://developers.cloudflare.com/r2/get-started/s3/) and
+[token permissions](https://developers.cloudflare.com/r2/api/tokens/).
+
+Generate the Elasticsearch credential locally without displaying it, append
+the safe R2 placeholders, and fill the four R2 values in an editor so secrets
+do not enter shell history:
 
 ```bash
 umask 077
@@ -32,7 +47,14 @@ ELASTICSEARCH_PASSWORD="$(openssl rand -hex 32)"
 printf 'ELASTICSEARCH_USERNAME=elastic\nELASTICSEARCH_PASSWORD=%s\n' \
   "$ELASTICSEARCH_PASSWORD" >.env.elasticsearch.production
 unset ELASTICSEARCH_PASSWORD
+sed -n '2,$p' deploy/elasticsearch/elasticsearch.env.example \
+  >>.env.elasticsearch.production
 chmod 600 .env.elasticsearch.production
+${EDITOR:-vi} .env.elasticsearch.production
+if grep -q 'replace-with-' .env.elasticsearch.production; then
+  echo 'replace every R2 placeholder before deployment' >&2
+  exit 1
+fi
 ```
 
 Copy the committed host files and ignored credential, then bootstrap Ubuntu:
@@ -47,7 +69,7 @@ scp -i ~/.ssh/digitalocean .env.elasticsearch.production \
 ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
   'chmod 600 /opt/geoscope/elasticsearch/.env && /opt/geoscope/elasticsearch/bootstrap-ubuntu.sh'
 ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
-  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml up -d && docker compose --env-file .env -f docker-compose.production.yml ps'
+  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml up -d elasticsearch && docker compose --env-file .env -f docker-compose.production.yml ps elasticsearch'
 ```
 
 Verify host invariants and authenticated loopback health without printing the
@@ -104,7 +126,148 @@ uv run geo-search 'single cell lung cancer' --mode hybrid --topk 5
 uv run geo-search 'breast cancer' --mode hybrid --organism-id NCBITaxon:9606 --topk 5
 ```
 
-## 3. Render and apply the App Platform spec
+## 3. R2 runtime log archive
+
+Vector runs beside Elasticsearch on the existing Droplet, but does not depend
+on Elasticsearch. It accepts only `POST /events`, keeps a bounded disk buffer
+at `/srv/vector/data`, and uploads gzip JSONL objects to R2 through the
+S3-compatible HTTPS API. The collector has no public listener, API, dashboard,
+TLS, or application authentication; the VPC-only bind and source-IP firewall
+rule are the access boundary for these non-sensitive logs.
+
+For an existing Droplet, copy the updated deployment directory and ignored env
+file again, rerun the idempotent bootstrap, and keep the remote env mode 0600:
+
+```bash
+scp -i ~/.ssh/digitalocean -r deploy/elasticsearch \
+  root@143.198.53.162:/opt/geoscope/
+scp -i ~/.ssh/digitalocean .env.elasticsearch.production \
+  root@143.198.53.162:/opt/geoscope/elasticsearch/.env
+ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
+  'chmod 600 /opt/geoscope/elasticsearch/.env && /opt/geoscope/elasticsearch/bootstrap-ubuntu.sh'
+```
+
+In the App Platform **Networking** tab, copy the app's **App Platform VPC
+egress private IP**. Add a DigitalOcean Cloud Firewall inbound rule for TCP
+8686 whose only source is that private IP as a `/32`. Do not add a public
+source range or `0.0.0.0/0`. Keep the app attached to `default-sfo3`; DigitalOcean
+documents this private path in its
+[App Platform VPC guide](https://docs.digitalocean.com/products/app-platform/how-to/enable-vpc/).
+
+Check host headroom before adding the collector. Elasticsearch remains the
+priority workload:
+
+```bash
+ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
+  'free -h; df -h /srv/elasticsearch /srv/vector; docker stats --no-stream'
+```
+
+Validate the exact mounted configuration with
+`vector validate --skip-healthchecks`, start only Vector, and inspect the
+listener:
+
+```bash
+ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
+  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml run --rm --no-deps --entrypoint vector vector validate --skip-healthchecks /etc/vector/vector.yaml && docker compose --env-file .env -f docker-compose.production.yml up -d vector && docker compose --env-file .env -f docker-compose.production.yml ps vector && ss -lntp | grep :8686'
+```
+
+The only listener must be `10.124.0.2:8686`, never `0.0.0.0:8686`,
+`127.0.0.1:8686`, or `143.198.53.162:8686`. Confirm a connection to the public
+address fails from another machine.
+
+Before updating the App Platform spec, open the existing app's console and
+send a unique newline-terminated marker over the VPC. Record the printed value
+for archive verification:
+
+```bash
+export MARKER="pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+python - <<'PY'
+import json
+import os
+import urllib.request
+
+marker = os.environ["MARKER"]
+payload = json.dumps(
+    {
+        "event": "deployment.marker",
+        "event_id": marker,
+        "marker": marker,
+        "phase": "pre-deploy",
+    },
+    separators=(",", ":"),
+).encode() + b"\n"
+request = urllib.request.Request(
+    "http://10.124.0.2:8686/events",
+    data=payload,
+    headers={"Content-Type": "application/x-ndjson"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    if response.status != 200:
+        raise SystemExit(f"unexpected Vector status: {response.status}")
+print(marker)
+PY
+```
+
+Production batches flush after one hour or 128 MiB, whichever happens first,
+so allow up to 60 minutes for a low-traffic marker to appear. From an admin
+machine with the AWS CLI, load the ignored credentials, list the hourly prefix,
+copy the object whose timestamp covers the marker, and inspect it:
+
+```bash
+set -a
+. ./.env.elasticsearch.production
+set +a
+export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+export AWS_DEFAULT_REGION=auto
+aws --endpoint-url "$R2_ENDPOINT" s3 ls \
+  "s3://$R2_BUCKET/runtime/app=geoscope/" --recursive
+export OBJECT_KEY='copy-the-matching-runtime/.../*.jsonl.gz-key-from-the-list'
+aws --endpoint-url "$R2_ENDPOINT" s3 cp \
+  "s3://$R2_BUCKET/$OBJECT_KEY" /tmp/geoscope-runtime.jsonl.gz
+gzip -dc /tmp/geoscope-runtime.jsonl.gz | grep -F "$MARKER"
+```
+
+Repeat this check for the post-deploy marker in the next section. A successful
+result proves the private App-to-Vector path, persistent batching, R2 upload,
+compression, and object recovery. App Platform deployments cannot wipe
+Vector's accepted queue because the collector and `/srv/vector/data` live on
+the Droplet. The app still uses its 120-second termination grace period to
+flush its small in-process queue before an old instance exits.
+
+### Vector or R2 outage and recovery
+
+During an R2 outage, Vector retries from its persistent buffer. Its configured
+disk cap is 512 MiB and its container is limited to 256 MiB RAM and 0.25 CPU.
+Check buffer growth, container usage, and Elasticsearch health without
+restarting Elasticsearch:
+
+```bash
+ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
+  'cd /opt/geoscope/elasticsearch && du -sh /srv/vector/data && docker stats --no-stream geo-vector geo-elasticsearch && set -a && . ./.env && set +a && curl --fail --silent --user elastic:"$ELASTICSEARCH_PASSWORD" http://127.0.0.1:9200/_cluster/health'
+```
+
+The buffer must remain within its 512 MiB cap and Elasticsearch health must
+remain yellow or green. If the buffer fills, Vector applies backpressure; the
+application's network worker times out and its bounded memory queue eventually
+drops only the remote archive copies while request handling and DigitalOcean
+runtime logging continue.
+
+After correcting R2 credentials or connectivity, restart/recreate only Vector
+and follow its logs until uploads resume:
+
+```bash
+ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
+  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml up -d --force-recreate vector && docker compose --env-file .env -f docker-compose.production.yml logs --tail 100 -f vector'
+```
+
+Never delete `/srv/vector/data` until queued records have drained and their R2
+objects have been verified. Recreating the Vector container is safe because
+that directory is a host bind mount; replacing the Droplet is not safe unless
+the buffer has already drained or the directory is copied first.
+
+## 4. Render and apply the App Platform spec
 
 Install and authenticate current `doctl`, then create the ignored environment
 file from `deploy/app-platform.env.example`. Copy the Elasticsearch password
@@ -127,6 +290,46 @@ doctl apps update "$DO_APP_ID" --spec .do/app.yaml --update-sources --wait \
   --format ID,DefaultIngress,ActiveDeployment.ID
 doctl apps logs "$DO_APP_ID" geoscope --type run --follow
 ```
+
+After the new deployment is active, open its App Platform console and emit a
+post-deploy marker through the same `LogExporter` used by the Uvicorn process:
+
+```bash
+export MARKER="post-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+python - <<'PY'
+import json
+import logging
+import os
+
+from geo_index.log_export import LogExporter, LogExportSettings
+
+marker = os.environ["MARKER"]
+settings = LogExportSettings.from_env(os.environ)
+if settings is None:
+    raise SystemExit("runtime log export is not enabled")
+exporter = LogExporter(settings)
+exporter.start()
+try:
+    logging.getLogger("geo_index.deployment").warning(
+        json.dumps(
+            {
+                "event": "deployment.marker",
+                "event_id": marker,
+                "marker": marker,
+                "phase": "post-deploy",
+            },
+            separators=(",", ":"),
+        )
+    )
+finally:
+    exporter.stop()
+print(marker)
+PY
+```
+
+Use the R2 listing/download commands in the preceding section to recover this
+marker after the hourly flush. Both the pre-deploy and post-deploy markers must
+be present before treating the log archive rollout as complete.
 
 App Platform must report one `apps-s-1vcpu-0.5gb` instance in `sfo`, attached
 to the `default-sfo3` VPC, with edge caching disabled and `/healthz` liveness.
@@ -214,7 +417,7 @@ applied with model `claude-haiku-4-5` and thinking `disabled` for
 both natural-language smoke queries. A successful source push or healthy
 process alone is not completion evidence.
 
-## 4. DNS and public verification
+## 5. DNS and public verification
 
 If DNS is not managed by DigitalOcean, point the `geoscope` CNAME at the
 `DefaultIngress` hostname from `doctl apps get "$DO_APP_ID"`. Add the custom
@@ -261,7 +464,7 @@ index:
 
 ```bash
 ssh -i ~/.ssh/digitalocean root@143.198.53.162 \
-  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml pull && docker compose --env-file .env -f docker-compose.production.yml up -d --force-recreate'
+  'cd /opt/geoscope/elasticsearch && docker compose --env-file .env -f docker-compose.production.yml pull elasticsearch && docker compose --env-file .env -f docker-compose.production.yml up -d --force-recreate elasticsearch'
 ```
 
 To rotate the Elasticsearch password, first keep the SSH tunnel open. Generate

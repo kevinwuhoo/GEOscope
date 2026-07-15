@@ -116,3 +116,20 @@ def test_vector_s3_integration_script_is_executable_and_self_cleaning() -> None:
     assert "application/x-ndjson" in script
     assert "gzip -dc" in script
     assert "runtime/app=geoscope/year=" in script
+
+
+def test_runbook_covers_log_archive_rollout_and_recovery() -> None:
+    text = Path("docs/deployment/digitalocean.md").read_text()
+    for phrase in (
+        "R2 runtime log archive",
+        "R2_ENDPOINT",
+        "10.124.0.2:8686",
+        "App Platform VPC egress private IP",
+        "docker stats",
+        "vector validate --skip-healthchecks",
+        "application/x-ndjson",
+        "gzip -dc",
+        "/srv/vector/data",
+        "512 MiB",
+    ):
+        assert phrase in text
