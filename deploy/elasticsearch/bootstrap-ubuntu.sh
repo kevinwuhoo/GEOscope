@@ -8,6 +8,7 @@ apt-get install -y docker.io docker-compose-v2
 systemctl enable --now docker
 
 install -d -m 0750 -o 1000 -g 0 /srv/elasticsearch/data
+install -d -m 0750 /srv/vector/data
 
 printf '%s\n' 'vm.max_map_count=1048576' \
   >/etc/sysctl.d/99-elasticsearch.conf

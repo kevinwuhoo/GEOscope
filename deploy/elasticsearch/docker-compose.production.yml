@@ -45,3 +45,27 @@ services:
       options:
         max-size: 20m
         max-file: "5"
+
+  vector:
+    image: timberio/vector:0.57.0-debian
+    container_name: geo-vector
+    environment:
+      AWS_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?set R2_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?set R2_SECRET_ACCESS_KEY}
+      R2_ENDPOINT: ${R2_ENDPOINT:?set R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET:?set R2_BUCKET}
+      VECTOR_BATCH_TIMEOUT_SECONDS: "3600"
+      VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION: "true"
+    ports:
+      - "10.124.0.2:8686:8686"
+    volumes:
+      - /srv/vector/data:/var/lib/vector
+      - ./vector.yaml:/etc/vector/vector.yaml:ro
+    mem_limit: 256m
+    cpus: "0.25"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
