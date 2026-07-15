@@ -11,6 +11,7 @@ def test_production_dockerfile_builds_frontend_and_runs_combined_app() -> None:
     assert "COPY --from=frontend" in text
     assert "geo_index.production_app:create_app" in text
     assert '"--factory"' in text
+    assert '"--no-access-log"' in text
 
 
 def test_heavy_packages_are_not_default_project_dependencies() -> None:

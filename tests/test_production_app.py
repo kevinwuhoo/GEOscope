@@ -56,6 +56,17 @@ class FakeService:
         return GetDatasetOutput(found=False, dataset=None)
 
 
+class FakeLogExporter:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def start(self) -> None:
+        self.calls.append("start")
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+
+
 def _settings() -> McpSettings:
     return McpSettings(
         elasticsearch=ElasticsearchSettings(
@@ -315,3 +326,23 @@ def test_default_factory_constructs_the_shared_quality_aware_service(
         anthropic_api_key="test-anthropic-key",
         rerank_enabled=True,
     )
+
+
+def test_log_exporter_wraps_the_service_lifespan() -> None:
+    exporter = FakeLogExporter()
+    service = FakeService()
+    app = create_app(
+        settings=_settings(),
+        service=service,
+        log_exporter=exporter,
+    )
+
+    with TestClient(
+        app,
+        base_url="https://geoscope.kevinformatics.com",
+    ):
+        assert exporter.calls == ["start"]
+        assert service.is_open
+
+    assert exporter.calls == ["start", "stop"]
+    assert service.close_calls == 1

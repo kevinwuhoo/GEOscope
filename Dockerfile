@@ -23,4 +23,4 @@ LABEL org.geo-metadata-index.search-backend="elasticsearch" \
 
 USER 65532:65532
 EXPOSE 8000
-CMD ["uvicorn", "geo_index.production_app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "geo_index.production_app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

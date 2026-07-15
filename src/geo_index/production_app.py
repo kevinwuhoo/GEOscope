@@ -12,6 +12,7 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .log_export import LogExporter, LogExportSettings
 from .marketing_api import install_marketing_routes
 from .mcp_search_service import McpSearchService
 from .mcp_server import (
@@ -44,6 +45,7 @@ def create_app(
     settings: McpSettings | None = None,
     service: McpService | None = None,
     static_dir: Path | None = None,
+    log_exporter: LogExporter | None = None,
 ) -> FastAPI:
     settings = settings or McpSettings.from_env(os.environ)
     service = service or McpSearchService.from_settings(settings)
@@ -60,11 +62,21 @@ def create_app(
     )
     if not callable(mcp_mount.lifespan):
         raise RuntimeError("FastMCP HTTP lifespan is unavailable")
+    exporter = log_exporter
+    if exporter is None:
+        export_settings = LogExportSettings.from_env(os.environ)
+        exporter = LogExporter(export_settings) if export_settings else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with mcp_mount.lifespan(app):
-            yield
+        if exporter is not None:
+            exporter.start()
+        try:
+            async with mcp_mount.lifespan(app):
+                yield
+        finally:
+            if exporter is not None:
+                exporter.stop()
 
     app = FastAPI(title="GEOscope", lifespan=lifespan)
     app.add_middleware(

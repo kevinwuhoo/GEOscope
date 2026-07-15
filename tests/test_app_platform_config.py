@@ -15,3 +15,17 @@ def test_app_platform_template_uses_one_small_private_service() -> None:
     assert "ELASTICSEARCH_PASSWORD" in text
     assert "GEMINI_API_KEY" in text
     assert "GEO_MCP_JWKS_URI" not in text
+
+
+def test_app_platform_template_exports_logs_over_the_vpc() -> None:
+    text = Path(".do/app.yaml.tmpl").read_text()
+
+    assert (
+        'key: GEO_LOG_EXPORT_ENABLED\n        value: "true"'
+        in text
+    )
+    assert (
+        "key: GEO_LOG_EXPORT_URL\n"
+        "        value: http://10.124.0.2:8686/events"
+        in text
+    )

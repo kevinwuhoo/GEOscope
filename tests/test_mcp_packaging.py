@@ -73,7 +73,8 @@ def test_docker_packages_one_worker_combined_production_app() -> None:
     assert "geo_index.production_app:create_app" in dockerfile
     assert (
         'CMD ["uvicorn", "geo_index.production_app:create_app", "--factory", '
-        '"--host", "0.0.0.0", "--port", "8000", "--workers", "1"]'
+        '"--host", "0.0.0.0", "--port", "8000", "--workers", "1", '
+        '"--no-access-log"]'
         in dockerfile
     )
     assert "GEO_PG_DSN" not in dockerfile
@@ -92,6 +93,8 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
         "GEO_MCP_PUBLIC_BASE_URL",
         "GEO_MCP_ALLOWED_HOSTS",
         "GEO_MCP_MAX_CONCURRENT_REQUESTS",
+        "GEO_LOG_EXPORT_ENABLED",
+        "GEO_LOG_EXPORT_URL",
     }
     keys = {
         line.split("=", 1)[0]
@@ -107,6 +110,8 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     assert "GEO_MCP_RATE_PER_SECOND=100" in example
     assert "GEO_MCP_BURST_CAPACITY=100" in example
     assert "GEO_MCP_MAX_CONCURRENT_REQUESTS=20" in example
+    assert "GEO_LOG_EXPORT_ENABLED=false" in example
+    assert "GEO_LOG_EXPORT_URL=" in example
     assert "GEO_RERANK_MODEL=claude-haiku-4-5" in example
     assert "GEO_RERANK_THINKING=disabled" in example
     assert "GEO_RERANK_TIMEOUT_SECONDS=30" in example
