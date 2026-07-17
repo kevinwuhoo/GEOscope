@@ -32,9 +32,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, .signal-strip:focus-
 .skip-link:focus { top: 16px; }
 .site-shell { overflow: hidden; }
 .site-header { width: var(--page); height: 82px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto; align-items: center; border-bottom: 1px solid var(--carbon); }
-.wordmark { position: relative; width: max-content; display: inline-flex; align-items: baseline; font: 650 24px/1 var(--display); letter-spacing: -1.2px; text-decoration: none; }
+.wordmark { width: max-content; display: inline-flex; align-items: baseline; font: 650 24px/1 var(--display); letter-spacing: -1.2px; text-decoration: none; }
 .wordmark__geo { letter-spacing: -.7px; }
-.wordmark i { position: absolute; width: 7px; height: 7px; border: 1.5px solid var(--cobalt); border-radius: 50%; right: -9px; top: -3px; }
+.wordmark__mark { align-self: center; width: 17px; height: 17px; flex: 0 0 17px; margin-left: 5px; transform: translateY(-1px); }
 .header-cta { justify-self: end; display: inline-flex; gap: 16px; align-items: center; min-height: 44px; padding: 0 16px; background: var(--carbon); color: var(--white); font: 600 11px/1 var(--mono); text-transform: uppercase; text-decoration: none; }
 
 .hero { width: var(--page); min-height: 680px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, .95fr) minmax(390px, .75fr); gap: clamp(48px, 7vw, 112px); align-items: center; padding: 70px 0 76px; }

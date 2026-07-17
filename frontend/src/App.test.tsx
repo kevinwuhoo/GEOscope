@@ -188,6 +188,23 @@ test("presents the focused NCBI GEO marketing story", () => {
 });
 
 
+test("uses the Ribbon Notch mark in each GEOscope wordmark", () => {
+  render(<App />);
+
+  const wordmarks = document.querySelectorAll<HTMLAnchorElement>(".wordmark");
+  expect(wordmarks).toHaveLength(2);
+
+  for (const wordmark of wordmarks) {
+    const mark = wordmark.querySelector<HTMLImageElement>(".wordmark__mark");
+    expect(mark).not.toBeNull();
+    expect(mark).toHaveAttribute("src", "/geoscope-mark.svg");
+    expect(mark).toHaveAttribute("alt", "");
+  }
+
+  expect(document.querySelector(".wordmark > i")).toBeNull();
+});
+
+
 test("offers the requested MCP clients with official local logos", () => {
   render(<App />);
 
