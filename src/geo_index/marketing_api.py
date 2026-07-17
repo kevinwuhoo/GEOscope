@@ -102,6 +102,7 @@ def install_marketing_routes(
 
     if static_dir is None:
         return
+    static_root = static_dir.resolve()
     index_path = static_dir / "index.html"
     assets_path = static_dir / "assets"
     if assets_path.is_dir():
@@ -119,6 +120,9 @@ def install_marketing_routes(
             for prefix in reserved
         ):
             raise HTTPException(status_code=404, detail="Not found")
+        requested_file = (static_root / frontend_path).resolve()
+        if requested_file.is_relative_to(static_root) and requested_file.is_file():
+            return FileResponse(requested_file)
         return FileResponse(index_path)
 
 

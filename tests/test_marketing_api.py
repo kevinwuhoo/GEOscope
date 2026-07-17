@@ -387,12 +387,16 @@ def test_production_assets_and_frontend_routes_do_not_shadow_api(
     assets.mkdir(parents=True)
     (dist / "index.html").write_text("<main>GEOscope</main>")
     (assets / "app.js").write_text("window.GEOscope = true")
+    (dist / "geoscope-mark.svg").write_text("<svg viewBox='0 0 64 64'/>")
     app = create_app(service_factory=_DemoService, static_dir=dist)
 
     with TestClient(app) as client:
         assert client.get("/").text == "<main>GEOscope</main>"
         assert client.get("/demo").text == "<main>GEOscope</main>"
         assert "window.GEOscope" in client.get("/assets/app.js").text
+        mark = client.get("/geoscope-mark.svg")
+        assert mark.headers["content-type"].startswith("image/svg+xml")
+        assert mark.text == "<svg viewBox='0 0 64 64'/>"
         assert client.get("/api/not-a-route").status_code == 404
         assert client.get("/mcp/not-a-route").status_code == 404
         assert client.get("/healthz/not-a-route").status_code == 404
