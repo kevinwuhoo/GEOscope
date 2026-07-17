@@ -110,8 +110,7 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
     required_environment = (
         "ANTHROPIC_API_KEY=",
         "GEO_RERANK_ENABLED=false",
-        "GEO_RERANK_MODEL=claude-sonnet-5",
-        "GEO_RERANK_EFFORT=low",
+        "GEO_RERANK_MODEL=claude-haiku-4-5",
         "GEO_RERANK_THINKING=disabled",
         "GEO_RERANK_CANDIDATE_LIMIT=40",
         "GEO_RERANK_TIMEOUT_SECONDS=30",
@@ -129,14 +128,14 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "GEO_TEST_ANTHROPIC=1",
         "geo-search-eval",
         "partial live records",
-        "baseline versus Sonnet",
+        "baseline versus Haiku",
         "up to 100 Elasticsearch and 100 NCBI candidates",
     ):
         assert phrase in deployment, phrase
     normalized_deployment = " ".join(deployment.split())
     assert (
         "A production source deploy is incomplete until public provenance shows "
-        "Sonnet applied"
+        "Haiku applied"
         in normalized_deployment
     )
     assert (
@@ -150,7 +149,7 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
     for phrase in (
         "up to 100 Elasticsearch candidates",
         "up to 100 native NCBI GEO candidates",
-        "Claude Sonnet 5",
+        "Claude Haiku 4.5",
         "query understanding",
         "Anthropic Structured Outputs",
     ):
@@ -179,15 +178,14 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "GSE310900",
     )
     official_references = (
-        "https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5",
-        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
         "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
         "https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python",
     )
     for path in provider_documentation:
         text = _read(path)
         for phrase in (
-            "Claude Sonnet 5",
+            "Claude Haiku 4.5",
             "Anthropic Structured Outputs",
             "GEO_TEST_ANTHROPIC=1",
             *smoke_queries,
@@ -207,7 +205,6 @@ def test_unified_search_rollout_is_documented_and_configurable() -> None:
         "ANTHROPIC_API_KEY",
         "GEO_RERANK_ENABLED",
         "GEO_RERANK_MODEL",
-        "GEO_RERANK_EFFORT",
         "GEO_RERANK_THINKING",
         "GEO_RERANK_CANDIDATE_LIMIT",
         "GEO_RERANK_TIMEOUT_SECONDS",

@@ -222,14 +222,12 @@ class AnthropicReranker:
         *,
         api_key: str,
         model: str,
-        reasoning_effort: str,
         thinking: str,
         timeout_seconds: float,
         client: Any | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.model = model
-        self.reasoning_effort = reasoning_effort
         self.thinking = thinking
         self._timeout_seconds = timeout_seconds
         self._clock = clock
@@ -264,7 +262,6 @@ class AnthropicReranker:
             ],
             "thinking": {"type": self.thinking},
             "output_config": {
-                "effort": self.reasoning_effort,
                 "format": {
                     "type": "json_schema",
                     "schema": STATIC_RANKING_SCHEMA,

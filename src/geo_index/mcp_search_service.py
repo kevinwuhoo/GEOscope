@@ -112,7 +112,6 @@ class NativeSource(Protocol):
 
 class CandidateReranker(Protocol):
     model: str
-    reasoning_effort: str
     thinking: str
 
     def rerank(
@@ -309,7 +308,6 @@ class McpSearchService:
             lambda settings: AnthropicReranker(
                 api_key=settings.anthropic_api_key or "",
                 model=settings.rerank_model,
-                reasoning_effort=settings.reasoning_effort,
                 thinking=settings.thinking,
                 timeout_seconds=settings.rerank_timeout_seconds,
             )
@@ -985,11 +983,7 @@ class McpSearchService:
                 rerank_model=(
                     self._reranker.model if rerank_attempted and self._reranker else None
                 ),
-                rerank_reasoning_effort=(
-                    cast(Any, self._reranker.reasoning_effort)
-                    if rerank_attempted and self._reranker
-                    else None
-                ),
+                rerank_reasoning_effort=None,
                 rerank_thinking=(
                     cast(Any, self._reranker.thinking)
                     if rerank_attempted and self._reranker

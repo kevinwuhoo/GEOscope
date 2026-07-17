@@ -352,7 +352,7 @@ def test_demo_search_accepts_the_shared_explicit_limit_range() -> None:
     assert [call["limit"] for call in service.execution_calls] == [1, 50]
 
 
-def test_standalone_factory_enables_the_same_sonnet_quality_settings(
+def test_standalone_factory_enables_the_same_haiku_quality_settings(
     monkeypatch,
 ) -> None:
     service = _DemoService()

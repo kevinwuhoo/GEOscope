@@ -89,8 +89,8 @@ def _provenance() -> SearchProvenanceOutput:
         merged_candidates=55,
         rerank_attempted=True,
         rerank_applied=True,
-        rerank_model="claude-sonnet-5",
-        rerank_reasoning_effort="low",
+        rerank_model="claude-haiku-4-5",
+        rerank_reasoning_effort=None,
         rerank_thinking="disabled",
         rerank_input_tokens=1200,
         rerank_output_tokens=400,
@@ -179,7 +179,7 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
             {
                 "rerank_attempted": False,
                 "rerank_applied": False,
-                "rerank_model": "claude-sonnet-5",
+                "rerank_model": "claude-haiku-4-5",
                 "rerank_reasoning_effort": None,
                 "rerank_thinking": None,
             },
@@ -189,27 +189,7 @@ def test_provenance_rejects_counts_above_the_bounded_source_union(
             {
                 "rerank_attempted": True,
                 "rerank_applied": False,
-                "rerank_model": "claude-sonnet-5",
-                "rerank_reasoning_effort": None,
-                "rerank_thinking": "disabled",
-            },
-            id="attempt-without-effort",
-        ),
-        pytest.param(
-            {
-                "rerank_attempted": False,
-                "rerank_applied": False,
-                "rerank_model": None,
-                "rerank_reasoning_effort": "low",
-                "rerank_thinking": None,
-            },
-            id="effort-without-attempt",
-        ),
-        pytest.param(
-            {
-                "rerank_attempted": True,
-                "rerank_applied": False,
-                "rerank_model": "claude-sonnet-5",
+                "rerank_model": "claude-haiku-4-5",
                 "rerank_reasoning_effort": "low",
                 "rerank_thinking": None,
             },

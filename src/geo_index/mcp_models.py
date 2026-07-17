@@ -78,8 +78,6 @@ class SearchProvenanceOutput(_StrictOutputModel):
             raise ValueError("applied reranking requires an attempted rerank")
         if self.rerank_attempted != (self.rerank_model is not None):
             raise ValueError("rerank model must agree with attempted state")
-        if self.rerank_attempted != (self.rerank_reasoning_effort is not None):
-            raise ValueError("reasoning effort must agree with attempted state")
         if self.rerank_attempted != (self.rerank_thinking is not None):
             raise ValueError("thinking must agree with attempted state")
         return self

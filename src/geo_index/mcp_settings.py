@@ -116,8 +116,7 @@ def _strict_bool(env: Mapping[str, str], key: str, default: bool) -> bool:
 class SearchQualitySettings:
     anthropic_api_key: str | None = field(default=None, repr=False)
     rerank_enabled: bool = False
-    rerank_model: str = "claude-sonnet-5"
-    reasoning_effort: str = "low"
+    rerank_model: str = "claude-haiku-4-5"
     thinking: str = "disabled"
     candidate_limit: int = 40
     rerank_timeout_seconds: float = 30.0
@@ -133,12 +132,9 @@ class SearchQualitySettings:
         api_key = env.get("ANTHROPIC_API_KEY", "").strip() or None
         if enabled and api_key is None:
             raise ValueError("ANTHROPIC_API_KEY is required when reranking is enabled")
-        model = env.get("GEO_RERANK_MODEL", "claude-sonnet-5").strip()
-        if model != "claude-sonnet-5":
-            raise ValueError("GEO_RERANK_MODEL must be claude-sonnet-5")
-        effort = env.get("GEO_RERANK_EFFORT", "low").strip()
-        if effort != "low":
-            raise ValueError("GEO_RERANK_EFFORT must be low")
+        model = env.get("GEO_RERANK_MODEL", "claude-haiku-4-5").strip()
+        if model != "claude-haiku-4-5":
+            raise ValueError("GEO_RERANK_MODEL must be claude-haiku-4-5")
         thinking = env.get("GEO_RERANK_THINKING", "disabled").strip()
         if thinking != "disabled":
             raise ValueError("GEO_RERANK_THINKING must be disabled")
@@ -149,7 +145,6 @@ class SearchQualitySettings:
             anthropic_api_key=api_key,
             rerank_enabled=enabled,
             rerank_model=model,
-            reasoning_effort=effort,
             thinking=thinking,
             candidate_limit=candidate_limit,
             rerank_timeout_seconds=_positive_float(

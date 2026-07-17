@@ -44,7 +44,7 @@ flowchart LR
     M[NCBI GEO E-utilities] --> N[NCBI candidates]
     J --> O[Merge + deduplicate by GSE]
     N --> O
-    O --> P[Claude Sonnet 5 reranker]
+    O --> P[Claude Haiku 4.5 reranker]
     P --> Q[Shared search service]
     G --> R[Exact GSE lookup]
     M --> R
@@ -144,7 +144,7 @@ Elasticsearch provides the shared online search layer:
   Elasticsearch admits up to 100 candidates, NCBI retrieves up to its
   configured page maximum of 100, and the deduplicated union of up to 200
   candidates reaches the reranker.
-- **LLM reranking** uses Claude Sonnet 5 with low effort and thinking disabled
+- **LLM reranking** uses Claude Haiku 4.5 with thinking disabled
   to order the merged candidate set. The shared service returns 10 results by
   default, while callers may request from 1 through 50. Exact GSE accession
   lookups normalize the identifier, check the local index first, fall back to
@@ -224,8 +224,8 @@ Hybrid Elasticsearch retrieval improved recall within the indexed snapshot,
 but it could not surface a newly published or locally missing GSE. We therefore
 extended the shared search service to retrieve a deeper Elasticsearch pool and
 native NCBI GEO results concurrently, deduplicate them by accession, preserve
-source provenance, and rerank the combined evidence with Claude Sonnet 5 at low
-effort with thinking disabled.
+source provenance, and rerank the combined evidence using Claude Haiku 4.5 with
+thinking disabled.
 
 The service records timing, model usage, and reranking cost so relevance gains
 can be evaluated against latency and spend. It also preserves deterministic
@@ -240,14 +240,13 @@ online into Elasticsearch. They can participate in the final ranking, but
 fields absent from the E-utilities summary remain explicitly unavailable.
 
 The checked-in evaluation corpus compares an Elasticsearch-only baseline with
-the unified Claude Sonnet 5 run. It reports candidate Recall@40, final nDCG@10
+the unified Claude Haiku 4.5 run. It reports candidate Recall@40, final nDCG@10
 and MRR, constraint violations, NCBI-only recovery, latency, fallback rate,
 token usage, and cost using caller-supplied current prices. Production should
 start with `GEO_RERANK_ENABLED=false`; enabling it requires
-`ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-sonnet-5`,
-`GEO_RERANK_EFFORT=low`, and `GEO_RERANK_THINKING=disabled`. Startup rejects an
-enabled configuration without the key or with an unsupported model, effort,
-thinking mode, candidate bound, or timeout.
+`ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-haiku-4-5`, and
+`GEO_RERANK_THINKING=disabled`. Startup rejects an enabled configuration without
+the key or with an unsupported model, thinking mode, candidate bound, or timeout.
 
 The shared reranker request timeout defaults to 30 seconds via
 `GEO_RERANK_TIMEOUT_SECONDS=30`; keep the environment override available for
@@ -258,8 +257,7 @@ relevant studies are absent from the candidate pool; tune reranking when they
 are present but misordered; and add query understanding only if unmodified NCBI
 recall or explicit constraint handling remains inadequate after reranker
 evaluation. The current integration uses the official
-[Claude Sonnet 5 model](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
-[effort controls](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Claude Haiku 4.5 model](https://platform.claude.com/docs/en/about-claude/models/overview),
 [Anthropic Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
 and the official [Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python).
 
@@ -274,8 +272,8 @@ GEO_RERANK_ENABLED=true uv run geo-search-eval \
   eval/unified_search_queries.jsonl \
   --output eval/unified_search_report.json \
   --compare-baseline \
-  --input-cost-per-million "$CURRENT_SONNET_INPUT_COST_PER_MILLION" \
-  --output-cost-per-million "$CURRENT_SONNET_OUTPUT_COST_PER_MILLION"
+  --input-cost-per-million "$CURRENT_HAIKU_INPUT_COST_PER_MILLION" \
+  --output-cost-per-million "$CURRENT_HAIKU_OUTPUT_COST_PER_MILLION"
 ```
 
 Before rollout, inspect the shared-service results for all three smoke queries:
@@ -284,7 +282,7 @@ Before rollout, inspect the shared-service results for all three smoke queries:
 2. `human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data`
 3. `GSE310900`
 
-Sonnet must be attempted and applied for the two natural-language queries with
+Haiku must be attempted and applied for the two natural-language queries with
 no organism constraint violation. Exact `GSE310900` must be returned without a
 rerank attempt. Keep the generated evaluation report uncommitted.
 

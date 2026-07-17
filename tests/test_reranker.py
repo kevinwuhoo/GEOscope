@@ -141,8 +141,7 @@ def make_reranker(
         kwargs["clock"] = clock
     return AnthropicReranker(
         api_key="secret",
-        model="claude-sonnet-5",
-        reasoning_effort="low",
+        model="claude-haiku-4-5",
         thinking="disabled",
         timeout_seconds=timeout_seconds,
         client=client,
@@ -165,7 +164,7 @@ def status_error(status_code: int) -> APIStatusError:
     )
 
 
-def test_reranker_uses_sonnet_messages_contract_with_static_schema() -> None:
+def test_reranker_uses_haiku_messages_contract_with_static_schema() -> None:
     client = Client(
         message(
             [
@@ -187,9 +186,8 @@ def test_reranker_uses_sonnet_messages_contract_with_static_schema() -> None:
     assert client.messages.call_count == 1
     assert client.messages.kwargs is not None
     request = client.messages.kwargs
-    assert request["model"] == "claude-sonnet-5"
+    assert request["model"] == "claude-haiku-4-5"
     assert request["thinking"] == {"type": "disabled"}
-    assert request["output_config"]["effort"] == "low"  # type: ignore[index]
     assert request["output_config"]["format"] == {  # type: ignore[index]
         "type": "json_schema",
         "schema": STATIC_RANKING_SCHEMA,
@@ -760,8 +758,7 @@ def test_reranker_disables_sdk_internal_retries(
 
     AnthropicReranker(
         api_key="secret",
-        model="claude-sonnet-5",
-        reasoning_effort="low",
+        model="claude-haiku-4-5",
         thinking="disabled",
         timeout_seconds=8,
     )

@@ -35,7 +35,7 @@ def _candidate(gse: str, rank: int, taxon: str, organism_id: str) -> SearchCandi
 
 
 @pytest.mark.provider_integration
-def test_live_sonnet_accepts_the_strict_complete_ranking_schema() -> None:
+def test_live_haiku_accepts_the_strict_complete_ranking_schema() -> None:
     if os.environ.get("GEO_TEST_ANTHROPIC") != "1":
         pytest.skip("set GEO_TEST_ANTHROPIC=1 to permit the live provider call")
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -43,8 +43,7 @@ def test_live_sonnet_accepts_the_strict_complete_ranking_schema() -> None:
         pytest.skip("ANTHROPIC_API_KEY is not configured")
     reranker = AnthropicReranker(
         api_key=api_key,
-        model="claude-sonnet-5",
-        reasoning_effort="low",
+        model="claude-haiku-4-5",
         thinking="disabled",
         timeout_seconds=30,
     )
@@ -65,7 +64,7 @@ def test_live_sonnet_accepts_the_strict_complete_ranking_schema() -> None:
 
 
 @pytest.mark.provider_integration
-def test_live_sonnet_reranks_maximum_two_hundred_candidate_pool(
+def test_live_haiku_reranks_maximum_two_hundred_candidate_pool(
     record_property,
 ) -> None:
     if os.environ.get("GEO_TEST_ANTHROPIC") != "1":
@@ -84,8 +83,7 @@ def test_live_sonnet_reranks_maximum_two_hundred_candidate_pool(
     )
     reranker = AnthropicReranker(
         api_key=api_key,
-        model="claude-sonnet-5",
-        reasoning_effort="low",
+        model="claude-haiku-4-5",
         thinking="disabled",
         timeout_seconds=max_latency_seconds,
     )

@@ -444,10 +444,10 @@ def _default_service_factories(
     quality = SearchQualitySettings.from_env(env)
     if not quality.rerank_enabled:
         raise ValueError(
-            "Sonnet evaluation requires GEO_RERANK_ENABLED=true and ANTHROPIC_API_KEY"
+            "Haiku evaluation requires GEO_RERANK_ENABLED=true and ANTHROPIC_API_KEY"
         )
     factories: dict[str, Callable[[], EvaluationService]] = {
-        "sonnet": lambda: McpSearchService(
+        "haiku": lambda: McpSearchService(
             elasticsearch=elasticsearch,
             quality=quality,
         )
@@ -478,7 +478,7 @@ def _effective_configuration(
         return {
             "rerank_enabled": enabled,
             "model": quality.rerank_model if enabled else None,
-            "reasoning_effort": quality.reasoning_effort if enabled else None,
+            "reasoning_effort": None,
             "thinking": quality.thinking if enabled else None,
         }
     if label == "baseline":
@@ -490,12 +490,11 @@ def _effective_configuration(
         }
     attempted = [case for case in cases if case["rerank_attempted"]]
     models = {case["rerank_model"] for case in attempted}
-    efforts = {case["rerank_reasoning_effort"] for case in attempted}
     thinking = {case["rerank_thinking"] for case in attempted}
     return {
         "rerank_enabled": bool(attempted),
         "model": next(iter(models)) if len(models) == 1 else None,
-        "reasoning_effort": next(iter(efforts)) if len(efforts) == 1 else None,
+        "reasoning_effort": None,
         "thinking": next(iter(thinking)) if len(thinking) == 1 else None,
     }
 
@@ -525,7 +524,7 @@ def run_evaluation(
             compare_baseline=compare_baseline,
         )
     )
-    labels = ("baseline", "sonnet") if compare_baseline else ("sonnet",)
+    labels = ("baseline", "haiku") if compare_baseline else ("haiku",)
     if set(factories) != set(labels):
         raise ValueError("service factories must match the requested evaluation runs")
 
@@ -574,9 +573,9 @@ def run_evaluation(
         raise failure
     if (
         uses_default_factories
-        and runs["sonnet"]["aggregate"]["rerank_attempted_count"] < 1
+        and runs["haiku"]["aggregate"]["rerank_attempted_count"] < 1
     ):
-        raise ValueError("Sonnet evaluation requires at least one actual rerank attempt")
+        raise ValueError("Haiku evaluation requires at least one actual rerank attempt")
 
     report: dict[str, Any] = {
         "schema_version": "unified-search-eval-v1",

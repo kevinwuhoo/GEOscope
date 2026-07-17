@@ -118,7 +118,7 @@ set -a
 . ./deploy/app-platform.env
 set +a
 umask 077
-envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${ANTHROPIC_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_EFFORT} ${GEO_RERANK_THINKING} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
+envsubst '${DO_VPC_ID} ${DO_GITHUB_REPO} ${DO_GITHUB_BRANCH} ${ELASTICSEARCH_PASSWORD} ${GEMINI_API_KEY} ${ANTHROPIC_API_KEY} ${GEO_RERANK_ENABLED} ${GEO_RERANK_MODEL} ${GEO_RERANK_THINKING} ${GEO_RERANK_CANDIDATE_LIMIT} ${GEO_RERANK_TIMEOUT_SECONDS} ${GEO_NCBI_TIMEOUT_SECONDS}' \
   <.do/app.yaml.tmpl >.do/app.yaml
 doctl apps spec validate .do/app.yaml
 doctl apps list --format ID,Spec.Name,DefaultIngress
@@ -160,9 +160,9 @@ Provider response text and API keys are never exposed through MCP, HTTP, logs,
 or evaluation reports.
 
 Startup validates the complete search-quality configuration. Enabling
-reranking requires `ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-sonnet-5`,
-`GEO_RERANK_EFFORT=low`, and `GEO_RERANK_THINKING=disabled`; an absent key or an
-invalid model, effort, thinking mode, candidate bound, or timeout prevents
+reranking requires `ANTHROPIC_API_KEY`, `GEO_RERANK_MODEL=claude-haiku-4-5`, and
+`GEO_RERANK_THINKING=disabled`; an absent key or an invalid model, thinking mode,
+candidate bound, or timeout prevents
 startup. Keep the Anthropic key in App Platform as a secret at runtime. The
 `envsubst` step writes it into the ignored local `.do/app.yaml`; never commit
 the generated spec or include the key in reports.
@@ -172,7 +172,7 @@ The shared reranker request timeout defaults to 30 seconds via
 operational tuning.
 
 With live Elasticsearch and NCBI access configured, explicitly opt in to the
-provider smoke and then record baseline versus Sonnet metrics. Supply current
+provider smoke and then record baseline versus Haiku metrics. Supply current
 prices at run time rather than committing a price assumption:
 
 ```bash
@@ -183,12 +183,12 @@ GEO_RERANK_ENABLED=true uv run geo-search-eval \
   eval/unified_search_queries.jsonl \
   --output eval/unified_search_report.json \
   --compare-baseline \
-  --input-cost-per-million "$CURRENT_SONNET_INPUT_COST_PER_MILLION" \
-  --output-cost-per-million "$CURRENT_SONNET_OUTPUT_COST_PER_MILLION"
+  --input-cost-per-million "$CURRENT_HAIKU_INPUT_COST_PER_MILLION" \
+  --output-cost-per-million "$CURRENT_HAIKU_OUTPUT_COST_PER_MILLION"
 ```
 
 Keep `eval/unified_search_report.json` uncommitted until its values are reviewed.
-Enable reranking only after the baseline versus Sonnet Recall@40, nDCG@10, MRR,
+Enable reranking only after the baseline versus Haiku Recall@40, nDCG@10, MRR,
 constraint violations, NCBI-only recovery, p50/p95 latency, fallback rate,
 token use, and estimated cost are recorded. Improve candidate generation when
 relevant records are absent; tune reranking when they are present but
@@ -202,16 +202,15 @@ query in the versioned evaluation corpus:
 2. `human breast cancer transcriptomics before and after neoadjuvant chemotherapy with treatment response data`
 3. `GSE310900`
 
-Claude Sonnet 5 must be attempted and applied for the two natural-language
+Claude Haiku 4.5 must be attempted and applied for the two natural-language
 queries with no organism constraint violation. Exact `GSE310900` must return
 the accession without a rerank attempt. The integration follows the official
-[Claude Sonnet 5 model documentation](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
-[effort controls](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Claude Haiku 4.5 model documentation](https://platform.claude.com/docs/en/about-claude/models/overview),
 [Anthropic Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
 and the [Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python).
 
-A production source deploy is incomplete until public provenance shows Sonnet
-applied with model `claude-sonnet-5`, effort `low`, and thinking `disabled` for
+A production source deploy is incomplete until public provenance shows Haiku
+applied with model `claude-haiku-4-5` and thinking `disabled` for
 both natural-language smoke queries. A successful source push or healthy
 process alone is not completion evidence.
 

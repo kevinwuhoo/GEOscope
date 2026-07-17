@@ -153,8 +153,7 @@ class FakeNativeSource:
 
 
 class FakeReranker:
-    model = "claude-sonnet-5"
-    reasoning_effort = "low"
+    model = "claude-haiku-4-5"
     thinking = "disabled"
 
     def __init__(
@@ -424,7 +423,7 @@ def test_reranker_startup_failure_closes_ncbi_and_client() -> None:
     assert service._reranker is None
 
 
-def test_default_reranker_factory_constructs_approved_sonnet_configuration(
+def test_default_reranker_factory_constructs_approved_haiku_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     constructed: dict[str, object] = {}
@@ -448,8 +447,7 @@ def test_default_reranker_factory_constructs_approved_sonnet_configuration(
 
     assert constructed == {
         "api_key": "test-anthropic-key",
-        "model": "claude-sonnet-5",
-        "reasoning_effort": "low",
+        "model": "claude-haiku-4-5",
         "thinking": "disabled",
         "timeout_seconds": 3.5,
     }
@@ -548,8 +546,8 @@ def test_close_waits_for_inflight_search_and_rejects_new_operations() -> None:
     provenance = executions[0].output.provenance
     assert provenance.rerank_attempted is True
     assert provenance.rerank_applied is True
-    assert provenance.rerank_model == "claude-sonnet-5"
-    assert provenance.rerank_reasoning_effort == "low"
+    assert provenance.rerank_model == "claude-haiku-4-5"
+    assert provenance.rerank_reasoning_effort is None
     assert provenance.rerank_thinking == "disabled"
     assert reranker.closed
     assert native.closed
@@ -769,8 +767,8 @@ def test_natural_search_requests_deep_pool_merges_and_reranks_top_ten() -> None:
     assert execution.output.results[0].score == 100
     assert execution.output.provenance.rerank_applied is True
     assert execution.output.provenance.rerank_attempted is True
-    assert execution.output.provenance.rerank_model == "claude-sonnet-5"
-    assert execution.output.provenance.rerank_reasoning_effort == "low"
+    assert execution.output.provenance.rerank_model == "claude-haiku-4-5"
+    assert execution.output.provenance.rerank_reasoning_effort is None
     assert execution.output.provenance.rerank_thinking == "disabled"
     assert execution.output.provenance.rerank_input_tokens == 123
     assert execution.output.provenance.rerank_output_tokens == 45
@@ -792,8 +790,8 @@ def test_ncbi_and_reranker_failures_keep_elasticsearch_order() -> None:
     assert [result.original_rank for result in output.results] == list(range(1, 11))
     assert output.provenance.rerank_applied is False
     assert output.provenance.rerank_attempted is True
-    assert output.provenance.rerank_model == "claude-sonnet-5"
-    assert output.provenance.rerank_reasoning_effort == "low"
+    assert output.provenance.rerank_model == "claude-haiku-4-5"
+    assert output.provenance.rerank_reasoning_effort is None
     assert output.provenance.rerank_thinking == "disabled"
     assert output.provenance.rerank_input_tokens == 0
     assert output.provenance.rerank_output_tokens == 0

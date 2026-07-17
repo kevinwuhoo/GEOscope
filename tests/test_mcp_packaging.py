@@ -6,12 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_sonnet_rollout_deployment_contract() -> None:
+def test_haiku_rollout_deployment_contract() -> None:
     errors: list[str] = []
     required_environment = (
         "ANTHROPIC_API_KEY=",
-        "GEO_RERANK_MODEL=claude-sonnet-5",
-        "GEO_RERANK_EFFORT=low",
+        "GEO_RERANK_MODEL=claude-haiku-4-5",
         "GEO_RERANK_THINKING=disabled",
         "GEO_RERANK_TIMEOUT_SECONDS=30",
     )
@@ -36,7 +35,6 @@ def test_sonnet_rollout_deployment_contract() -> None:
     required_app_mappings = (
         'key: ANTHROPIC_API_KEY\n        value: "${ANTHROPIC_API_KEY}"',
         'key: GEO_RERANK_MODEL\n        value: "${GEO_RERANK_MODEL}"',
-        'key: GEO_RERANK_EFFORT\n        value: "${GEO_RERANK_EFFORT}"',
         'key: GEO_RERANK_THINKING\n        value: "${GEO_RERANK_THINKING}"',
         'key: GEO_RERANK_TIMEOUT_SECONDS\n        value: "${GEO_RERANK_TIMEOUT_SECONDS}"',
     )
@@ -109,8 +107,7 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     assert "GEO_MCP_RATE_PER_SECOND=100" in example
     assert "GEO_MCP_BURST_CAPACITY=100" in example
     assert "GEO_MCP_MAX_CONCURRENT_REQUESTS=20" in example
-    assert "GEO_RERANK_MODEL=claude-sonnet-5" in example
-    assert "GEO_RERANK_EFFORT=low" in example
+    assert "GEO_RERANK_MODEL=claude-haiku-4-5" in example
     assert "GEO_RERANK_THINKING=disabled" in example
     assert "GEO_RERANK_TIMEOUT_SECONDS=30" in example
     assert "OPENAI_API_KEY" not in example
@@ -126,7 +123,6 @@ def test_environment_example_is_elasticsearch_only_and_contains_no_real_secrets(
     )
     assert 'key: ANTHROPIC_API_KEY\n        value: "${ANTHROPIC_API_KEY}"' in app_spec
     assert 'key: GEO_RERANK_MODEL\n        value: "${GEO_RERANK_MODEL}"' in app_spec
-    assert 'key: GEO_RERANK_EFFORT\n        value: "${GEO_RERANK_EFFORT}"' in app_spec
     assert (
         'key: GEO_RERANK_THINKING\n        value: "${GEO_RERANK_THINKING}"'
         in app_spec
