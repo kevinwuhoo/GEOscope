@@ -22,7 +22,7 @@ export default function App() {
       <header className="site-header">
         <a className="wordmark" href="#top" aria-label="GEOscope home">
           <span className="wordmark__geo">GEO</span><span>scope</span>
-          <i aria-hidden="true" />
+          <img className="wordmark__mark" src="/geoscope-mark.svg" alt="" />
         </a>
         <a className="header-cta" href="#live-demo">Open live demo <span aria-hidden="true">↘</span></a>
       </header>
@@ -85,7 +85,10 @@ export default function App() {
       </main>
 
       <footer>
-        <a className="wordmark wordmark--footer" href="#top"><span className="wordmark__geo">GEO</span><span>scope</span></a>
+        <a className="wordmark wordmark--footer" href="#top">
+          <span className="wordmark__geo">GEO</span><span>scope</span>
+          <img className="wordmark__mark" src="/geoscope-mark.svg" alt="" />
+        </a>
         <p>Hybrid, semantic discovery for NCBI GEO metadata.</p>
       </footer>
     </div>
