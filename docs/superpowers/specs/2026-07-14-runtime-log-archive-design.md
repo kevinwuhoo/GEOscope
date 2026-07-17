@@ -14,11 +14,11 @@ durable export path for them.
 
 ## Decision
 
-The App Platform process sends newline-delimited JSON batches directly to an
-authenticated HTTPS collector. Vector runs as a separate service in the
-existing production Docker Compose stack beside Elasticsearch. Vector buffers
-accepted events on the Droplet's persistent host disk and writes hourly gzip
-archives to R2 through its S3-compatible API.
+The App Platform process sends newline-delimited JSON batches directly to a
+private HTTP collector over the existing DigitalOcean VPC. Vector runs as the
+only additional service in the production Docker Compose stack beside
+Elasticsearch. Vector buffers accepted events on the Droplet's persistent host
+disk and writes hourly gzip archives to R2 through its S3-compatible HTTPS API.
 
 DigitalOcean App Platform log forwarding is not used. The collector therefore
 does not need to emulate the OpenSearch bulk API, and the app never points a
@@ -28,11 +28,11 @@ log drain back at itself.
 App Platform
   Python logging / Uvicorn
        | stdout (immediate DigitalOcean view)
-       ` HTTPS NDJSON batches
+       ` private VPC HTTP NDJSON batches
                  |
                  v
 Existing Elasticsearch Droplet
-  Caddy :443 -> Vector HTTP source -> bounded disk buffer -> R2 S3 sink
+  Vector :8686 -> bounded disk buffer -> R2 S3 sink
   Elasticsearch :9200 remains loopback/VPC-only
 ```
 
@@ -46,7 +46,7 @@ The exporter uses the standard-library logging queue pattern:
 
 - a non-blocking handler serializes an allowlisted event and places it in a
   bounded in-memory queue;
-- a background worker sends NDJSON batches over HTTPS;
+- a background worker sends NDJSON batches over the private VPC connection;
 - a batch is sent after at most one second, 100 events, or 1 MiB of serialized
   data, whichever happens first; and
 - graceful shutdown stops accepting new records, sends the remaining batch,
@@ -69,14 +69,11 @@ without relying on message text or timestamps.
 Production configuration uses:
 
 - `GEO_LOG_EXPORT_ENABLED=true`;
-- `GEO_LOG_EXPORT_URL=https://logs.geoscope.kevinformatics.com/events`;
-- `GEO_LOG_EXPORT_USERNAME` as a secret; and
-- `GEO_LOG_EXPORT_PASSWORD` as a secret.
+- `GEO_LOG_EXPORT_URL=http://10.124.0.2:8686/events`.
 
-Enabling export without a complete URL and credential pair is a startup
-configuration error. A correctly configured but unreachable collector is a
-runtime degradation: the application remains healthy and continues logging to
-stdout.
+Enabling export without a valid URL is a startup configuration error. A
+correctly configured but unreachable collector is a runtime degradation: the
+application remains healthy and continues logging to stdout.
 
 ## Selected records and health noise
 
@@ -97,28 +94,19 @@ This prevents the ten-second App Platform liveness probe from producing about
 ## Collector deployment
 
 `deploy/elasticsearch/docker-compose.production.yml` remains the production
-stack and gains two independent services:
+stack and gains one independent `vector` service. Vector receives NDJSON,
+accepts only `POST /events`, filters and normalizes records, buffers them, and
+writes R2 objects. It does not depend on Elasticsearch at runtime. Both
+containers use `restart: unless-stopped`, and the Vector image is pinned to a
+reviewed patch release rather than a floating tag.
 
-- `vector` receives NDJSON on the private Compose network, filters and
-  normalizes records, buffers them, and writes R2 objects; and
-- `caddy` terminates public TLS for
-  `logs.geoscope.kevinformatics.com`, authenticates the application sender,
-  permits only `POST /events`, enforces the 1 MiB request-size limit, and
-  proxies to Vector.
-
-Neither service depends on Elasticsearch at runtime. All three containers use
-`restart: unless-stopped`. Vector and Caddy images are pinned to reviewed patch
-releases rather than floating tags.
-
-Vector has no host-published ingestion or administration port. Caddy publishes
-TCP 80 and 443 for certificate issuance and HTTPS ingestion. Elasticsearch
-keeps its existing loopback and VPC-only port 9200 bindings. The DigitalOcean
-Cloud Firewall opens 80 and 443 publicly while retaining the existing SSH and
-private Elasticsearch restrictions.
-
-Caddy's certificate and configuration state are bind-mounted from
-`/srv/caddy/data` and `/srv/caddy/config`, so a Caddy container replacement
-does not discard its ACME account or issued certificate state.
+Vector publishes its ingestion port only on the Droplet's VPC address as
+`10.124.0.2:8686:8686`; it does not bind that port on the public interface and
+does not publish its administration API. Elasticsearch keeps its existing
+loopback and VPC-only port 9200 bindings. The DigitalOcean Cloud Firewall
+allows TCP 8686 only from the App Platform app's VPC egress private IP while
+retaining the existing SSH and private Elasticsearch restrictions. No DNS
+record, public collector port, TLS proxy, or certificate state is required.
 
 The Vector data directory is bind-mounted from `/srv/vector/data`. Its S3 sink
 uses a 512 MiB disk buffer with blocking backpressure at the collector boundary.
@@ -126,9 +114,13 @@ The cap prevents an R2 outage from consuming enough of the Droplet's 160 GiB
 disk to threaten Elasticsearch. The application exporter has its own bounded
 queue and therefore never propagates that backpressure into a search request.
 
-Vector and Caddy write their own operational logs only to locally rotated
-Docker JSON logs. They are not fed back into Vector, which prevents a collector
-logging loop.
+Vector is initially limited to 256 MiB of memory and 0.25 CPU in Compose so a
+collector fault cannot consume Elasticsearch's host resources without bound.
+Before export is enabled, a 15-minute soak at 100 events per second must finish
+without a Vector restart, a dropped event, or a buffer that fails to drain.
+Vector writes its own operational logs only to locally rotated Docker JSON
+logs. They are not fed back into Vector, which prevents a collector logging
+loop.
 
 ## R2 archive format
 
@@ -180,10 +172,18 @@ log stream.
 
 ## Security
 
-The collector accepts HTTPS only. Caddy uses a long random credential stored as
-an App Platform secret, rejects unauthenticated requests, rejects methods and
-paths other than `POST /events`, and limits request bodies to the exporter batch
-bound. Vector is reachable only from Caddy on the private Compose network.
+The collector deliberately uses unencrypted HTTP within the DigitalOcean VPC.
+The accepted threat model does not require cryptographic confidentiality for
+these logs. Access control comes from three independent network constraints:
+App Platform is attached to the same VPC, Vector binds only the Droplet's
+private IP, and the Cloud Firewall permits port 8686 only from the app's VPC
+egress private IP. The collector is not reachable from the public internet.
+
+No HTTP credential is sent because Basic or bearer authentication without TLS
+would expose the credential to any party able to observe the connection and
+would add little protection beyond the source-IP firewall rule. R2 uploads do
+use HTTPS. If the log sensitivity or VPC tenancy changes later, Vector can
+terminate TLS directly without adding a reverse-proxy service.
 
 Exported JSON follows the observability allowlist. It excludes authorization
 and cookie headers, API keys, complete MCP bodies, provider response text, and
@@ -201,15 +201,17 @@ Automated verification covers:
 4. clean graceful-shutdown flushing and bounded shutdown when the collector is
    unavailable;
 5. application health while the collector is stopped;
-6. Compose validation, private Vector ports, persistent bind mounts, buffer
-   caps, and unchanged Elasticsearch bindings; and
+6. Compose validation, VPC-only Vector binding, firewall rule documentation,
+   persistent bind mounts, CPU/memory/buffer caps, and unchanged Elasticsearch
+   bindings; and
 7. secret and request-body redaction in exported payloads.
 
-A local integration test sends NDJSON through Caddy and Vector to an
-S3-compatible test bucket, then decompresses the object and verifies its event
-IDs and partition key. Production smoke verification emits a unique marker,
-confirms it appears in R2, performs an App Platform deployment, and confirms a
-pre-shutdown marker and a post-startup marker both arrive.
+A local integration test sends NDJSON through Vector to an S3-compatible test
+bucket, then decompresses the object and verifies its event IDs and partition
+key. A separate deployment check confirms the production Compose port mapping
+binds only the Droplet's private address. Production smoke verification emits
+a unique marker, confirms it appears in R2, performs an App Platform deployment,
+and confirms a pre-shutdown marker and a post-startup marker both arrive.
 
 ## Operational boundaries
 
@@ -228,8 +230,8 @@ debugging continues to use App Platform Runtime Logs.
   is disabled.
 - App Platform deployments do not remove Vector's accepted queue.
 - Successful liveness probes do not enter the archive.
-- Vector and Caddy reuse the existing 8 GiB Elasticsearch Droplet without a
-  new compute service.
+- Vector reuses the existing 8 GiB Elasticsearch Droplet without Caddy or a
+  new compute service and stays inside its CPU and memory limits.
 - Elasticsearch remains private and has enough disk protected from collector
   growth by the fixed Vector buffer cap.
 - A production marker is recoverable from a gzip NDJSON object in R2 after an
